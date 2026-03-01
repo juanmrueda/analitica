@@ -1,0 +1,39 @@
+{
+  "mcpServers": {
+    "analytics-mcp": {
+      "command": "analytics-mcp.exe",
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "<REPLACE_ME>",
+        "GOOGLE_CLOUD_PROJECT": "<REPLACE_ME>",
+        "GOOGLE_PROJECT_ID": "<REPLACE_ME>"
+      }
+    },
+    "google-ads-mcp": {
+      "command": "mcp-google-ads.exe",
+      "env": {
+        "GOOGLE_ADS_AUTH_TYPE": "oauth",
+        "GOOGLE_ADS_CREDENTIALS_PATH": "<REPLACE_ME>",
+        "GOOGLE_ADS_CLIENT_ID": "<REPLACE_ME>",
+        "GOOGLE_ADS_CLIENT_SECRET": "<REPLACE_ME>",
+        "GOOGLE_ADS_REFRESH_TOKEN": "<REPLACE_ME>",
+        "GOOGLE_ADS_DEVELOPER_TOKEN": "<REPLACE_ME>",
+        "GOOGLE_ADS_LOGIN_CUSTOMER_ID": "<REPLACE_ME>",
+        "GOOGLE_ADS_QUOTA_PROJECT": "<REPLACE_ME>",
+        "GOOGLE_CLOUD_PROJECT": "<REPLACE_ME>",
+        "GOOGLE_PROJECT_ID": "<REPLACE_ME>"
+      }
+    },
+    "meta-ads-mcp": {
+      "command": "<REPLACE_ME>",
+      "env": {
+        "META_ADS_ACCESS_TOKEN": "<REPLACE_ME>",
+        "META_AD_ACCOUNT_ID": "act_<REPLACE_ME>",
+        "META_FACEBOOK_PAGE_ID": "<REPLACE_ME>",
+        "META_INSTAGRAM_BUSINESS_ACCOUNT_ID": "<REPLACE_ME>",
+        "META_FACEBOOK_PAGE_ACCESS_TOKEN": "<REPLACE_ME>",
+        "META_APP_ID": "<REPLACE_ME>",
+        "META_APP_SECRET": "<REPLACE_ME>"
+      }
+    }
+  }
+}

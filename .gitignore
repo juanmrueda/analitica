@@ -1,0 +1,18 @@
+﻿# Secrets
+backups/
+*.bak
+*.private
+.env
+ga4_user_oauth_analytics_ipalmera.json
+valiant-adviser-316513-6854721bd01b.json
+
+# Local generated data/logs
+reports/
+tmp_*
+desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
