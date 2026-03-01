@@ -141,7 +141,14 @@ def apply_theme() -> None:
             flex-direction: column;
             min-height: 100vh;
           }
-          [data-testid="stSidebar"] * { color: #F6F7FB !important; }
+          [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+          [data-testid="stSidebar"] label,
+          [data-testid="stSidebar"] p,
+          [data-testid="stSidebar"] h1,
+          [data-testid="stSidebar"] h2,
+          [data-testid="stSidebar"] h3 {
+            color: #F6F7FB !important;
+          }
           .logo-subtitle {
             margin-top: -0.35rem;
             margin-bottom: 0.15rem;
@@ -180,16 +187,120 @@ def apply_theme() -> None:
             line-height: 1.1;
           }
           .meta-token-box * { color: #0F172A !important; }
+          .app-filter-title {
+            margin-top: 0.15rem;
+            margin-bottom: 0.25rem;
+            font-size: 0.72rem;
+            letter-spacing: 0.09em;
+            text-transform: uppercase;
+            font-weight: 800;
+            color: #4B5563;
+          }
+          .app-filter-helper {
+            margin-top: 0.08rem;
+            margin-bottom: 0.35rem;
+            font-size: 0.8rem;
+            color: #6B7280;
+          }
+          .filter-chip-row {
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.45rem;
+          }
+          .filter-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.3rem 0.55rem;
+            border-radius: 999px;
+            border: 1px solid rgba(203, 213, 225, 0.95);
+            background: rgba(255, 255, 255, 0.86);
+            color: #334155;
+            font-size: 0.74rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+          }
+          .filter-chip .k {
+            font-size: 0.66rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #64748B;
+            font-weight: 800;
+          }
+          .app-filter-divider {
+            height: 1px;
+            margin: 0.2rem 0 0.65rem 0;
+            background: linear-gradient(90deg, rgba(148,163,184,0.45), rgba(148,163,184,0.05));
+          }
+          [data-testid="stMain"] .stDateInput > div > div,
+          [data-testid="stMain"] .stSelectbox > div > div {
+            border-radius: 12px !important;
+            border: 1px solid rgba(203, 213, 225, 0.9) !important;
+            background: rgba(255, 255, 255, 0.92) !important;
+            box-shadow: 0 5px 14px rgba(15, 23, 42, 0.06);
+          }
+          [data-testid="stMain"] .stDateInput label,
+          [data-testid="stMain"] .stSelectbox label {
+            font-size: 0.72rem !important;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #64748B !important;
+            font-weight: 700 !important;
+          }
+          [data-testid="stMain"] .stDateInput input {
+            font-size: 0.88rem !important;
+            color: #0F172A !important;
+          }
+          [data-testid="stMain"] .stSelectbox [data-baseweb="select"] > div {
+            min-height: 2.55rem !important;
+          }
+          [data-testid="stMain"] .stDateInput [data-baseweb="input"] {
+            min-height: 2.55rem !important;
+          }
+          [data-testid="stMain"] div[data-testid="stPlotlyChart"] {
+            border: 1px solid rgba(226, 232, 240, 0.95);
+            border-radius: 14px;
+            overflow: hidden;
+            background: rgba(255,255,255,0.88);
+            box-shadow: 0 8px 20px rgba(15,23,42,0.06);
+          }
           [data-testid="stSidebar"] .stDateInput,
           [data-testid="stSidebar"] .stSelectbox > div > div {
             background: rgba(255,255,255,0.06);
             border: 1px solid rgba(255,255,255,0.14);
             border-radius: 12px;
           }
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div {
+            color: #F8FAFC !important;
+          }
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] svg {
+            fill: #E2E8F0 !important;
+          }
           [data-testid="stSidebar"] .stDateInput input {
             background: #4B5563 !important;
             color: #FFFFFF !important;
             border-radius: 10px !important;
+          }
+          [data-baseweb="popover"] [role="listbox"] {
+            background: #FFFFFF !important;
+            color: #0F172A !important;
+            border: 1px solid #CBD5E1 !important;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14) !important;
+          }
+          [data-baseweb="popover"] [role="option"] {
+            color: #0F172A !important;
+            background: #FFFFFF !important;
+          }
+          [data-baseweb="popover"] [role="option"]:hover {
+            color: #0F172A !important;
+            background: #EEF2FF !important;
+          }
+          [data-baseweb="popover"] [role="option"][aria-selected="true"],
+          [data-baseweb="popover"] [aria-selected="true"] {
+            background: #0F172A !important;
+            color: #FFFFFF !important;
           }
           [data-testid="stSidebar"] [data-baseweb="calendar"] [aria-selected="true"] {
             background: #6B7280 !important;
@@ -317,6 +428,126 @@ def apply_theme() -> None:
             font-weight: 600;
             color: #F8FAFC;
             line-height: 1.25;
+          }
+          @media (max-width: 960px) {
+            .block-container {
+              max-width: 100%;
+              padding-top: 0.55rem;
+              padding-bottom: 1.4rem;
+              padding-left: 0.6rem;
+              padding-right: 0.6rem;
+            }
+            [data-testid="stSidebar"] {
+              display: none !important;
+            }
+            [data-testid="collapsedControl"] {
+              display: none !important;
+            }
+            [data-testid="stSidebarCollapseButton"] {
+              display: none !important;
+            }
+            [data-testid="collapsedControl"] button,
+            [data-testid="stSidebarCollapseButton"] button {
+              width: 2.5rem !important;
+              height: 2.5rem !important;
+              border-radius: 12px !important;
+            }
+            .hero {
+              border-radius: 18px;
+              padding: 0.9rem 0.85rem;
+              margin-top: 0.3rem;
+            }
+            .hero-kicker {
+              font-size: 0.62rem;
+              letter-spacing: 0.07em;
+            }
+            .hero-title {
+              font-size: 1.35rem;
+              line-height: 1.2;
+            }
+            .hero-sub {
+              font-size: 0.82rem;
+              line-height: 1.35;
+            }
+            [data-baseweb="tab-list"] {
+              gap: 0.35rem;
+              padding: 0.26rem;
+              border-radius: 12px;
+              overflow-x: auto;
+              overflow-y: hidden;
+              -webkit-overflow-scrolling: touch;
+            }
+            [data-baseweb="tab"] {
+              min-height: 2.15rem;
+              font-size: 0.7rem;
+              letter-spacing: 0.03em;
+              padding: 0.34rem 0.5rem !important;
+              text-align: center;
+              white-space: nowrap !important;
+              min-width: max-content;
+            }
+            .app-filter-title {
+              font-size: 0.64rem;
+              margin-top: 0.05rem;
+              margin-bottom: 0.12rem;
+            }
+            .app-filter-helper {
+              font-size: 0.72rem;
+              margin-bottom: 0.24rem;
+            }
+            .filter-chip-row {
+              margin-bottom: 0.32rem;
+              gap: 0.26rem;
+            }
+            .filter-chip {
+              font-size: 0.67rem;
+              padding: 0.22rem 0.44rem;
+            }
+            .filter-chip .k {
+              font-size: 0.6rem;
+            }
+            .section-title {
+              margin-top: 0.95rem;
+              margin-bottom: 0.45rem;
+              padding-bottom: 0.35rem;
+              font-size: 0.92rem;
+            }
+            div[data-testid="stMetric"] {
+              border-radius: 14px;
+              padding: 10px 9px;
+            }
+            div[data-testid="stMetricLabel"] p {
+              font-size: 0.74rem !important;
+            }
+            div[data-testid="stMetricValue"] {
+              font-size: 1.18rem !important;
+              line-height: 1.1 !important;
+            }
+            .daily-fact {
+              border-radius: 12px;
+              padding: 0.65rem 0.72rem;
+            }
+            .daily-fact .body {
+              font-size: 0.86rem;
+            }
+            [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+              flex-wrap: wrap !important;
+              gap: 0.55rem !important;
+            }
+            [data-testid="stMain"] [data-testid="column"] {
+              min-width: 100% !important;
+              flex: 1 1 100% !important;
+            }
+            [data-testid="stMain"] .stDateInput [data-baseweb="input"],
+            [data-testid="stMain"] .stSelectbox [data-baseweb="select"] > div {
+              min-height: 2.35rem !important;
+            }
+            [data-testid="stMain"] div[data-testid="stPlotlyChart"] {
+              border-radius: 12px;
+            }
+            div[data-testid="stDataFrame"] {
+              border-radius: 12px;
+            }
           }
         </style>
         """,
@@ -610,7 +841,7 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
         "bounce": float(df["ga4_bounce"].mean()) if not df.empty else 0.0,
     }
 
-def render_sidebar(min_d, max_d, report: dict[str, Any]):
+def render_sidebar(report: dict[str, Any]) -> None:
     st.sidebar.markdown("##")
     a, b, c = st.sidebar.columns([1, 4, 1])
     with b:
@@ -620,15 +851,8 @@ def render_sidebar(min_d, max_d, report: dict[str, Any]):
             st.image(LOGO_PLACEHOLDER, use_container_width=True)
         st.markdown("<div class='logo-subtitle'>IA Analítica</div>", unsafe_allow_html=True)
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### Filtros")
-    sel = st.sidebar.date_input(
-        "Rango de fechas",
-        value=(max(min_d, max_d - timedelta(days=29)), max_d),
-        min_value=min_d,
-        max_value=max_d,
-    )
-    s, e = _normalize_date_range(sel, min_d, max_d)
-    platform = st.sidebar.selectbox("Plataforma", ["All", "Google", "Meta"], index=0)
+    st.sidebar.markdown("### Panel")
+    st.sidebar.caption("Usa los filtros en la parte superior del dashboard.")
     t = report.get("metadata", {}).get("meta_token_status", {})
     days = t.get("days_left")
     status = "No disponible" if days is None else f"{int(float(days))} días"
@@ -643,6 +867,41 @@ def render_sidebar(min_d, max_d, report: dict[str, Any]):
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_top_filters(min_d: date, max_d: date) -> tuple[date, date, str]:
+    st.markdown("<div class='app-filter-title'>Filtros del panel</div>", unsafe_allow_html=True)
+    f1, f2 = st.columns([2.2, 1.0], gap="small")
+    with f1:
+        sel = st.date_input(
+            "Rango de fechas",
+            value=(max(min_d, max_d - timedelta(days=29)), max_d),
+            min_value=min_d,
+            max_value=max_d,
+            key="top_date_range",
+        )
+    with f2:
+        platform = st.selectbox(
+            "Plataforma",
+            ["All", "Google", "Meta"],
+            index=0,
+            key="top_platform",
+        )
+    st.markdown(
+        "<div class='app-filter-helper'>Tip: en móvil este menú reemplaza la barra lateral para evitar superposiciones.</div>",
+        unsafe_allow_html=True,
+    )
+    s, e = _normalize_date_range(sel, min_d, max_d)
+    st.markdown(
+        f"""
+        <div class="filter-chip-row">
+          <div class="filter-chip"><span class="k">Periodo</span> {s.isoformat()} a {e.isoformat()}</div>
+          <div class="filter-chip"><span class="k">Plataforma</span> {platform}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("<div class='app-filter-divider'></div>", unsafe_allow_html=True)
     return s, e, platform
 
 
@@ -1076,7 +1335,7 @@ def main() -> None:
     st.set_page_config(
         page_title="YAP Executive Marketing Command Center",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     apply_theme()
 
@@ -1108,7 +1367,8 @@ def main() -> None:
         camp_all = pd.concat([camp, gcamp], ignore_index=True)
 
     min_d, max_d = df["date"].min(), df["date"].max()
-    s, e, platform = render_sidebar(min_d, max_d, report)
+    render_sidebar(report)
+    s, e, platform = render_top_filters(min_d, max_d)
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
     period_days = max((e - s).days + 1, 1)
