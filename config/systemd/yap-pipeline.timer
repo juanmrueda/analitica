@@ -1,0 +1,10 @@
+[Unit]
+Description=Run YAP daily pipeline at 02:00 (America/Bogota server time)
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+Unit=yap-pipeline.service
+
+[Install]
+WantedBy=timers.target

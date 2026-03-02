@@ -1,141 +1,156 @@
 # MCP Juan (GA4 + Google Ads + Meta Ads)
 
-Repositorio operativo para analitica y performance con:
+Repositorio operativo para analitica y performance de YAP:
 
 - `analytics-mcp` (GA4)
 - `google-ads-mcp` (Google Ads)
 - `meta-ads-mcp` (Meta Ads)
+- Dashboard en Streamlit (`dashboard.py`)
+- Pipeline diario (`scripts/yap_daily_cpl_report.py`)
 
 ## Estado actual (2026-03-01)
 
-- Conectividad MCP validada en esta maquina para GA4, Google Ads y Meta Ads.
-- JSON principal del dashboard YAP actualizado con corte completo al `2026-02-28`.
-- Dashboard Streamlit corriendo en `http://localhost:8501`.
-- Token de Meta validado como vigente (detalle en seccion de token).
+- Produccion desplegada en DigitalOcean (Droplet Ubuntu).
+- Dominio objetivo: `analitica.ipalmera.com` (Cloudflare al frente).
+- Dashboard corriendo como servicio systemd: `yap-dashboard.service`.
+- Pipeline automatico diario corriendo con timer systemd: `yap-pipeline.timer`.
+- Actualizacion programada: todos los dias a las `02:00` (zona `America/Bogota`), con datos del dia anterior.
+- Historico reconstruido incluyendo 2025.
 
-## Archivos clave
+## Estructura principal
 
-- `dashboard.py` (dashboard principal)
-- `scripts/yap_daily_cpl_report.py` (pipeline de datos YAP)
-- `reports/yap/YAP_historical.json` (fuente principal del dashboard)
-- `reports/yap/YAP_organic_historical.json` (modulo organico IG/FB)
-- `reports/dashboard_streamlit.log` (log de Streamlit)
-- `reports/dashboard_streamlit.err.log` (errores de Streamlit)
-- `scripts/install-mcp-juan.ps1`
-- `scripts/verify-mcp-juan.ps1`
-- `scripts/meta-token-guard.ps1`
+- `dashboard.py` -> UI principal.
+- `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion.
+- `reports/yap/YAP_historical.json` -> fuente principal del dashboard.
+- `reports/yap/YAP_organic_historical.json` -> modulo organico (si hay acceso/permisos).
+- `requirements.txt` -> dependencias de runtime.
+- `scripts/meta-token-guard.ps1` -> utilidad opcional de refresh de token Meta (flujo local Windows).
 
-## Flujo operativo del dashboard YAP
+## Dependencias (repo)
 
-1. Regenerar JSON principal (bootstrap completo):
+Archivo `requirements.txt`:
+
+- `streamlit==1.54.0`
+- `pandas==2.3.3`
+- `plotly==6.5.2`
+- `matplotlib>=3.8,<4`
+
+## Configuracion sensible (NO versionar)
+
+No subir al repo:
+
+- `~/.codex/config.toml` real con tokens.
+- `ga4_user_oauth_analytics_ipalmera.json` real.
+- respaldos con tokens (`backups/`, `*.bak`, `*.private`, etc).
+
+En servidor se usan:
+
+- `/home/juanm/.codex/config.toml`
+- `/opt/yap/app/ga4_user_oauth_analytics_ipalmera.json`
+
+## Operacion local (desarrollo)
+
+1. Ejecutar pipeline:
+
 ```powershell
-python scripts\yap_daily_cpl_report.py --mode bootstrap --bootstrap-start 2026-01-01 --end-date 2026-02-28 --output-path reports\yap\YAP_historical.json
+python scripts\yap_daily_cpl_report.py --mode auto --output-path reports\yap\YAP_historical.json --organic-output-path reports\yap\YAP_organic_historical.json --organic-lookback-days 30
 ```
 
-Este comando tambien genera/actualiza:
-- `reports/yap/YAP_organic_historical.json` (lookback configurable, por defecto 30 dias).
+2. Levantar dashboard local:
 
-2. Actualizacion diaria incremental (modo auto):
-```powershell
-python scripts\yap_daily_cpl_report.py --mode auto --output-path reports\yap\YAP_historical.json
-```
-
-Opcional para organico:
-```powershell
-python scripts\yap_daily_cpl_report.py --mode auto --organic-output-path reports\yap\YAP_organic_historical.json --organic-lookback-days 30
-```
-
-3. Correr dashboard:
 ```powershell
 streamlit run dashboard.py
 ```
 
-## Configuracion Meta recomendada (config.toml)
+## Operacion en produccion (DigitalOcean)
 
-En `~/.codex/config.toml`, bajo `[mcp_servers.meta-ads-mcp.env]`, definir:
+### Servicios systemd
 
-- `META_ADS_ACCESS_TOKEN`
-- `META_AD_ACCOUNT_ID`
-- `META_FACEBOOK_PAGE_ID` (opcional, se puede descubrir desde ad account)
-- `META_INSTAGRAM_BUSINESS_ACCOUNT_ID` (opcional, se puede descubrir)
-- `META_FACEBOOK_PAGE_ACCESS_TOKEN` (recomendado para metricas organicas de Facebook)
-- `META_APP_ID`
-- `META_APP_SECRET`
+- Dashboard:
+  - `yap-dashboard.service`
+  - expone Streamlit en `127.0.0.1:8501`
+- Pipeline diario:
+  - `yap-pipeline.service` (oneshot)
+  - `yap-pipeline.timer` con `OnCalendar=*-*-* 02:00:00`
 
-## Ultimo corte ejecutado (completo)
+### Comandos utiles
 
-- Archivo: `reports/yap/YAP_historical.json`
-- `updated_range`: `2026-01-01` a `2026-02-28`
-- `run_kind`: `bootstrap`
-- Fecha maxima en `daily`: `2026-02-28`
-- Huecos de fecha en `2026-01-01..2026-02-28`: `0`
+Ver estado:
 
-## Estado token Meta (ultima validacion)
-
-Validado el `2026-03-01`:
-
-- `is_valid`: `true`
-- `type`: `USER`
-- `application`: `mcp-antigravity`
-- `expires_at_utc`: `2026-04-29T12:58:27+00:00`
-- `days_left` al momento de la validacion: `59`
-- `check_method`: `self_debug_token`
-
-## Uso rapido en otro ordenador
-
-1. Edita primero los archivos `*.private` y completa:
-- rutas de binarios (`analytics-mcp.exe`, `mcp-google-ads.exe`) si no estan en `PATH`
-- credenciales y variables de entorno
-
-2. Instala la configuracion local:
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-H:\My Drive\MCP_Portable\MCP Juan\scripts\install-mcp-juan.ps1 -Mode Symlink
+```bash
+sudo systemctl status yap-dashboard --no-pager
+sudo systemctl status yap-pipeline.timer --no-pager
+sudo systemctl status yap-pipeline.service --no-pager
 ```
 
-3. Valida:
-```powershell
-H:\My Drive\MCP_Portable\MCP Juan\scripts\verify-mcp-juan.ps1
+Ver proxima corrida:
+
+```bash
+systemctl list-timers | grep yap-pipeline
 ```
 
-Si Symlink falla por politicas de Windows:
-```powershell
-H:\My Drive\MCP_Portable\MCP Juan\scripts\install-mcp-juan.ps1 -Mode Copy
+Forzar corrida manual:
+
+```bash
+sudo systemctl start yap-pipeline.service
 ```
 
-Si Claude estaba abierto:
-```powershell
-H:\My Drive\MCP_Portable\MCP Juan\scripts\install-mcp-juan.ps1 -Mode Copy -StopClaude
+Logs:
+
+```bash
+journalctl -u yap-dashboard -n 120 --no-pager
+journalctl -u yap-pipeline.service -n 120 --no-pager
 ```
 
-## Meta Token Guard (opcional)
+## Flujo de datos diario
 
-Si usas Meta Ads MCP en tu entorno local, este script ayuda a evitar caidas por expiracion de token:
+1. A las 2:00 a. m. el timer dispara `yap-pipeline.service`.
+2. El script corre en `--mode auto` y toma `end-date = ayer`.
+3. Actualiza `reports/yap/YAP_historical.json`.
+4. Streamlit lee ese JSON en cada recarga del dashboard.
 
-- valida token actual con `debug_token`
-- refresca con `fb_exchange_token` si faltan pocos dias
-- actualiza `META_ADS_ACCESS_TOKEN` en `~/.codex/config.toml` (o ruta indicada)
-- crea backup antes de escribir
-- valida scopes requeridos para organico: `instagram_basic` y `instagram_manage_insights`
+No hay upload manual al dashboard: el dashboard consume el JSON local actualizado.
 
-Ejemplo manual:
-```powershell
-$env:META_APP_ID = "TU_APP_ID"
-$env:META_APP_SECRET = "TU_APP_SECRET"
-$env:META_ADS_ACCESS_TOKEN = "TU_TOKEN_ACTUAL"
+## Bootstrap historico (ejemplo 2025+)
 
-.\scripts\meta-token-guard.ps1 -RefreshThresholdDays 10 -ConfigPath "$env:USERPROFILE\.codex\config.toml"
+Reconstruccion completa:
+
+```bash
+/opt/yap/venv/bin/python /opt/yap/app/scripts/yap_daily_cpl_report.py --mode bootstrap --bootstrap-start 2025-01-01 --end-date $(date -d "yesterday" +%F) --output-path /opt/yap/app/reports/yap/YAP_historical.json --organic-output-path /opt/yap/app/reports/yap/YAP_organic_historical.json --organic-lookback-days 30
 ```
 
-Para probar sin tocar archivo:
-```powershell
-.\scripts\meta-token-guard.ps1 -SkipConfigUpdate
+## Publicar cambios de UI/codigo
+
+1. Cambiar y validar en local.
+2. Commit/push:
+
+```bash
+git add .
+git commit -m "tu cambio"
+git push origin main
 ```
 
-Programar ejecucion diaria (Task Scheduler):
-```powershell
-$script = "G:\Mi unidad\CO\IA\MCP Juan\scripts\meta-token-guard.ps1"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -RefreshThresholdDays 10 -ConfigPath `"$env:USERPROFILE\.codex\config.toml`""
-$trigger = New-ScheduledTaskTrigger -Daily -At 6:00am
-Register-ScheduledTask -TaskName "MetaTokenGuardDaily" -Action $action -Trigger $trigger -Description "Auto refresh Meta token"
+3. Deploy en servidor:
+
+```bash
+cd /opt/yap/app
+git pull origin main
+/opt/yap/venv/bin/pip install -r requirements.txt
+sudo cp /opt/yap/app/config/systemd/yap-pipeline.timer /etc/systemd/system/yap-pipeline.timer
+sudo systemctl daemon-reload
+sudo systemctl restart yap-pipeline.timer
+sudo systemctl restart yap-dashboard
 ```
+
+## Cloudflare recomendado
+
+- SSL/TLS: `Full` (evitar `Flexible` para este setup).
+- DNS de `analitica.ipalmera.com` apuntando al Droplet.
+- Durante troubleshooting de certificado, usar temporalmente `DNS only`.
+
+## Seguridad minima recomendada
+
+- Usuario operativo no root (`juanm`).
+- `ufw` activo con `22`, `80`, `443`.
+- SSH por llaves.
+- En `sshd_config`: `PermitRootLogin no` y `PasswordAuthentication no` (si ya validaste acceso por llave).
