@@ -429,6 +429,23 @@ def apply_theme() -> None:
             color: #F8FAFC;
             line-height: 1.25;
           }
+          .desktop-powered-footer {
+            margin-top: 1.15rem;
+            text-align: center;
+            font-size: 0.78rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #667085;
+            font-weight: 700;
+          }
+          .desktop-powered-footer a {
+            color: #0A84FF;
+            text-decoration: none;
+            font-weight: 800;
+          }
+          .desktop-powered-footer a:hover {
+            text-decoration: underline;
+          }
           @media (max-width: 960px) {
             .block-container {
               max-width: 100%;
@@ -529,6 +546,9 @@ def apply_theme() -> None:
             }
             .daily-fact .body {
               font-size: 0.86rem;
+            }
+            .desktop-powered-footer {
+              display: none;
             }
             [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
               flex-wrap: wrap !important;
@@ -1397,6 +1417,14 @@ def main() -> None:
         render_traffic(df_sel, df_prev, ch, pg, camp_all, platform, s, e)
 
     st.caption(f"Fuente: {REPORT_PATH.name} | Datos: {min_d.isoformat()} a {max_d.isoformat()}")
+    st.markdown(
+        """
+        <div class="desktop-powered-footer">
+          POWERED BY <a href="https://www.ipalmera.com" target="_blank">iPalmera</a> 2026
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
