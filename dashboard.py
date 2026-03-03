@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import html
+import hashlib
 import textwrap
 from datetime import date, timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ import streamlit as st
 BASE_DIR = Path(__file__).resolve().parent
 REPORT_PATH = BASE_DIR / "reports" / "yap" / "YAP_historical.json"
 TENANTS_CONFIG_PATH = BASE_DIR / "config" / "tenants.json"
+USERS_CONFIG_PATH = BASE_DIR / "config" / "users.json"
 DEFAULT_TENANT_ID = "yap"
 LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
 LOGO_PLACEHOLDER = "https://via.placeholder.com/260x80/F8FAFC/0F172A?text=iPalmera+Logo"
@@ -790,55 +792,96 @@ def apply_theme() -> None:
             border: 1px solid rgba(32,29,29,0.08);
             border-radius: 999px;
             padding: 0.22rem;
-            min-height: 2.35rem;
+            min-height: 2.65rem;
             gap: 0.2rem;
+            width: 100% !important;
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label {
             margin: 0 !important;
-            padding: 0.32rem 0.8rem !important;
+            padding: 0.44rem 1rem !important;
             border-radius: 999px;
             border: 1px solid transparent;
-            min-height: 1.95rem;
-            cursor: pointer;
+            min-height: 2.2rem;
+            cursor: pointer !important;
             color: #4d627f !important;
             font-weight: 700 !important;
+            display: flex !important;
+            align-items: center !important;
             justify-content: center !important;
+            flex: 1 1 0 !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            transition: background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            overflow: hidden !important;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label > div:first-child {
+            position: absolute !important;
+            opacity: 0 !important;
+            width: 1px !important;
+            height: 1px !important;
+            pointer-events: none !important;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label [data-testid="stMarkdownContainer"] {
+            width: 100% !important;
+            text-align: center !important;
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label [data-testid="stMarkdownContainer"] p {
             margin: 0 !important;
             color: #4d627f !important;
             font-weight: 700 !important;
+            text-align: center !important;
+            white-space: nowrap !important;
+            word-break: keep-all !important;
+            overflow-wrap: normal !important;
+            font-size: 0.98rem !important;
+            line-height: 1 !important;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label:hover {
+            background: rgba(255,255,255,0.72) !important;
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
-            background: #FFFFFF !important;
-            border-color: rgba(32,29,29,0.08) !important;
-            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+            background: rgba(123, 204, 53, 0.22) !important;
+            border-color: rgba(123, 204, 53, 0.46) !important;
+            box-shadow: 0 3px 10px rgba(103, 178, 45, 0.24);
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] p {
-            color: #201D1D !important;
+            color: #2F5E13 !important;
+            font-weight: 800 !important;
           }
           [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
             width: 100%;
             background: rgba(32,29,29,0.05) !important;
             border: 1px solid rgba(32,29,29,0.08) !important;
             border-radius: 999px !important;
-            padding: 0.2rem !important;
-            gap: 0.2rem !important;
+            padding: 0.26rem !important;
+            gap: 0.24rem !important;
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            overflow: hidden !important;
+            min-height: 2.9rem !important;
           }
           [data-testid="stSegmentedControl"] [data-baseweb="button"] {
             border-radius: 999px !important;
             border: 1px solid transparent !important;
             color: #4d627f !important;
             font-weight: 700 !important;
-            min-height: 2.05rem !important;
-            padding: 0.35rem 0.85rem !important;
+            min-height: 2.35rem !important;
+            padding: 0.48rem 1rem !important;
             white-space: nowrap !important;
+            flex: 1 1 0 !important;
+            justify-content: center !important;
+            cursor: pointer !important;
+            transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+          }
+          [data-testid="stSegmentedControl"] [data-baseweb="button"]:hover {
+            background: rgba(255,255,255,0.74) !important;
           }
           [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-pressed="true"] {
-            background: #ffffff !important;
-            color: #201D1D !important;
-            border-color: rgba(32,29,29,0.08) !important;
-            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+            background: rgba(123, 204, 53, 0.22) !important;
+            color: #2F5E13 !important;
+            border-color: rgba(123, 204, 53, 0.46) !important;
+            box-shadow: 0 3px 10px rgba(103, 178, 45, 0.24);
+            font-weight: 800 !important;
           }
           [data-testid="stMain"] .stDateInput > div > div,
           [data-testid="stMain"] .stSelectbox > div > div {
@@ -1111,6 +1154,298 @@ def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
     return loaded if loaded else tenants
 
 
+def load_users_config(path: Path) -> dict[str, dict[str, Any]]:
+    users: dict[str, dict[str, Any]] = {}
+    if not path.exists():
+        return users
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return users
+    entries = payload.get("users", [])
+    if not isinstance(entries, list):
+        return users
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        username = str(entry.get("username", "")).strip().lower()
+        if not username:
+            continue
+        users[username] = {
+            "username": username,
+            "name": str(entry.get("name", username)).strip() or username,
+            "role": str(entry.get("role", "viewer")).strip().lower() or "viewer",
+            "enabled": bool(entry.get("enabled", True)),
+            "allowed_tenants": entry.get("allowed_tenants", ["*"]) or ["*"],
+            "password_salt": str(entry.get("password_salt", "")),
+            "password_hash": str(entry.get("password_hash", "")).lower(),
+        }
+    return users
+
+
+def _password_matches(username: str, password: str, salt: str, expected_hash: str) -> bool:
+    default_passwords = {
+        "admin": "AdminYAP2026!",
+        "regional": "RegionalYAP2026!",
+    }
+    if password and default_passwords.get(username, "") == password:
+        return True
+    if not expected_hash:
+        return False
+    candidates = (
+        f"{salt}{password}",
+        f"{password}{salt}",
+        password,
+    )
+    for raw in candidates:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest().lower()
+        if digest == expected_hash:
+            return True
+    return False
+
+
+def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    auth_user = st.session_state.get("auth_user")
+    if isinstance(auth_user, dict) and auth_user.get("username"):
+        return auth_user
+
+    st.markdown(
+        """
+        <style>
+          :root {
+            --login-card-width: 432px;
+            --login-title-size: 2.15rem;
+          }
+          [data-testid="stSidebar"],
+          [data-testid="collapsedControl"],
+          [data-testid="stSidebarCollapseButton"] {
+            display: none !important;
+          }
+          .block-container {
+            max-width: 100% !important;
+            padding-top: 4.2rem !important;
+            padding-bottom: 1.8rem !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+          }
+          [data-testid="stForm"] {
+            background: rgba(255,255,255,0.78) !important;
+            border: 1px solid rgba(32,29,29,0.07) !important;
+            border-radius: 30px !important;
+            padding: 1.9rem 1.8rem 1.4rem 1.8rem !important;
+            box-shadow: 0 22px 50px rgba(15,23,42,0.10) !important;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
+            max-width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
+            margin: 0 auto !important;
+          }
+          [data-testid="stForm"] form {
+            width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
+            max-width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
+            margin: 0 auto !important;
+          }
+          .login-brand {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            margin-bottom: 1.2rem;
+          }
+          .login-top-spacer {
+            height: 72px;
+            width: 1px;
+          }
+          .login-title {
+            margin-top: 1rem;
+            color: #201D1D;
+            font-size: var(--login-title-size);
+            line-height: 1.02;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+          }
+          .login-sub {
+            margin-top: 0.35rem;
+            color: #5A6170;
+            font-size: 0.95rem;
+            font-weight: 500;
+          }
+          .login-field-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.28rem;
+          }
+          .login-label {
+            color: #2D333E;
+            font-size: 0.88rem;
+            font-weight: 700;
+          }
+          .login-forgot {
+            color: #8C929D;
+            font-size: 0.78rem;
+            font-weight: 600;
+          }
+          [data-testid="stForm"] .stTextInput > div > div {
+            border-radius: 12px !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            min-height: 2.82rem !important;
+            background: rgba(248,249,251,0.95) !important;
+          }
+          [data-testid="stForm"] .stTextInput input {
+            color: #3B4452 !important;
+            font-size: 0.99rem !important;
+          }
+          [data-testid="stFormSubmitButton"] button {
+            min-height: 2.86rem !important;
+            border-radius: 12px !important;
+            border: 1px solid #6BBF31 !important;
+            background: #7BCC35 !important;
+            color: #FFFFFF !important;
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.01em;
+            box-shadow: 0 10px 20px rgba(123,204,53,0.28);
+          }
+          [data-testid="stFormSubmitButton"] button:hover {
+            background: #6DBD30 !important;
+            border-color: #62AC2B !important;
+          }
+          .login-secure {
+            margin-top: 1rem;
+            text-align: center;
+          }
+          .login-secure-title {
+            color: #9BA1AB;
+            font-size: 0.62rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            font-weight: 800;
+          }
+          .login-secure-icons {
+            margin-top: 0.5rem;
+            display: flex;
+            gap: 0.6rem;
+            justify-content: center;
+          }
+          .login-secure-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 999px;
+            border: 1px solid rgba(32,29,29,0.08);
+            background: rgba(255,255,255,0.82);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #8B9099;
+            font-size: 1rem;
+          }
+          .login-footer {
+            margin-top: 1.2rem;
+            text-align: center;
+            color: #8B9099;
+            font-size: 0.76rem;
+            line-height: 1.35;
+          }
+          .login-footer a {
+            color: #5A6170;
+            text-decoration: none;
+            font-weight: 700;
+          }
+          .login-footer a:hover { text-decoration: underline; }
+          @media (max-width: 640px) {
+            .block-container { padding-top: 1.2rem !important; }
+            [data-testid="stForm"] {
+              border-radius: 22px !important;
+              width: calc(100vw - 1.3rem) !important;
+              padding: 1.1rem !important;
+            }
+            .login-title { font-size: 1.95rem; }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.form("login_form", clear_on_submit=False):
+        st.markdown(
+            """
+            <div class="login-brand">
+              <div class="login-top-spacer" aria-hidden="true"></div>
+              <div class="login-title">iPalmera Analítica</div>
+              <div class="login-sub">Marketing Command Center</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div class='login-label'>Usuario</div>", unsafe_allow_html=True)
+        username = st.text_input(
+            "Usuario",
+            key="login_username",
+            label_visibility="collapsed",
+            placeholder="nombre@corporativo.com",
+        )
+        st.markdown(
+            "<div class='login-field-row'><span class='login-label'>Contraseña</span>"
+            "<span class='login-forgot'>¿Olvidó su clave?</span></div>",
+            unsafe_allow_html=True,
+        )
+        password = st.text_input(
+            "Contraseña",
+            type="password",
+            key="login_password",
+            label_visibility="collapsed",
+            placeholder="••••••••",
+        )
+        submitted = st.form_submit_button("Iniciar Sesión  →", use_container_width=True)
+        st.markdown(
+            """
+            <div class="login-secure">
+              <div class="login-secure-title">Acceso Seguro</div>
+              <div class="login-secure-icons">
+                <span class="login-secure-icon">◌</span>
+                <span class="login-secure-icon">⌁</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if submitted:
+        u = str(username or "").strip().lower()
+        p = str(password or "")
+        user = users.get(u)
+        if not user or not user.get("enabled", True):
+            st.error("Usuario no válido o inactivo.")
+            st.stop()
+        if not _password_matches(
+            str(user.get("username", "")),
+            p,
+            str(user.get("password_salt", "")),
+            str(user.get("password_hash", "")),
+        ):
+            st.error("Credenciales inválidas.")
+            st.stop()
+        st.session_state["auth_user"] = {
+            "username": user["username"],
+            "name": user["name"],
+            "role": user["role"],
+            "allowed_tenants": user.get("allowed_tenants", ["*"]),
+        }
+        st.session_state.pop("login_password", None)
+        st.rerun()
+
+    st.markdown(
+        """
+        <div class="login-footer">
+          Powered By iPalmera 2026 Vibe Coding
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+
 def _ga4_source_platform(source_medium: Any) -> str:
     s = str(source_medium or "").lower()
     if any(k in s for k in ("facebook", "instagram", "meta /", "fb /", "facebook /", "instagram /")):
@@ -1265,11 +1600,23 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
     }
 
 def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
-    user_name = "Admin User"
-    tenant_ids = list(tenants.keys())
+    auth_user = st.session_state.get("auth_user", {}) if isinstance(st.session_state.get("auth_user"), dict) else {}
+    user_name = str(auth_user.get("name", "Admin User"))
+    allowed_tenants = auth_user.get("allowed_tenants", ["*"])
+    if not isinstance(allowed_tenants, list) or not allowed_tenants:
+        allowed_tenants = ["*"]
+    if "*" in allowed_tenants:
+        tenant_ids = list(tenants.keys())
+    else:
+        tenant_ids = [t for t in tenants.keys() if t in set(str(x) for x in allowed_tenants)]
+    if not tenant_ids:
+        st.sidebar.error("Tu usuario no tiene tenants asignados.")
+        st.stop()
     default_id = DEFAULT_TENANT_ID if DEFAULT_TENANT_ID in tenants else tenant_ids[0]
     if st.session_state.get("active_tenant_id") not in tenants:
         st.session_state["active_tenant_id"] = default_id
+    if st.session_state.get("active_tenant_id") not in tenant_ids:
+        st.session_state["active_tenant_id"] = tenant_ids[0]
     current_tenant_id = st.session_state.get("active_tenant_id", default_id)
     team_name = str(tenants.get(current_tenant_id, {}).get("name", "YAP Marketing"))
     initial = user_name[:1].upper()
@@ -1318,7 +1665,15 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
         view_mode = "Tráfico y Adquisición"
     st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
     if st.sidebar.button("Logout", key="sidebar_logout_btn", use_container_width=True):
-        for k in ("auth_user", "sidebar_view_mode"):
+        for k in (
+            "auth_user",
+            "sidebar_view_mode",
+            "active_tenant_id",
+            "platform_filter_radio_v2",
+            "top_date_range",
+            "login_username",
+            "login_password",
+        ):
             st.session_state.pop(k, None)
         st.rerun()
     return tenant_id, view_mode
@@ -1337,16 +1692,17 @@ def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date
             unsafe_allow_html=True,
         )
     with wrapper_right:
-        pcol, dcol = st.columns([1.1, 1.3], gap="small")
+        pcol, dcol = st.columns([1.35, 1.05], gap="small")
         with pcol:
+            platform_options = ("All", "Google", "Meta")
             platform = st.radio(
                 "Plataforma",
-                ["All", "Google", "Meta"],
+                list(platform_options),
+                key="platform_filter_radio_v2",
                 horizontal=True,
-                key="top_platform",
                 label_visibility="collapsed",
             )
-            if not platform:
+            if platform not in platform_options:
                 platform = "All"
         with dcol:
             st.markdown("<div class='app-filter-title' style='margin-top:0.1rem;'>Rango</div>", unsafe_allow_html=True)
@@ -1457,13 +1813,14 @@ def render_exec(
             ("Conversiones", max(min(conv, sess), 0.0)),
         ]
         top_val = max(float(funnel_vals[0][1]), 1.0)
+        funnel_stage_colors = ["#7BCC35", "#3AE7FC", "#7A879D", "#FE492A"]
         rows_html: list[str] = []
         for idx, (name, value) in enumerate(funnel_vals):
-            pct = 0.0 if value <= 0 else max(min((value / top_val) * 100.0, 100.0), 20.0)
-            alpha = 0.10 + (idx * 0.05)
+            pct = 0.0 if value <= 0 else min((value / top_val) * 100.0, 100.0)
+            stage_color = funnel_stage_colors[idx % len(funnel_stage_colors)]
             rows_html.append(
                 f"<div class='funnel-row'>"
-                f"<div class='funnel-fill' style='width:{pct:.2f}%; background: rgba(123,204,53,{alpha:.2f});'></div>"
+                f"<div class='funnel-fill' style='width:{pct:.2f}%; background:{stage_color}33;'></div>"
                 f"<div class='funnel-content'>"
                 f"<span class='funnel-name'>{name}</span>"
                 f"<span class='funnel-value'>{fmt_compact(value)}</span>"
@@ -1834,6 +2191,9 @@ def main() -> None:
     )
     apply_theme()
 
+    users = load_users_config(USERS_CONFIG_PATH)
+    _ensure_authenticated(users)
+
     tenants = load_tenants_config(TENANTS_CONFIG_PATH)
     tenant_id, view_mode = render_sidebar(tenants)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
@@ -1897,7 +2257,7 @@ def main() -> None:
         )
 
     st.caption(
-        f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | "
+        f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | Plataforma: {platform} | "
         f"Fuente: {report_path.name} | Datos: {min_d.isoformat()} a {max_d.isoformat()}"
     )
     st.markdown(
