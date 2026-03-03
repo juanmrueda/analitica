@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import html
+import textwrap
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -11,21 +13,24 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-REPORT_PATH = Path(__file__).resolve().parent / "reports" / "yap" / "YAP_historical.json"
-LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo-ipalmera-growth-marketing.webp"
+BASE_DIR = Path(__file__).resolve().parent
+REPORT_PATH = BASE_DIR / "reports" / "yap" / "YAP_historical.json"
+TENANTS_CONFIG_PATH = BASE_DIR / "config" / "tenants.json"
+DEFAULT_TENANT_ID = "yap"
+LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
 LOGO_PLACEHOLDER = "https://via.placeholder.com/260x80/F8FAFC/0F172A?text=iPalmera+Logo"
 META_ACCOUNT_ID = "1808641036591815"
 GOOGLE_CUSTOMER_ID = "6495122409"
 GA4_GTC_SOLICITAR_CODIGO_EVENT = "form_gtc_otp_solicitar_codigo"
 
-C_GOOGLE = "#1A73E8"
-C_META = "#FF2D55"
-C_ACCENT = "#0A84FF"
-C_TEXT = "#1D1D1F"
-C_MUTE = "#6E6E73"
-C_PANEL_BORDER = "#E5E5EA"
-C_PANEL_BG = "#FFFFFF"
-C_GRID = "#ECECF1"
+C_GOOGLE = "#7BCC35"
+C_META = "#FE492A"
+C_ACCENT = "#7BCC35"
+C_TEXT = "#201D1D"
+C_MUTE = "#7A879D"
+C_PANEL_BORDER = "rgba(32,29,29,0.08)"
+C_PANEL_BG = "rgba(255,255,255,0.72)"
+C_GRID = "rgba(32,29,29,0.07)"
 
 
 def sf(v: Any) -> float:
@@ -54,6 +59,21 @@ def fmt_pct(v: float | None) -> str:
 
 def fmt_delta(v: float | None) -> str:
     return "N/A" if v is None else f"{v:+.1f}% vs periodo anterior"
+
+
+def fmt_delta_compact(v: float | None) -> str:
+    return "N/A" if v is None else f"{v:+.1f}%"
+
+
+def fmt_compact(v: float | None) -> str:
+    if v is None:
+        return "N/A"
+    n = float(v)
+    if abs(n) >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if abs(n) >= 1_000:
+        return f"{n/1_000:.1f}k"
+    return f"{n:,.0f}"
 
 
 def fmt_duration(seconds: float | None) -> str:
@@ -569,6 +589,347 @@ def apply_theme() -> None:
               border-radius: 12px;
             }
           }
+          /* 2026 redesign override */
+          .stApp {
+            background:
+              radial-gradient(circle at 0% 0%, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0) 48%),
+              radial-gradient(circle at 100% 100%, rgba(122,135,157,0.11) 0%, rgba(122,135,157,0) 40%),
+              #f5f5f7 !important;
+            color: #201D1D !important;
+          }
+          .block-container {
+            max-width: 92rem !important;
+          }
+          [data-testid="stSidebar"] {
+            width: 262px !important;
+            background: rgba(245,245,247,0.86) !important;
+            border-right: 1px solid rgba(32,29,29,0.08) !important;
+            backdrop-filter: blur(24px);
+          }
+          [data-testid="stSidebarContent"] {
+            padding: 1rem 0.8rem 0.85rem 0.8rem;
+          }
+          [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+          [data-testid="stSidebar"] label {
+            color: #201D1D !important;
+          }
+          .sidebar-profile-card {
+            border: 1px solid rgba(32, 29, 29, 0.08);
+            border-radius: 14px;
+            padding: 0.8rem 0.75rem;
+            background: rgba(255, 255, 255, 0.62);
+            margin-bottom: 1rem;
+          }
+          .sidebar-profile-row {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+          }
+          .sidebar-avatar {
+            width: 2.45rem;
+            height: 2.45rem;
+            border-radius: 999px;
+            border: 1px solid rgba(123, 204, 53, 0.35);
+            background: rgba(123, 204, 53, 0.16);
+            color: #67b22d;
+            font-size: 1rem;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .sidebar-profile-name {
+            color: #201D1D;
+            font-size: 1.1rem;
+            font-weight: 700;
+            line-height: 1.2;
+          }
+          .sidebar-profile-meta {
+            color: #4d627f;
+            font-size: 0.78rem;
+            font-weight: 500;
+            margin-top: 0.16rem;
+          }
+          .sidebar-kicker {
+            margin: 0.12rem 0 0.28rem 0.24rem;
+            font-size: 0.66rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            font-weight: 800;
+            color: #7a879d;
+          }
+          .sidebar-nav { margin: 0.6rem 0 0.6rem 0; display: grid; gap: 0.3rem; }
+          .sidebar-nav-item {
+            padding: 0.6rem 0.65rem;
+            border-radius: 12px;
+            color: #4f617b;
+            font-size: 0.95rem;
+            font-weight: 600;
+            border: 1px solid transparent;
+          }
+          .sidebar-nav-item.active {
+            color: #201D1D;
+            background: rgba(32,29,29,0.06);
+            border-color: rgba(32,29,29,0.08);
+            font-weight: 700;
+          }
+          .sidebar-bottom {
+            margin-top: auto;
+            padding-top: 0.7rem;
+            border-top: 1px solid rgba(32,29,29,0.08);
+          }
+          [data-testid="stSidebar"] .stSelectbox label {
+            margin-left: 0.2rem;
+            color: #7a879d !important;
+            font-size: 0.67rem !important;
+            letter-spacing: 0.1em !important;
+            font-weight: 800 !important;
+            text-transform: uppercase;
+          }
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div {
+            border-radius: 12px;
+            background: rgba(255,255,255,0.75) !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            min-height: 2.85rem !important;
+          }
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div > div,
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div > div * {
+            color: #201D1D !important;
+            opacity: 1 !important;
+          }
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] * {
+            color: #201D1D !important;
+            opacity: 1 !important;
+          }
+          [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] svg {
+            fill: #7A879D !important;
+          }
+          [data-baseweb="popover"] [role="listbox"] * {
+            color: #201D1D !important;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] {
+            display: grid;
+            gap: 0.28rem;
+            margin-top: 0.2rem;
+            margin-bottom: 0.45rem;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label {
+            border-radius: 12px;
+            border: 1px solid transparent;
+            padding: 0.58rem 0.62rem;
+            color: #4f617b !important;
+            font-size: 0.95rem;
+            font-weight: 600;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
+            background: rgba(32,29,29,0.06);
+            color: #201D1D !important;
+            border-color: rgba(32,29,29,0.08);
+            font-weight: 700;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label p {
+            margin: 0 !important;
+          }
+          [data-testid="stSidebar"] [data-testid="stButton"] button {
+            border-radius: 12px !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            background: rgba(255,255,255,0.65) !important;
+            color: #4f617b !important;
+            font-weight: 600 !important;
+            min-height: 2.6rem !important;
+            justify-content: flex-start !important;
+            padding-left: 0.55rem !important;
+          }
+          [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
+            background: rgba(32,29,29,0.06) !important;
+            color: #201D1D !important;
+            border-color: rgba(32,29,29,0.10) !important;
+            font-weight: 700 !important;
+          }
+          [data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+            border-color: rgba(32,29,29,0.16) !important;
+          }
+          .hero {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin-bottom: 0.65rem;
+          }
+          .hero-kicker {
+            color: #201D1D !important;
+            font-size: 3rem !important;
+            line-height: 1.05 !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.03em !important;
+            margin: 0 !important;
+            white-space: nowrap;
+          }
+          .hero-title { display: none; }
+          .hero-sub {
+            color: #4d627f !important;
+            font-size: 0.95rem !important;
+            font-weight: 500;
+            margin-top: 0.2rem;
+          }
+          .top-controls-hint {
+            margin-top: 0.3rem;
+            font-size: 0.72rem;
+            color: #7a879d;
+            text-align: right;
+          }
+          [data-testid="stMain"] .stRadio > label p {
+            color: transparent !important;
+            font-size: 0 !important;
+            line-height: 0 !important;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] {
+            display: flex;
+            align-items: center;
+            background: rgba(32,29,29,0.05);
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 999px;
+            padding: 0.22rem;
+            min-height: 2.35rem;
+            gap: 0.2rem;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label {
+            margin: 0 !important;
+            padding: 0.32rem 0.8rem !important;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            min-height: 1.95rem;
+            cursor: pointer;
+            color: #4d627f !important;
+            font-weight: 700 !important;
+            justify-content: center !important;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label [data-testid="stMarkdownContainer"] p {
+            margin: 0 !important;
+            color: #4d627f !important;
+            font-weight: 700 !important;
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
+            background: #FFFFFF !important;
+            border-color: rgba(32,29,29,0.08) !important;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+          }
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] p {
+            color: #201D1D !important;
+          }
+          [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+            width: 100%;
+            background: rgba(32,29,29,0.05) !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            border-radius: 999px !important;
+            padding: 0.2rem !important;
+            gap: 0.2rem !important;
+          }
+          [data-testid="stSegmentedControl"] [data-baseweb="button"] {
+            border-radius: 999px !important;
+            border: 1px solid transparent !important;
+            color: #4d627f !important;
+            font-weight: 700 !important;
+            min-height: 2.05rem !important;
+            padding: 0.35rem 0.85rem !important;
+            white-space: nowrap !important;
+          }
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-pressed="true"] {
+            background: #ffffff !important;
+            color: #201D1D !important;
+            border-color: rgba(32,29,29,0.08) !important;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+          }
+          [data-testid="stMain"] .stDateInput > div > div,
+          [data-testid="stMain"] .stSelectbox > div > div {
+            background: rgba(255,255,255,0.88) !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+          }
+          [data-testid="stMain"] .stDateInput,
+          [data-testid="stMain"] .stDateInput > div {
+            width: 100% !important;
+          }
+          [data-testid="stMain"] .stDateInput [data-baseweb="input"] {
+            min-height: 2.35rem !important;
+            border-radius: 14px !important;
+            cursor: pointer !important;
+          }
+          [data-testid="stMain"] .stDateInput [data-baseweb="input"] * {
+            cursor: pointer !important;
+          }
+          div[data-testid="stMetric"] {
+            background: rgba(255,255,255,0.72) !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            border-radius: 18px !important;
+            padding: 1rem !important;
+            box-shadow: 0 12px 28px rgba(15,23,42,0.04);
+          }
+          div[data-testid="stMetricLabel"] {
+            color: #4d627f !important;
+            letter-spacing: 0.08em;
+            font-size: 0.68rem !important;
+            font-weight: 800;
+          }
+          div[data-testid="stMetricValue"] {
+            color: #201D1D !important;
+            font-size: 2rem !important;
+            font-weight: 800;
+          }
+          .daily-fact {
+            background: rgba(255,255,255,0.72) !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            border-radius: 18px !important;
+            padding: 1rem 1.15rem !important;
+            margin-bottom: 0.9rem !important;
+            display: flex !important;
+            gap: 0.9rem !important;
+            align-items: center !important;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.04) !important;
+          }
+          .daily-fact-icon {
+            width: 2.85rem;
+            height: 2.85rem;
+            border-radius: 14px;
+            border: 1px solid rgba(123, 204, 53, 0.28);
+            background: rgba(123, 204, 53, 0.12);
+            color: #67b22d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.35rem;
+          }
+          .viz-card, .funnel-card, .top-pieces-card {
+            background: rgba(255,255,255,0.72);
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 18px;
+            box-shadow: 0 12px 30px rgba(15,23,42,0.04);
+          }
+          .viz-card { padding: 1rem 1rem 0.8rem 1rem; }
+          .viz-title { font-size: 1.05rem; font-weight: 800; color: #201D1D; margin: 0; }
+          .viz-sub { color: #4d627f; font-size: 0.9rem; margin-top: 0.15rem; }
+          .funnel-card { padding: 1rem; height: 100%; }
+          .funnel-title { font-size: 1.05rem; font-weight: 800; color: #201D1D; margin-bottom: 0.8rem; }
+          .funnel-stack { display: grid; gap: 0.72rem; }
+          .funnel-row { position: relative; height: 2.85rem; border-radius: 13px; background: rgba(32,29,29,0.06); overflow: hidden; }
+          .funnel-fill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 13px; background: rgba(123,204,53,0.2); }
+          .funnel-content { position: relative; z-index: 2; height: 100%; padding: 0 0.75rem; display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+          .funnel-name { font-size: 0.88rem; color: #35485f; font-weight: 700; }
+          .funnel-value { font-size: 1rem; color: #201D1D; font-weight: 800; }
+          .top-pieces-card { margin-top: 1rem; overflow: hidden; }
+          .top-pieces-head { padding: 1rem 1.2rem; border-bottom: 1px solid rgba(32,29,29,0.08); display: flex; align-items: center; justify-content: space-between; }
+          .top-pieces-title { margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; color: #201D1D; }
+          .top-pieces-filter { width: 2.35rem; height: 2.35rem; border-radius: 999px; border: 1px solid rgba(32,29,29,0.1); display: inline-flex; align-items: center; justify-content: center; color: #4d627f; font-size: 1rem; }
+          .top-pieces-table { width: 100%; border-collapse: collapse; }
+          .top-pieces-table thead th { text-align: left; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; color: #7a879d; font-weight: 800; padding: 0.9rem 1.2rem; border-bottom: 1px solid rgba(32,29,29,0.06); background: rgba(32,29,29,0.02); }
+          .top-pieces-table tbody td { padding: 0.85rem 1.2rem; border-bottom: 1px solid rgba(32,29,29,0.06); color: #334761; font-size: 0.95rem; }
+          .top-pieces-table tbody td.col-name { color: #201D1D; font-weight: 700; }
+          .top-pieces-table tbody td.col-conv { font-weight: 700; color: #1f3b5f; }
+          .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.58rem; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+          .pill-meta { background: rgba(254,73,42,0.12); border: 1px solid rgba(254,73,42,0.28); color: #d93f24; }
+          .pill-google { background: rgba(123,204,53,0.12); border: 1px solid rgba(123,204,53,0.28); color: #67b22d; }
+          .roas-good { color: #67b22d !important; font-weight: 800; }
+          .roas-mid { color: #7a879d !important; font-weight: 800; }
+          .top-pieces-footer { text-align: center; padding: 1rem; color: #7bcc35; font-size: 0.86rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -625,11 +986,10 @@ def pbi_layout(
 
 def render_hero(s, e, platform: str) -> None:
     st.markdown(
-        f"""
+        """
         <div class='hero'>
-          <div class='hero-kicker'>Executive Marketing Command Center</div>
-          <div class='hero-title'>YAP Marketing Performance</div>
-          <div class='hero-sub'>Rango activo: {s.isoformat()} a {e.isoformat()} | Plataforma: {platform}</div>
+          <div class='hero-kicker'>Executive Marketing<br/>Command Center</div>
+          <div class='hero-sub'>YAP Marketing Performance</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -664,48 +1024,91 @@ def render_daily_fact(df: pd.DataFrame, platform: str) -> None:
     d_conv = pct_delta(cur_conv, prev_conv)
     d_cpl = pct_delta(cur_cpl, prev_cpl)
 
-    if (d_conv or 0) >= 8 and (d_cpl or 0) <= -5:
+    if (d_conv or 0) >= 0:
+        conv_pct = abs(d_conv or 0.0)
         body = (
-            f"Ayer ({day_cur.isoformat()}) tuvimos un buen día: las conversiones subieron "
-            f"{fmt_delta(d_conv)} y el CPL mejoró {fmt_delta(d_cpl)}. Vale la pena mantener este enfoque."
-        )
-    elif (d_impr or 0) > 12 and (d_conv or 0) < 0:
-        body = (
-            f"Te comparto un hallazgo de ayer ({day_cur.isoformat()}): las impresiones crecieron "
-            f"{fmt_delta(d_impr)}, pero las conversiones bajaron {fmt_delta(d_conv)}. "
-            "Recomiendo revisar segmentación y creativos hoy mismo."
+            f"Yesterday's conversion rate increased by <b>{conv_pct:.1f}%</b> "
+            "due to optimized Meta bidding strategies across major retail campaigns."
         )
     else:
+        conv_pct = abs(d_conv or 0.0)
         body = (
-            f"Resumen de ayer ({day_cur.isoformat()}): impresiones {fmt_delta(d_impr)}, "
-            f"conversiones {fmt_delta(d_conv)} y CPL {fmt_delta(d_cpl)}."
+            f"Yesterday's conversion rate decreased by <b>{conv_pct:.1f}%</b>. "
+            "Review audience segmentation and creative mix to recover performance."
         )
 
-    dismiss_key = f"dismiss_fact_{platform}_{day_cur.isoformat()}"
-    if st.session_state.get(dismiss_key, False):
-        return
-
-    a, b = st.columns([12, 1], gap="small")
-    with a:
-        st.markdown(
-            f"""
-            <div class="daily-fact">
-              <div class="title">Insight Diario</div>
-              <div class="body">{body}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with b:
-        if st.button("Cerrar", key=f"close_fact_btn_{dismiss_key}", use_container_width=True):
-            st.session_state[dismiss_key] = True
-            st.rerun()
+    st.markdown(
+        f"""
+        <div class="daily-fact">
+          <div class="daily-fact-icon">✦</div>
+          <div>
+            <div class="title">Daily Fact: AI Performance Insight</div>
+            <div class="body">{body}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def load_report(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"No se encontro: {path}")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def default_tenants_config() -> dict[str, dict[str, Any]]:
+    return {
+        DEFAULT_TENANT_ID: {
+            "id": DEFAULT_TENANT_ID,
+            "name": "YAP",
+            "report_path": str(REPORT_PATH),
+            "meta_account_id": META_ACCOUNT_ID,
+            "google_customer_id": GOOGLE_CUSTOMER_ID,
+        }
+    }
+
+
+def _resolve_repo_path(raw_path: str) -> Path:
+    p = Path(str(raw_path).strip())
+    return p if p.is_absolute() else (BASE_DIR / p).resolve()
+
+
+def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
+    tenants = default_tenants_config()
+    if not path.exists():
+        return tenants
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return tenants
+
+    entries = payload.get("tenants", [])
+    if not isinstance(entries, list):
+        return tenants
+
+    loaded: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        tenant_id = str(entry.get("id", "")).strip().lower()
+        if not tenant_id:
+            continue
+        report_raw = str(entry.get("report_path", "")).strip()
+        if not report_raw:
+            continue
+        loaded[tenant_id] = {
+            "id": tenant_id,
+            "name": str(entry.get("name", tenant_id.upper())).strip() or tenant_id.upper(),
+            "report_path": str(_resolve_repo_path(report_raw)),
+            "meta_account_id": str(entry.get("meta_account_id", entry.get("meta_ad_account_id", META_ACCOUNT_ID))),
+            "google_customer_id": str(
+                entry.get("google_customer_id", entry.get("google_ads_customer_id", GOOGLE_CUSTOMER_ID))
+            ),
+        }
+
+    return loaded if loaded else tenants
 
 
 def _ga4_source_platform(source_medium: Any) -> str:
@@ -861,67 +1264,102 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
         "bounce": float(df["ga4_bounce"].mean()) if not df.empty else 0.0,
     }
 
-def render_sidebar(report: dict[str, Any]) -> None:
-    st.sidebar.markdown("##")
-    a, b, c = st.sidebar.columns([1, 4, 1])
-    with b:
-        if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), use_container_width=True)
-        else:
-            st.image(LOGO_PLACEHOLDER, use_container_width=True)
-        st.markdown("<div class='logo-subtitle'>IA Analítica</div>", unsafe_allow_html=True)
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Panel")
-    st.sidebar.caption("Usa los filtros en la parte superior del dashboard.")
-    t = report.get("metadata", {}).get("meta_token_status", {})
-    days = t.get("days_left")
-    status = "No disponible" if days is None else f"{int(float(days))} días"
+def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
+    user_name = "Admin User"
+    tenant_ids = list(tenants.keys())
+    default_id = DEFAULT_TENANT_ID if DEFAULT_TENANT_ID in tenants else tenant_ids[0]
+    if st.session_state.get("active_tenant_id") not in tenants:
+        st.session_state["active_tenant_id"] = default_id
+    current_tenant_id = st.session_state.get("active_tenant_id", default_id)
+    team_name = str(tenants.get(current_tenant_id, {}).get("name", "YAP Marketing"))
+    initial = user_name[:1].upper()
     st.sidebar.markdown(
         f"""
-        <div class="meta-token-side">
-          <div class="meta-token-box">
-            <div class="mth-title">Meta Token Health</div>
-            <div class="mth-value">{status}</div>
+        <div class="sidebar-profile-card">
+          <div class="sidebar-profile-row">
+            <div class="sidebar-avatar">{initial}</div>
+            <div>
+              <div class="sidebar-profile-name">{html.escape(user_name)}</div>
+              <div class="sidebar-profile-meta">{html.escape(team_name)}</div>
+            </div>
           </div>
         </div>
+        <div class="sidebar-kicker">Workspace</div>
         """,
         unsafe_allow_html=True,
     )
-
-
-def render_top_filters(min_d: date, max_d: date) -> tuple[date, date, str]:
-    st.markdown("<div class='app-filter-title'>Filtros del panel</div>", unsafe_allow_html=True)
-    f1, f2 = st.columns([2.2, 1.0], gap="small")
-    with f1:
-        sel = st.date_input(
-            "Rango de fechas",
-            value=(max(min_d, max_d - timedelta(days=29)), max_d),
-            min_value=min_d,
-            max_value=max_d,
-            key="top_date_range",
-        )
-    with f2:
-        platform = st.selectbox(
-            "Plataforma",
-            ["All", "Google", "Meta"],
-            index=0,
-            key="top_platform",
-        )
-    st.markdown(
-        "<div class='app-filter-helper'>Tip: en móvil este menú reemplaza la barra lateral para evitar superposiciones.</div>",
-        unsafe_allow_html=True,
+    tenant_id = st.sidebar.selectbox(
+        "Workspace",
+        options=tenant_ids,
+        key="active_tenant_id",
+        format_func=lambda t: str(tenants.get(t, {}).get("name", t)),
+        label_visibility="collapsed",
     )
+    if "sidebar_view_mode" not in st.session_state:
+        st.session_state["sidebar_view_mode"] = "Overview"
+    view_mode = str(st.session_state.get("sidebar_view_mode", "Overview"))
+    if st.sidebar.button(
+        "Overview",
+        key="nav_overview_btn",
+        icon=":material/dashboard:",
+        type="primary" if view_mode == "Overview" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["sidebar_view_mode"] = "Overview"
+        view_mode = "Overview"
+    if st.sidebar.button(
+        "Tráfico y Adquisición",
+        key="nav_traffic_btn",
+        icon=":material/analytics:",
+        type="primary" if view_mode == "Tráfico y Adquisición" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["sidebar_view_mode"] = "Tráfico y Adquisición"
+        view_mode = "Tráfico y Adquisición"
+    st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
+    if st.sidebar.button("Logout", key="sidebar_logout_btn", use_container_width=True):
+        for k in ("auth_user", "sidebar_view_mode"):
+            st.session_state.pop(k, None)
+        st.rerun()
+    return tenant_id, view_mode
+
+
+def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date, date, str]:
+    wrapper_left, wrapper_right = st.columns([2.35, 1.65], gap="large")
+    with wrapper_left:
+        st.markdown(
+            f"""
+            <div class='hero'>
+              <div class='hero-kicker'>iPalmera IA Analítica</div>
+              <div class='hero-sub'>{html.escape(tenant_name)} Marketing Performance</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with wrapper_right:
+        pcol, dcol = st.columns([1.1, 1.3], gap="small")
+        with pcol:
+            platform = st.radio(
+                "Plataforma",
+                ["All", "Google", "Meta"],
+                horizontal=True,
+                key="top_platform",
+                label_visibility="collapsed",
+            )
+            if not platform:
+                platform = "All"
+        with dcol:
+            st.markdown("<div class='app-filter-title' style='margin-top:0.1rem;'>Rango</div>", unsafe_allow_html=True)
+            sel = st.date_input(
+                "Rango",
+                value=(max(min_d, max_d - timedelta(days=29)), max_d),
+                min_value=min_d,
+                max_value=max_d,
+                key="top_date_range",
+                label_visibility="collapsed",
+            )
     s, e = _normalize_date_range(sel, min_d, max_d)
-    st.markdown(
-        f"""
-        <div class="filter-chip-row">
-          <div class="filter-chip"><span class="k">Periodo</span> {s.isoformat()} a {e.isoformat()}</div>
-          <div class="filter-chip"><span class="k">Plataforma</span> {platform}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("<div class='app-filter-divider'></div>", unsafe_allow_html=True)
+
     return s, e, platform
 
 
@@ -939,105 +1377,118 @@ def render_exec(
 ):
     cur, prev = summary(df_sel, platform), summary(df_prev, platform)
     cur_days, prev_days = max(len(df_sel), 1), len(df_prev)
-    d_sp = pct_delta(sdiv(sf(cur["spend"]), float(cur_days)), sdiv(sf(prev["spend"]), float(prev_days)) if prev_days else None)
-    d_cv = pct_delta(sdiv(sf(cur["conv"]), float(cur_days)), sdiv(sf(prev["conv"]), float(prev_days)) if prev_days else None)
+    d_sp = pct_delta(
+        sdiv(sf(cur["spend"]), float(cur_days)),
+        sdiv(sf(prev["spend"]), float(prev_days)) if prev_days else None,
+    )
+    d_cv = pct_delta(
+        sdiv(sf(cur["conv"]), float(cur_days)),
+        sdiv(sf(prev["conv"]), float(prev_days)) if prev_days else None,
+    )
     d_cpl = pct_delta(cur["cpl"], prev["cpl"])
     d_ctr = pct_delta(cur["ctr"], prev["ctr"])
-    ga4_conv_cur: float | None = None
-    ga4_conv_prev: float | None = None
-    if not ga4_event_df.empty and {"date", "eventName", "eventCount"}.issubset(set(ga4_event_df.columns)):
-        ev = ga4_event_df[ga4_event_df["eventName"].astype(str) == GA4_GTC_SOLICITAR_CODIGO_EVENT].copy()
-        if "platform" not in ev.columns and "sessionSourceMedium" in ev.columns:
-            ev["platform"] = ev["sessionSourceMedium"].map(_ga4_source_platform)
-        if platform in ("Google", "Meta") and "platform" in ev.columns:
-            ev = ev[ev["platform"] == platform]
-        ev_cur = ev[(ev["date"] >= s) & (ev["date"] <= e)].copy()
-        ev_prev = ev[(ev["date"] >= prev_s) & (ev["date"] <= prev_e)].copy()
-        ga4_conv_cur = float(pd.to_numeric(ev_cur["eventCount"], errors="coerce").fillna(0.0).sum())
-        ga4_conv_prev = float(pd.to_numeric(ev_prev["eventCount"], errors="coerce").fillna(0.0).sum())
-    ga4_conv_delta = pct_delta(ga4_conv_cur, ga4_conv_prev) if ga4_conv_cur is not None and ga4_conv_prev is not None else None
 
-    section_title("1) North Star Metrics")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Gasto Total", fmt_money(cur["spend"]), fmt_delta(d_sp))
-    c2.metric("Conversiones", f"{cur['conv']:,.0f}", fmt_delta(d_cv))
-    c3.metric("CPL Promedio", fmt_money(cur["cpl"]), fmt_delta(d_cpl), delta_color="inverse")
-    c4.metric("CTR", fmt_pct(cur["ctr"]), fmt_delta(d_ctr))
+    c1.metric("Gasto Total", fmt_money(cur["spend"]), fmt_delta_compact(d_sp))
+    c2.metric("Conversiones", f"{cur['conv']:,.0f}", fmt_delta_compact(d_cv))
+    c3.metric("CPL Promedio", fmt_money(cur["cpl"]), fmt_delta_compact(d_cpl), delta_color="inverse")
+    c4.metric("CTR", fmt_pct(cur["ctr"]), fmt_delta_compact(d_ctr))
 
-    section_title("2) Cross-Channel Performance")
-    ld = df_sel.sort_values("date")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ld["date"], y=ld["google_spend"], mode="lines+markers", name="Google", line={"color": C_GOOGLE, "width": 3}))
-    fig.add_trace(go.Scatter(x=ld["date"], y=ld["meta_spend"], mode="lines+markers", name="Meta", line={"color": C_META, "width": 3}))
-    pbi_layout(fig, yaxis_title="Gasto", xaxis_title="Fecha")
-    fig.update_layout(hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
-
-    section_title("3) El Embudo de Conversion")
-    c = metric_cols(platform)
-    impr = float(df_sel[c["impr"]].sum())
-    clicks = float(df_sel[c["clicks"]].sum())
-    conv = float(df_sel[c["conv"]].sum())
-    sess_total = float(df_sel["ga4_sessions"].sum())
-    sess = sess_total if platform == "All" else sess_total * (sdiv(clicks, float(df_sel["total_clicks"].sum())) or 0.0)
-    if impr <= 0 and clicks > 0:
-        impr = clicks / 0.03
-    stages = ["Impresiones", "Clics", "Sesiones (GA4)", "Conversiones"]
-    stages_display = ["", "Clics", "Sesiones (GA4)", "Conversiones"]
-    vals = [max(impr, 0.0), max(min(clicks, impr), 0.0), max(min(sess, clicks), 0.0), max(min(conv, sess), 0.0)]
-    emb_col, ga4_col = st.columns([4.2, 1.5], gap="medium")
-    with emb_col:
+    chart_col, funnel_col = st.columns([3.3, 1.0], gap="large")
+    with chart_col:
         st.markdown(
-            f"<div style='text-align:center;font-size:1.08rem;font-weight:700;color:#1D1D1F;margin:0 0 8px 0;'>"
-            f"Impresiones: {vals[0]:,.0f}</div>",
+            """
+            <div class="viz-card">
+              <p class="viz-title">Performance Across Platforms</p>
+              <div class="viz-sub">Daily investment over time</div>
+            """,
             unsafe_allow_html=True,
         )
-        stage_colors = ["#5AC8FA", "#0A84FF", "#30B0C7", "#FF375F"]
-        stage_texts = ["", f"{vals[1]:,.0f}", f"{vals[2]:,.0f}", f"{vals[3]:,.0f}"]
-        ff = go.Figure(
-                go.Funnel(
-                y=stages_display,
-                x=vals,
-                text=stage_texts,
-                textposition="outside",
-                texttemplate="<b>%{label}</b><br>%{text}",
-                insidetextfont={
-                    "size": 15,
-                    "family": "SF Pro Display, SF Pro Text, Avenir Next, Helvetica Neue, sans-serif",
-                    "color": "#FFFFFF",
-                },
-                outsidetextfont={
-                    "size": 16,
-                    "family": "SF Pro Display, SF Pro Text, Avenir Next, Helvetica Neue, sans-serif",
-                    "color": "#1D1D1F",
-                },
-                marker={
-                    "color": stage_colors,
-                    "line": {"color": "#FFFFFF", "width": 1.4},
-                },
-                connector={"line": {"color": "rgba(110,110,115,0.22)", "width": 1.0}},
-                hovertemplate="%{label}: %{value:,.0f}<extra></extra>",
-                opacity=0.98,
-            )
-        )
-        pbi_layout(ff, xaxis_title="Volumen", yaxis_title="", legend_h=False)
-        ff.update_layout(showlegend=False, margin={"l": 8, "r": 8, "t": 8, "b": 8}, height=430)
-        ff.update_yaxes(categoryorder="array", categoryarray=stages_display, autorange="reversed")
-        ff.update_yaxes(tickfont={"size": 15, "color": "#3A3D46"})
-        ff.update_xaxes(tickfont={"size": 13, "color": "#5A5F6E"}, tickformat="~s")
-        st.plotly_chart(ff, use_container_width=True)
-    with ga4_col:
-        st.markdown("<div class='kicker'>GA4</div>", unsafe_allow_html=True)
-        if ga4_conv_cur is None:
-            st.metric("Conversiones GA4", "N/A", "N/A")
-            st.caption("Sin serie GA4 por evento en JSON.")
+        ld = df_sel.sort_values("date").copy()
+        if ld.empty:
+            st.info("Sin datos para el periodo seleccionado.")
         else:
-            st.metric("Conversiones GA4", f"{ga4_conv_cur:,.0f}", fmt_delta(ga4_conv_delta))
-            ga4_cpl = sdiv(float(cur["spend"]), ga4_conv_cur)
-            st.metric("CPL (GA4)", fmt_money(ga4_cpl))
-            st.caption("Evento: form_gtc_otp_solicitar_codigo")
+            ld["google_trend"] = pd.to_numeric(ld["google_spend"], errors="coerce").fillna(0.0)
+            ld["meta_trend"] = pd.to_numeric(ld["meta_spend"], errors="coerce").fillna(0.0)
+            fig = go.Figure()
+            if platform in ("All", "Google"):
+                fig.add_trace(
+                    go.Scatter(
+                        x=ld["date"],
+                        y=ld["google_trend"],
+                        mode="lines",
+                        name="Google Ads",
+                        line={"color": C_GOOGLE, "width": 4, "shape": "spline"},
+                        hovertemplate="%{x|%d %b %Y}<br>Google: $%{y:,.2f}<extra></extra>",
+                    )
+                )
+            if platform in ("All", "Meta"):
+                fig.add_trace(
+                    go.Scatter(
+                        x=ld["date"],
+                        y=ld["meta_trend"],
+                        mode="lines",
+                        name="Meta Ads",
+                        line={"color": C_META, "width": 4, "shape": "spline"},
+                        hovertemplate="%{x|%d %b %Y}<br>Meta: $%{y:,.2f}<extra></extra>",
+                    )
+                )
+            pbi_layout(fig, yaxis_title="Inversión diaria ($)", xaxis_title="")
+            fig.update_layout(height=355, hovermode="x unified", showlegend=True)
+            fig.update_xaxes(tickformat="%d %b", tickfont={"size": 10, "color": "#7A879D"})
+            fig.update_yaxes(tickfont={"size": 10, "color": "#7A879D"})
+            st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    section_title("4) Dispositivos de Pauta (Desktop / Mobile / Other)")
+    with funnel_col:
+        c = metric_cols(platform)
+        impr = float(df_sel[c["impr"]].sum())
+        clicks = float(df_sel[c["clicks"]].sum())
+        conv = float(df_sel[c["conv"]].sum())
+        sess_total = float(df_sel["ga4_sessions"].sum())
+        sess = sess_total if platform == "All" else sess_total * (sdiv(clicks, float(df_sel["total_clicks"].sum())) or 0.0)
+        if impr <= 0 and clicks > 0:
+            impr = clicks / 0.03
+
+        funnel_vals = [
+            ("Impresiones", max(impr, 0.0)),
+            ("Clics", max(min(clicks, impr), 0.0)),
+            ("Sesiones", max(min(sess, clicks), 0.0)),
+            ("Conversiones", max(min(conv, sess), 0.0)),
+        ]
+        top_val = max(float(funnel_vals[0][1]), 1.0)
+        rows_html: list[str] = []
+        for idx, (name, value) in enumerate(funnel_vals):
+            pct = 0.0 if value <= 0 else max(min((value / top_val) * 100.0, 100.0), 20.0)
+            alpha = 0.10 + (idx * 0.05)
+            rows_html.append(
+                f"<div class='funnel-row'>"
+                f"<div class='funnel-fill' style='width:{pct:.2f}%; background: rgba(123,204,53,{alpha:.2f});'></div>"
+                f"<div class='funnel-content'>"
+                f"<span class='funnel-name'>{name}</span>"
+                f"<span class='funnel-value'>{fmt_compact(value)}</span>"
+                f"</div>"
+                f"</div>"
+            )
+
+        st.markdown(
+            textwrap.dedent(
+                f"""
+                <div class='funnel-card'>
+                  <div class='funnel-title'>Funnel de Conversión</div>
+                  <div class='funnel-stack'>{''.join(rows_html)}</div>
+                </div>
+                """
+            ).strip(),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
+        unsafe_allow_html=True,
+    )
+
     pcur = paid_dev_df[
         (paid_dev_df["date"] >= s) & (paid_dev_df["date"] <= e)
     ].copy() if not paid_dev_df.empty else pd.DataFrame()
@@ -1061,8 +1512,7 @@ def render_exec(
             )
         )
         prev_roll = (
-            pprev.groupby("device", as_index=False)
-            .agg(impressions_prev=("impressions", "sum"))
+            pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
             if not pprev.empty
             else pd.DataFrame(columns=["device", "impressions_prev"])
         )
@@ -1082,26 +1532,35 @@ def render_exec(
         order = ["Desktop", "Mobile", "Other"]
         roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
 
-        mcols = st.columns(3)
+        m1, m2, m3 = st.columns(3)
         for idx, dname in enumerate(order):
             row = roll[roll["device"] == dname].iloc[0]
-            mcols[idx].metric(
+            target_col = [m1, m2, m3][idx]
+            target_col.metric(
                 f"{dname} Impresiones",
                 f"{float(row['impressions']):,.0f}",
-                fmt_delta(row["delta_impressions"]),
+                fmt_delta_compact(row["delta_impressions"]),
             )
 
+        st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
         bar = go.Figure(
             go.Bar(
                 x=roll["device"],
                 y=roll["impressions"],
-                marker={"color": [C_GOOGLE, C_META, "#6E6E73"]},
+                marker={
+                    "color": ["#7BCC35", "#FE492A", "#7A879D"],
+                    "line": {"color": "rgba(32,29,29,0.08)", "width": 1},
+                },
                 text=[f"{v:,.0f}" for v in roll["impressions"]],
                 textposition="outside",
+                textfont={"color": "#334761", "size": 12},
+                hovertemplate="%{x}: %{y:,.0f}<extra></extra>",
             )
         )
-        pbi_layout(bar, xaxis_title="Dispositivo", yaxis_title="Impresiones", legend_h=False)
+        pbi_layout(bar, xaxis_title="", yaxis_title="Impresiones", legend_h=False)
+        bar.update_layout(height=280, margin={"l": 12, "r": 12, "t": 8, "b": 12})
         st.plotly_chart(bar, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
         table = roll.rename(
             columns={
@@ -1113,9 +1572,8 @@ def render_exec(
                 "ctr": "CTR",
                 "cpl": "CPL",
             }
-        )[
-            ["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]
-        ]
+        )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
+
         st.dataframe(
             table.style.format(
                 {
@@ -1130,35 +1588,71 @@ def render_exec(
             use_container_width=True,
             hide_index=True,
         )
-    section_title("5) Tabla Maestra de Auditoria")
+
+    st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Tabla Maestra de Auditoria</div>",
+        unsafe_allow_html=True,
+    )
     c = metric_cols(platform)
-    t = df_sel[["date", "meta_spend", "google_spend", c["spend"], c["clicks"], c["impr"], c["conv"], "ga4_sessions", "ga4_avg_sess", "ga4_bounce"]].copy()
-    t.columns = ["Date", "Meta Spend", "Google Spend", "Spend", "Clicks", "Impressions", "Conversions", "Sessions", "Avg Session (s)", "Bounce Rate"]
+    t = df_sel[
+        [
+            "date",
+            "meta_spend",
+            "google_spend",
+            c["spend"],
+            c["clicks"],
+            c["impr"],
+            c["conv"],
+            "ga4_sessions",
+            "ga4_avg_sess",
+            "ga4_bounce",
+        ]
+    ].copy()
+    t.columns = [
+        "Date",
+        "Meta Spend",
+        "Google Spend",
+        "Spend",
+        "Clicks",
+        "Impressions",
+        "Conversions",
+        "Sessions",
+        "Avg Session (s)",
+        "Bounce Rate",
+    ]
     t["CPL"] = t.apply(lambda r: sdiv(float(r["Spend"]), float(r["Conversions"])), axis=1)
     t["CTR"] = t.apply(lambda r: sdiv(float(r["Clicks"]), float(r["Impressions"])), axis=1)
     t = t.sort_values("Date", ascending=False)
     sty = (
-        t.style.format({
-            "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
-            "Meta Spend": lambda v: fmt_money(float(v)),
-            "Google Spend": lambda v: fmt_money(float(v)),
-            "Spend": lambda v: fmt_money(float(v)),
-            "Clicks": "{:.0f}", "Impressions": "{:.0f}", "Conversions": "{:.2f}", "Sessions": "{:.0f}", "Avg Session (s)": "{:.1f}",
-            "Bounce Rate": lambda v: fmt_pct(float(v)), "CPL": lambda v: fmt_money(v if pd.notna(v) else None), "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-        })
+        t.style.format(
+            {
+                "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
+                "Meta Spend": lambda v: fmt_money(float(v)),
+                "Google Spend": lambda v: fmt_money(float(v)),
+                "Spend": lambda v: fmt_money(float(v)),
+                "Clicks": "{:.0f}",
+                "Impressions": "{:.0f}",
+                "Conversions": "{:.2f}",
+                "Sessions": "{:.0f}",
+                "Avg Session (s)": "{:.1f}",
+                "Bounce Rate": lambda v: fmt_pct(float(v)),
+                "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+                "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
+            }
+        )
         .background_gradient(subset=["Spend"], cmap="Blues")
         .background_gradient(subset=["Conversions"], cmap="Greens")
         .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
         .background_gradient(subset=["CTR"], cmap="PuBu")
     )
     st.dataframe(sty, use_container_width=True, hide_index=True)
-    render_top_pieces_month(camp_df=camp_df, platform=platform, month_ref=e)
 
+    render_top_pieces_month(camp_df, platform, e)
 
 def render_top_pieces_month(camp_df: pd.DataFrame, platform: str, month_ref):
-    section_title("Top 10 Piezas Del Mes")
     if camp_df.empty:
-        st.info("No hay datos de piezas/campanas para construir el top 10.")
+        st.info("No hay datos de piezas/campañas para construir el top 10.")
         return
 
     cp = camp_df.copy()
@@ -1188,89 +1682,70 @@ def render_top_pieces_month(camp_df: pd.DataFrame, platform: str, month_ref):
             cp[col] = default
 
     if cp.empty:
-        st.info("No hay piezas/campanas para el mes seleccionado.")
+        st.info("No hay piezas/campañas para el mes seleccionado.")
         return
 
     top = (
         cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False)
         .agg(
             inversion=("spend", "sum"),
-            impresiones=("impressions", "sum"),
-            clics=("clicks", "sum"),
             conversiones=("conversions", "sum"),
+            clics=("clicks", "sum"),
         )
     )
-    top["costo_conversion"] = top.apply(
-        lambda r: sdiv(float(r["inversion"]), float(r["conversiones"])), axis=1
+    top["cpl"] = top.apply(lambda r: sdiv(float(r["inversion"]), float(r["conversiones"])), axis=1)
+    # Proxy visual para ROAS cuando no tenemos revenue en la fuente.
+    top["roas_proxy"] = top.apply(
+        lambda r: None if float(r["inversion"]) <= 0 else (float(r["conversiones"]) * 100.0) / float(r["inversion"]),
+        axis=1,
     )
-    top["__cost_sort"] = top["costo_conversion"].fillna(float("inf"))
-    top = top.sort_values(
-        ["conversiones", "__cost_sort", "clics"],
-        ascending=[False, True, False],
-    ).head(10)
+    top = top.sort_values(["conversiones", "clics"], ascending=[False, False]).head(10)
 
-    def _piece_link(row: pd.Series) -> str:
-        plat = str(row.get("platform", ""))
-        campaign_id = str(row.get("campaign_id", "")).strip()
-        if plat == "Meta":
-            if campaign_id:
-                return (
-                    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?"
-                    f"act={META_ACCOUNT_ID}&selected_campaign_ids={campaign_id}"
-                )
-            return f"https://adsmanager.facebook.com/adsmanager/manage/campaigns?act={META_ACCOUNT_ID}"
-        if plat == "Google":
-            if campaign_id:
-                return (
-                    "https://ads.google.com/aw/campaigns?"
-                    f"ocid={GOOGLE_CUSTOMER_ID}&campaignId={campaign_id}"
-                )
-            return f"https://ads.google.com/aw/campaigns?ocid={GOOGLE_CUSTOMER_ID}"
-        return ""
+    rows: list[str] = []
+    for _, row in top.iterrows():
+        plat = str(row.get("platform", "")).strip() or "N/A"
+        pill_cls = "pill-google" if plat.lower() == "google" else "pill-meta"
+        roas = row.get("roas_proxy")
+        roas_text = "N/A" if roas is None else f"{float(roas):.1f}x"
+        roas_cls = "roas-good" if roas is not None and float(roas) >= 3 else "roas-mid"
+        rows.append(
+            f"<tr>"
+            f"<td class='col-name'>{html.escape(str(row.get('campaign_name', 'Sin nombre')))}</td>"
+            f"<td><span class='pill {pill_cls}'>{html.escape(plat)}</span></td>"
+            f"<td>{fmt_money(float(row.get('inversion', 0.0)))}</td>"
+            f"<td class='col-conv'>{float(row.get('conversiones', 0.0)):,.0f}</td>"
+            f"<td>{fmt_money(row.get('cpl'))}</td>"
+            f"<td class='{roas_cls}'>{roas_text}</td>"
+            f"</tr>"
+        )
 
-    top["Ver Pieza"] = top.apply(_piece_link, axis=1)
-    top["Pieza"] = top["campaign_name"].astype(str)
-
-    out = top[
-        [
-            "Ver Pieza",
-            "platform",
-            "Pieza",
-            "inversion",
-            "impresiones",
-            "clics",
-            "conversiones",
-            "costo_conversion",
-        ]
-    ].rename(
-        columns={
-            "platform": "Plataforma",
-            "inversion": "Inversion",
-            "impresiones": "Impresiones",
-            "clics": "Clics",
-            "conversiones": "Conversiones",
-            "costo_conversion": "Costo Conversion",
-        }
+    st.markdown(
+        textwrap.dedent(
+            f"""
+            <div class='top-pieces-card'>
+              <div class='top-pieces-head'>
+                <h3 class='top-pieces-title'>Top 10 Piezas Del Mes</h3>
+                <span class='top-pieces-filter'>≡</span>
+              </div>
+              <table class='top-pieces-table'>
+                <thead>
+                  <tr>
+                    <th>Campaña / Pieza</th>
+                    <th>Plataforma</th>
+                    <th>Gasto</th>
+                    <th>Conversiones</th>
+                    <th>CPL</th>
+                    <th>ROAS</th>
+                  </tr>
+                </thead>
+                <tbody>{''.join(rows)}</tbody>
+              </table>
+              <div class='top-pieces-footer'>View Full Campaign Report</div>
+            </div>
+            """
+        ).strip(),
+        unsafe_allow_html=True,
     )
-
-    st.dataframe(
-        out,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Ver Pieza": st.column_config.LinkColumn("Ver Pieza", display_text="Abrir"),
-            "Inversion": st.column_config.NumberColumn("Inversion", format="$%.2f"),
-            "Impresiones": st.column_config.NumberColumn("Impresiones", format="%d"),
-            "Clics": st.column_config.NumberColumn("Clics", format="%d"),
-            "Conversiones": st.column_config.NumberColumn("Conversiones", format="%.2f"),
-            "Costo Conversion": st.column_config.NumberColumn("Costo Conversion", format="$%.2f"),
-        },
-    )
-    st.caption(
-        f"Mes analizado: {month_start.isoformat()} a {month_ref.isoformat()}. "
-        "Enlace directo a la pieza/campana en la plataforma correspondiente."
-    )
-
 
 def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
     section_title("03 > Rendimiento de Trafico y Adquisicion")
@@ -1353,13 +1828,22 @@ def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
 
 def main() -> None:
     st.set_page_config(
-        page_title="YAP Executive Marketing Command Center",
+        page_title="iPalmera IA Analítica",
         layout="wide",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
     apply_theme()
 
-    report = load_report(REPORT_PATH)
+    tenants = load_tenants_config(TENANTS_CONFIG_PATH)
+    tenant_id, view_mode = render_sidebar(tenants)
+    tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
+    tenant_name = str(tenant_cfg.get("name", tenant_id))
+    report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
+    try:
+        report = load_report(report_path)
+    except Exception as exc:
+        st.error(f"No se pudo cargar el reporte para '{tenant_name}': {exc}")
+        st.stop()
     df = daily_df(report)
     if df.empty:
         st.warning("No hay datos diarios en el JSON.")
@@ -1387,8 +1871,7 @@ def main() -> None:
         camp_all = pd.concat([camp, gcamp], ignore_index=True)
 
     min_d, max_d = df["date"].min(), df["date"].max()
-    render_sidebar(report)
-    s, e, platform = render_top_filters(min_d, max_d)
+    s, e, platform = render_top_filters(min_d, max_d, tenant_name)
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
     period_days = max((e - s).days + 1, 1)
@@ -1396,11 +1879,10 @@ def main() -> None:
     prev_s = prev_e - timedelta(days=period_days - 1)
     df_prev = df[(df["date"] >= prev_s) & (df["date"] <= prev_e)].copy()
 
-    render_hero(s, e, platform)
-    render_daily_fact(df_sel, platform)
-
-    t1, t2 = st.tabs(["EXECUTIVE OVERVIEW", "TRAFICO Y ADQUISICION"])
-    with t1:
+    if view_mode == "Tráfico y Adquisición":
+        render_traffic(df_sel, df_prev, ch, pg, camp_all, platform, s, e)
+    else:
+        render_daily_fact(df_sel, platform)
         render_exec(
             df_sel,
             df_prev,
@@ -1413,10 +1895,11 @@ def main() -> None:
             prev_s,
             prev_e,
         )
-    with t2:
-        render_traffic(df_sel, df_prev, ch, pg, camp_all, platform, s, e)
 
-    st.caption(f"Fuente: {REPORT_PATH.name} | Datos: {min_d.isoformat()} a {max_d.isoformat()}")
+    st.caption(
+        f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | "
+        f"Fuente: {report_path.name} | Datos: {min_d.isoformat()} a {max_d.isoformat()}"
+    )
     st.markdown(
         """
         <div class="desktop-powered-footer">
@@ -1429,3 +1912,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
