@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import html
 import hashlib
+import math
 import textwrap
 from datetime import date, timedelta
 from pathlib import Path
@@ -15,7 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 BASE_DIR = Path(__file__).resolve().parent
-REPORT_PATH = BASE_DIR / "reports" / "yap" / "YAP_historical.json"
+REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
 TENANTS_CONFIG_PATH = BASE_DIR / "config" / "tenants.json"
 USERS_CONFIG_PATH = BASE_DIR / "config" / "users.json"
 DEFAULT_TENANT_ID = "yap"
@@ -52,25 +53,62 @@ def sdiv(a: float, b: float) -> float | None:
 
 
 def fmt_money(v: float | None) -> str:
-    return "N/A" if v is None else f"${v:,.2f}"
+    if v is None:
+        return "N/A"
+    try:
+        n = float(v)
+    except Exception:
+        return "N/A"
+    if not math.isfinite(n):
+        return "N/A"
+    return f"${n:,.2f}"
 
 
 def fmt_pct(v: float | None) -> str:
-    return "N/A" if v is None else f"{v*100:.2f}%"
+    if v is None:
+        return "N/A"
+    try:
+        n = float(v)
+    except Exception:
+        return "N/A"
+    if not math.isfinite(n):
+        return "N/A"
+    return f"{n*100:.2f}%"
 
 
 def fmt_delta(v: float | None) -> str:
-    return "N/A" if v is None else f"{v:+.1f}% vs periodo anterior"
+    if v is None:
+        return "N/A"
+    try:
+        n = float(v)
+    except Exception:
+        return "N/A"
+    if not math.isfinite(n):
+        return "N/A"
+    return f"{n:+.1f}% vs periodo anterior"
 
 
 def fmt_delta_compact(v: float | None) -> str:
-    return "N/A" if v is None else f"{v:+.1f}%"
+    if v is None:
+        return "N/A"
+    try:
+        n = float(v)
+    except Exception:
+        return "N/A"
+    if not math.isfinite(n):
+        return "N/A"
+    return f"{n:+.1f}%"
 
 
 def fmt_compact(v: float | None) -> str:
     if v is None:
         return "N/A"
-    n = float(v)
+    try:
+        n = float(v)
+    except Exception:
+        return "N/A"
+    if not math.isfinite(n):
+        return "N/A"
     if abs(n) >= 1_000_000:
         return f"{n/1_000_000:.1f}M"
     if abs(n) >= 1_000:
@@ -81,7 +119,13 @@ def fmt_compact(v: float | None) -> str:
 def fmt_duration(seconds: float | None) -> str:
     if seconds is None:
         return "N/A"
-    sec = max(float(seconds), 0.0)
+    try:
+        sec = float(seconds)
+    except Exception:
+        return "N/A"
+    if not math.isfinite(sec):
+        return "N/A"
+    sec = max(sec, 0.0)
     if sec < 60:
         return f"{sec:.0f} s"
     mins = int(sec // 60)
@@ -91,6 +135,42 @@ def fmt_duration(seconds: float | None) -> str:
     hrs = mins // 60
     mins_rem = mins % 60
     return f"{hrs} h {mins_rem} min"
+
+
+def _digits_only(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").strip() if ch.isdigit())
+
+
+def campaign_platform_link(
+    platform: str,
+    campaign_id: Any,
+    *,
+    meta_account_id: str = "",
+    google_customer_id: str = "",
+) -> str:
+    camp_id = str(campaign_id or "").strip()
+    if not camp_id:
+        return ""
+    plat = str(platform or "").strip().lower()
+    if plat == "meta":
+        act = str(meta_account_id or "").strip()
+        if act and not act.startswith("act_"):
+            act = f"act_{act}"
+        if act:
+            return (
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={act}&selected_campaign_ids={camp_id}"
+            )
+        return (
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            f"?selected_campaign_ids={camp_id}"
+        )
+    if plat == "google":
+        ocid = _digits_only(google_customer_id)
+        if ocid:
+            return f"https://ads.google.com/aw/campaigns?ocid={ocid}&campaignId={camp_id}"
+        return f"https://ads.google.com/aw/campaigns?campaignId={camp_id}"
+    return ""
 
 
 def pct_delta(cur: float | None, prev: float | None) -> float | None:
@@ -680,6 +760,97 @@ def apply_theme() -> None:
             padding-top: 0.7rem;
             border-top: 1px solid rgba(32,29,29,0.08);
           }
+          .sidebar-token-card {
+            margin-top: 0.62rem;
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.7);
+            padding: 0.65rem 0.72rem;
+            text-align: center;
+          }
+          .sidebar-token-wrap {
+            position: sticky;
+            bottom: 0.45rem;
+            margin-top: 0.85rem;
+            z-index: 5;
+          }
+          .sidebar-token-title {
+            font-size: 0.9rem;
+            font-weight: 900;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #201D1D;
+            margin-bottom: 0.48rem;
+          }
+          .sidebar-token-row {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.45rem;
+            margin-bottom: 0.46rem;
+          }
+          .sidebar-token-days-label {
+            font-size: 0.67rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #7a879d;
+          }
+          .sidebar-token-days {
+            font-size: 1.85rem;
+            line-height: 1;
+            font-weight: 900;
+            letter-spacing: -0.01em;
+          }
+          .sidebar-token-days.good { color: #5ea42a; }
+          .sidebar-token-days.warn { color: #b86a00; }
+          .sidebar-token-days.bad { color: #c62828; }
+          .sidebar-token-days.na { color: #7a879d; }
+          .sidebar-token-badge {
+            border-radius: 999px;
+            padding: 0.14rem 0.58rem;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            border: 1px solid transparent;
+          }
+          .sidebar-token-badge.good {
+            color: #5ea42a;
+            background: rgba(123,204,53,0.14);
+            border-color: rgba(123,204,53,0.34);
+          }
+          .sidebar-token-badge.warn {
+            color: #b86a00;
+            background: rgba(254,197,61,0.16);
+            border-color: rgba(254,197,61,0.38);
+          }
+          .sidebar-token-badge.bad {
+            color: #c62828;
+            background: rgba(254,73,42,0.15);
+            border-color: rgba(254,73,42,0.35);
+          }
+          .sidebar-token-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 0.45rem;
+            font-size: 0.72rem;
+            margin-top: 0.24rem;
+          }
+          .sidebar-token-item .k {
+            color: #7a879d;
+            font-weight: 700;
+          }
+          .sidebar-token-item .v {
+            color: #334761;
+            font-weight: 700;
+            text-align: right;
+            max-width: 65%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
           [data-testid="stSidebar"] .stSelectbox label {
             margin-left: 0.2rem;
             color: #7a879d !important;
@@ -953,11 +1124,96 @@ def apply_theme() -> None:
           .funnel-card { padding: 1rem; height: 100%; }
           .funnel-title { font-size: 1.05rem; font-weight: 800; color: #201D1D; margin-bottom: 0.8rem; }
           .funnel-stack { display: grid; gap: 0.72rem; }
-          .funnel-row { position: relative; height: 2.85rem; border-radius: 13px; background: rgba(32,29,29,0.06); overflow: hidden; }
-          .funnel-fill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 13px; background: rgba(123,204,53,0.2); }
+          .funnel-row {
+            position: relative;
+            height: 2.85rem;
+            border-radius: 13px;
+            background: rgba(32,29,29,0.06);
+            overflow: hidden;
+          }
+          .funnel-fill {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            height: 2.12rem;
+            border-radius: 12px;
+            clip-path: polygon(6% 0, 94% 0, 100% 100%, 0% 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.45);
+            transition: width 220ms ease;
+          }
           .funnel-content { position: relative; z-index: 2; height: 100%; padding: 0 0.75rem; display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
           .funnel-name { font-size: 0.88rem; color: #35485f; font-weight: 700; }
           .funnel-value { font-size: 1rem; color: #201D1D; font-weight: 800; }
+          .funnel-metrics { display: inline-flex; align-items: center; gap: 0.4rem; }
+          .funnel-drop {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 4.25rem;
+            border-radius: 999px;
+            padding: 0.12rem 0.42rem;
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            color: #b3261e;
+            background: rgba(254,73,42,0.12);
+            border: 1px solid rgba(254,73,42,0.28);
+          }
+          .funnel-drop-base {
+            color: #55657b;
+            background: rgba(122,135,157,0.14);
+            border: 1px solid rgba(122,135,157,0.28);
+          }
+          .ga4-conv-card {
+            margin-top: 0.72rem;
+            background: rgba(255,255,255,0.72);
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 16px;
+            padding: 0.78rem 0.85rem;
+            box-shadow: 0 10px 24px rgba(15,23,42,0.04);
+          }
+          .ga4-conv-title {
+            font-size: 0.94rem;
+            font-weight: 800;
+            color: #201D1D;
+            margin-bottom: 0.3rem;
+          }
+          .ga4-conv-event {
+            font-size: 0.75rem;
+            color: #55657b;
+            margin-bottom: 0.56rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .ga4-conv-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.48rem;
+          }
+          .ga4-conv-item {
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 11px;
+            background: rgba(32,29,29,0.02);
+            padding: 0.42rem 0.52rem;
+          }
+          .ga4-conv-label {
+            display: block;
+            font-size: 0.67rem;
+            color: #7A879D;
+            font-weight: 700;
+            margin-bottom: 0.16rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+          }
+          .ga4-conv-value {
+            display: block;
+            font-size: 0.93rem;
+            color: #201D1D;
+            font-weight: 800;
+            line-height: 1.1;
+          }
           .top-pieces-card { margin-top: 1rem; overflow: hidden; }
           .top-pieces-head { padding: 1rem 1.2rem; border-bottom: 1px solid rgba(32,29,29,0.08); display: flex; align-items: center; justify-content: space-between; }
           .top-pieces-title { margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; color: #201D1D; }
@@ -965,8 +1221,29 @@ def apply_theme() -> None:
           .top-pieces-table { width: 100%; border-collapse: collapse; }
           .top-pieces-table thead th { text-align: left; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; color: #7a879d; font-weight: 800; padding: 0.9rem 1.2rem; border-bottom: 1px solid rgba(32,29,29,0.06); background: rgba(32,29,29,0.02); }
           .top-pieces-table tbody td { padding: 0.85rem 1.2rem; border-bottom: 1px solid rgba(32,29,29,0.06); color: #334761; font-size: 0.95rem; }
+          .top-pieces-table tbody td.col-link { width: 5.4rem; }
           .top-pieces-table tbody td.col-name { color: #201D1D; font-weight: 700; }
           .top-pieces-table tbody td.col-conv { font-weight: 700; color: #1f3b5f; }
+          .piece-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 3.5rem;
+            padding: 0.25rem 0.52rem;
+            border-radius: 999px;
+            border: 1px solid rgba(32,29,29,0.14);
+            color: #334761;
+            text-decoration: none;
+            font-size: 0.74rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.72);
+          }
+          .piece-link:hover { border-color: rgba(123,204,53,0.5); color: #201D1D; }
+          .piece-link-off {
+            color: #7A879D;
+            font-size: 0.8rem;
+            font-weight: 700;
+          }
           .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.58rem; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
           .pill-meta { background: rgba(254,73,42,0.12); border: 1px solid rgba(254,73,42,0.28); color: #d93f24; }
           .pill-google { background: rgba(123,204,53,0.12); border: 1px solid rgba(123,204,53,0.28); color: #67b22d; }
@@ -1108,6 +1385,7 @@ def default_tenants_config() -> dict[str, dict[str, Any]]:
             "report_path": str(REPORT_PATH),
             "meta_account_id": META_ACCOUNT_ID,
             "google_customer_id": GOOGLE_CUSTOMER_ID,
+            "ga4_conversion_event_name": GA4_GTC_SOLICITAR_CODIGO_EVENT,
         }
     }
 
@@ -1149,6 +1427,9 @@ def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
             "google_customer_id": str(
                 entry.get("google_customer_id", entry.get("google_ads_customer_id", GOOGLE_CUSTOMER_ID))
             ),
+            "ga4_conversion_event_name": str(
+                entry.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)
+            ).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT,
         }
 
     return loaded if loaded else tenants
@@ -1215,6 +1496,11 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
           :root {
             --login-card-width: 432px;
             --login-title-size: 2.15rem;
+          }
+          .stApp,
+          [data-testid="stAppViewContainer"] {
+            background: none !important;
+            background-image: none !important;
           }
           [data-testid="stSidebar"],
           [data-testid="collapsedControl"],
@@ -1679,6 +1965,74 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
     return tenant_id, view_mode
 
 
+def render_sidebar_meta_token_health(report: dict[str, Any]) -> None:
+    meta = report.get("metadata", {}) if isinstance(report, dict) else {}
+    token = meta.get("meta_token_status", {}) if isinstance(meta, dict) else {}
+    if not isinstance(token, dict):
+        token = {}
+
+    valid_raw = token.get("is_valid")
+    is_valid = bool(valid_raw) if isinstance(valid_raw, bool) else None
+    days_raw = token.get("days_left")
+    try:
+        days_left = int(days_raw) if days_raw is not None else None
+    except Exception:
+        days_left = None
+
+    if is_valid is False:
+        badge_cls = "bad"
+        status_text = "Inválido"
+    elif days_left is None:
+        badge_cls = "warn"
+        status_text = "Sin dato"
+    elif days_left <= 7:
+        badge_cls = "bad"
+        status_text = "Crítico"
+    elif days_left <= 21:
+        badge_cls = "warn"
+        status_text = "Por vencer"
+    else:
+        badge_cls = "good"
+        status_text = "Activo"
+
+    expires_raw = str(token.get("expires_at_utc", "N/A")).strip()
+    if expires_raw and expires_raw != "N/A":
+        expires_at = expires_raw.split("T", 1)[0]
+    else:
+        expires_at = "N/A"
+    if days_left is None:
+        days_badge_cls = "warn"
+        days_text = "N/A"
+    elif days_left <= 7:
+        days_badge_cls = "bad"
+        days_text = str(days_left)
+    elif days_left <= 21:
+        days_badge_cls = "warn"
+        days_text = str(days_left)
+    else:
+        days_badge_cls = "good"
+        days_text = str(days_left)
+
+    st.sidebar.markdown(
+        textwrap.dedent(
+            f"""
+            <div class="sidebar-token-wrap">
+              <div class="sidebar-token-card">
+                <div class="sidebar-token-title">Meta Token Health</div>
+                <div class="sidebar-token-row">
+                  <div class="sidebar-token-days-label">Días restantes</div>
+                  <div class="sidebar-token-days {days_badge_cls if days_left is not None else 'na'}">{html.escape(days_text)}</div>
+                  <span class="sidebar-token-badge {badge_cls}">{status_text}</span>
+                </div>
+                <div class="sidebar-token-item"><span class="k">Expira</span><span class="v">{html.escape(expires_at)}</span></div>
+              </div>
+            </div>
+            """
+        ).strip(),
+        unsafe_allow_html=True,
+    )
+
+
 def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date, date, str]:
     wrapper_left, wrapper_right = st.columns([2.35, 1.65], gap="large")
     with wrapper_left:
@@ -1726,6 +2080,9 @@ def render_exec(
     paid_dev_df: pd.DataFrame,
     camp_df: pd.DataFrame,
     ga4_event_df: pd.DataFrame,
+    ga4_conversion_event_name: str,
+    tenant_meta_account_id: str,
+    tenant_google_customer_id: str,
     s,
     e,
     prev_s,
@@ -1750,7 +2107,7 @@ def render_exec(
     c3.metric("CPL Promedio", fmt_money(cur["cpl"]), fmt_delta_compact(d_cpl), delta_color="inverse")
     c4.metric("CTR", fmt_pct(cur["ctr"]), fmt_delta_compact(d_ctr))
 
-    chart_col, funnel_col = st.columns([3.3, 1.0], gap="large")
+    chart_col, funnel_col = st.columns([3.1, 1.2], gap="large")
     with chart_col:
         st.markdown(
             """
@@ -1815,18 +2172,25 @@ def render_exec(
         top_val = max(float(funnel_vals[0][1]), 1.0)
         funnel_stage_colors = ["#7BCC35", "#3AE7FC", "#7A879D", "#FE492A"]
         rows_html: list[str] = []
+        prev_val: float | None = None
         for idx, (name, value) in enumerate(funnel_vals):
-            pct = 0.0 if value <= 0 else min((value / top_val) * 100.0, 100.0)
+            pct = 0.0 if value <= 0 else min(max((value / top_val) * 100.0, 0.0), 100.0)
             stage_color = funnel_stage_colors[idx % len(funnel_stage_colors)]
+            if prev_val is None or prev_val <= 0:
+                drop_html = "<span class='funnel-drop funnel-drop-base' title='Etapa base'>Base</span>"
+            else:
+                drop_pct = max(0.0, min(100.0, (1.0 - sdiv(value, prev_val)) * 100.0))
+                drop_html = f"<span class='funnel-drop' title='Caída vs etapa anterior'>&darr; {drop_pct:.1f}%</span>"
             rows_html.append(
                 f"<div class='funnel-row'>"
-                f"<div class='funnel-fill' style='width:{pct:.2f}%; background:{stage_color}33;'></div>"
+                f"<div class='funnel-fill' style='width:{pct:.2f}%; background:{stage_color}33; border:1px solid {stage_color}66;'></div>"
                 f"<div class='funnel-content'>"
                 f"<span class='funnel-name'>{name}</span>"
-                f"<span class='funnel-value'>{fmt_compact(value)}</span>"
+                f"<span class='funnel-metrics'><span class='funnel-value'>{fmt_compact(value)}</span>{drop_html}</span>"
                 f"</div>"
                 f"</div>"
             )
+            prev_val = value
 
         st.markdown(
             textwrap.dedent(
@@ -1834,6 +2198,61 @@ def render_exec(
                 <div class='funnel-card'>
                   <div class='funnel-title'>Funnel de Conversión</div>
                   <div class='funnel-stack'>{''.join(rows_html)}</div>
+                </div>
+                """
+            ).strip(),
+            unsafe_allow_html=True,
+        )
+
+        ga4_event_name = str(ga4_conversion_event_name or GA4_GTC_SOLICITAR_CODIGO_EVENT).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT
+        ga4_filtered = ga4_event_df.copy() if not ga4_event_df.empty else pd.DataFrame()
+        ga4_conv_total = 0.0
+        if not ga4_filtered.empty:
+            if "date" in ga4_filtered.columns:
+                ga4_filtered = ga4_filtered[(ga4_filtered["date"] >= s) & (ga4_filtered["date"] <= e)]
+            event_col = "eventName" if "eventName" in ga4_filtered.columns else ("event_name" if "event_name" in ga4_filtered.columns else None)
+            if event_col:
+                ga4_filtered = ga4_filtered[
+                    ga4_filtered[event_col].astype(str).str.strip().str.lower() == ga4_event_name.lower()
+                ]
+            if platform in ("Google", "Meta") and "platform" in ga4_filtered.columns:
+                ga4_filtered = ga4_filtered[
+                    ga4_filtered["platform"].astype(str).str.strip().str.lower() == platform.lower()
+                ]
+            conv_col = (
+                "conversions"
+                if "conversions" in ga4_filtered.columns
+                else ("eventCount" if "eventCount" in ga4_filtered.columns else ("event_count" if "event_count" in ga4_filtered.columns else None))
+            )
+            if conv_col:
+                ga4_conv_total = float(pd.to_numeric(ga4_filtered[conv_col], errors="coerce").fillna(0.0).sum())
+
+        spend_total = float(df_sel[c["spend"]].sum()) if not df_sel.empty else 0.0
+        ga4_cpl = sdiv(spend_total, ga4_conv_total)
+        st.markdown(
+            textwrap.dedent(
+                f"""
+                <div class='ga4-conv-card'>
+                  <div class='ga4-conv-title'>Conversiones GA4</div>
+                  <div class='ga4-conv-event'>Evento: {html.escape(ga4_event_name)}</div>
+                  <div class='ga4-conv-grid'>
+                    <div class='ga4-conv-item'>
+                      <span class='ga4-conv-label'>Conversiones</span>
+                      <span class='ga4-conv-value'>{fmt_compact(ga4_conv_total)}</span>
+                    </div>
+                    <div class='ga4-conv-item'>
+                      <span class='ga4-conv-label'>Inversión</span>
+                      <span class='ga4-conv-value'>{fmt_money(spend_total)}</span>
+                    </div>
+                    <div class='ga4-conv-item'>
+                      <span class='ga4-conv-label'>Plataforma</span>
+                      <span class='ga4-conv-value'>{html.escape(platform)}</span>
+                    </div>
+                    <div class='ga4-conv-item'>
+                      <span class='ga4-conv-label'>CPL GA4</span>
+                      <span class='ga4-conv-value'>{fmt_money(ga4_cpl)}</span>
+                    </div>
+                  </div>
                 </div>
                 """
             ).strip(),
@@ -2005,9 +2424,24 @@ def render_exec(
     )
     st.dataframe(sty, use_container_width=True, hide_index=True)
 
-    render_top_pieces_month(camp_df, platform, e)
+    render_top_pieces_range(
+        camp_df,
+        platform,
+        s,
+        e,
+        tenant_meta_account_id=tenant_meta_account_id,
+        tenant_google_customer_id=tenant_google_customer_id,
+    )
 
-def render_top_pieces_month(camp_df: pd.DataFrame, platform: str, month_ref):
+def render_top_pieces_range(
+    camp_df: pd.DataFrame,
+    platform: str,
+    start_ref,
+    end_ref,
+    *,
+    tenant_meta_account_id: str = "",
+    tenant_google_customer_id: str = "",
+):
     if camp_df.empty:
         st.info("No hay datos de piezas/campañas para construir el top 10.")
         return
@@ -2019,8 +2453,7 @@ def render_top_pieces_month(camp_df: pd.DataFrame, platform: str, month_ref):
 
     cp["date"] = pd.to_datetime(cp["date"], errors="coerce").dt.date
     cp = cp.dropna(subset=["date"])
-    month_start = month_ref.replace(day=1)
-    cp = cp[(cp["date"] >= month_start) & (cp["date"] <= month_ref)]
+    cp = cp[(cp["date"] >= start_ref) & (cp["date"] <= end_ref)]
 
     if platform in ("Google", "Meta") and "platform" in cp.columns:
         cp = cp[cp["platform"] == platform]
@@ -2037,9 +2470,11 @@ def render_top_pieces_month(camp_df: pd.DataFrame, platform: str, month_ref):
     for col, default in required_defaults.items():
         if col not in cp.columns:
             cp[col] = default
+    for num_col in ("spend", "impressions", "clicks", "conversions"):
+        cp[num_col] = pd.to_numeric(cp[num_col], errors="coerce").fillna(0.0)
 
     if cp.empty:
-        st.info("No hay piezas/campañas para el mes seleccionado.")
+        st.info("No hay piezas/campañas para el rango seleccionado.")
         return
 
     top = (
@@ -2051,58 +2486,47 @@ def render_top_pieces_month(camp_df: pd.DataFrame, platform: str, month_ref):
         )
     )
     top["cpl"] = top.apply(lambda r: sdiv(float(r["inversion"]), float(r["conversiones"])), axis=1)
-    # Proxy visual para ROAS cuando no tenemos revenue en la fuente.
-    top["roas_proxy"] = top.apply(
-        lambda r: None if float(r["inversion"]) <= 0 else (float(r["conversiones"]) * 100.0) / float(r["inversion"]),
+    top = top.sort_values(["conversiones", "clics"], ascending=[False, False], na_position="last").head(10)
+    top["Ver"] = top.apply(
+        lambda r: campaign_platform_link(
+            r.get("platform"),
+            r.get("campaign_id"),
+            meta_account_id=tenant_meta_account_id,
+            google_customer_id=tenant_google_customer_id,
+        ),
         axis=1,
     )
-    top = top.sort_values(["conversiones", "clics"], ascending=[False, False]).head(10)
+    top["Campaña / Pieza"] = top["campaign_name"].astype(str).replace({"": "Sin nombre"})
+    top["Plataforma"] = top["platform"].astype(str).replace({"": "N/A"})
+    top["Gasto"] = pd.to_numeric(top["inversion"], errors="coerce")
+    top["Conversiones"] = pd.to_numeric(top["conversiones"], errors="coerce")
+    top["CPL"] = pd.to_numeric(top["cpl"], errors="coerce")
+    top_view = top[["Ver", "Campaña / Pieza", "Plataforma", "Gasto", "Conversiones", "CPL"]].copy()
+    top_view["Ver"] = top_view["Ver"].fillna("")
 
-    rows: list[str] = []
-    for _, row in top.iterrows():
-        plat = str(row.get("platform", "")).strip() or "N/A"
-        pill_cls = "pill-google" if plat.lower() == "google" else "pill-meta"
-        roas = row.get("roas_proxy")
-        roas_text = "N/A" if roas is None else f"{float(roas):.1f}x"
-        roas_cls = "roas-good" if roas is not None and float(roas) >= 3 else "roas-mid"
-        rows.append(
-            f"<tr>"
-            f"<td class='col-name'>{html.escape(str(row.get('campaign_name', 'Sin nombre')))}</td>"
-            f"<td><span class='pill {pill_cls}'>{html.escape(plat)}</span></td>"
-            f"<td>{fmt_money(float(row.get('inversion', 0.0)))}</td>"
-            f"<td class='col-conv'>{float(row.get('conversiones', 0.0)):,.0f}</td>"
-            f"<td>{fmt_money(row.get('cpl'))}</td>"
-            f"<td class='{roas_cls}'>{roas_text}</td>"
-            f"</tr>"
-        )
-
+    st.markdown("<div class='top-pieces-card'>", unsafe_allow_html=True)
     st.markdown(
-        textwrap.dedent(
-            f"""
-            <div class='top-pieces-card'>
-              <div class='top-pieces-head'>
-                <h3 class='top-pieces-title'>Top 10 Piezas Del Mes</h3>
-                <span class='top-pieces-filter'>≡</span>
-              </div>
-              <table class='top-pieces-table'>
-                <thead>
-                  <tr>
-                    <th>Campaña / Pieza</th>
-                    <th>Plataforma</th>
-                    <th>Gasto</th>
-                    <th>Conversiones</th>
-                    <th>CPL</th>
-                    <th>ROAS</th>
-                  </tr>
-                </thead>
-                <tbody>{''.join(rows)}</tbody>
-              </table>
-              <div class='top-pieces-footer'>View Full Campaign Report</div>
-            </div>
-            """
-        ).strip(),
+        """
+        <div class='top-pieces-head'>
+          <h3 class='top-pieces-title'>Top 10 Piezas</h3>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+    st.dataframe(
+        top_view,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Ver": st.column_config.LinkColumn("Ver", help="Abrir campaña/pieza", display_text="Abrir"),
+            "Campaña / Pieza": st.column_config.TextColumn("Campaña / Pieza"),
+            "Plataforma": st.column_config.TextColumn("Plataforma"),
+            "Gasto": st.column_config.NumberColumn("Gasto", format="$%.2f"),
+            "Conversiones": st.column_config.NumberColumn("Conversiones", format="%.0f"),
+            "CPL": st.column_config.NumberColumn("CPL", format="$%.2f"),
+        },
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
     section_title("03 > Rendimiento de Trafico y Adquisicion")
@@ -2198,6 +2622,16 @@ def main() -> None:
     tenant_id, view_mode = render_sidebar(tenants)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
     tenant_name = str(tenant_cfg.get("name", tenant_id))
+    tenant_meta_account_id = str(
+        tenant_cfg.get("meta_account_id", tenant_cfg.get("meta_ad_account_id", ""))
+    ).strip()
+    tenant_google_customer_id = str(
+        tenant_cfg.get("google_customer_id", tenant_cfg.get("google_ads_customer_id", ""))
+    ).strip()
+    ga4_conversion_event_name = (
+        str(tenant_cfg.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)).strip()
+        or GA4_GTC_SOLICITAR_CODIGO_EVENT
+    )
     report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
     try:
         report = load_report(report_path)
@@ -2250,11 +2684,16 @@ def main() -> None:
             paid_dev,
             camp_all,
             ga4_event_daily,
+            ga4_conversion_event_name,
+            tenant_meta_account_id,
+            tenant_google_customer_id,
             s,
             e,
             prev_s,
             prev_e,
         )
+
+    render_sidebar_meta_token_health(report)
 
     st.caption(
         f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | Plataforma: {platform} | "

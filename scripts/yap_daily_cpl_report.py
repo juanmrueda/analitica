@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-YAP data pipeline:
+Marketing data pipeline:
 - Bootstrap historical dataset (default from Jan 1st of current year)
 - Incremental daily updates (typically yesterday)
 
 Output:
-  reports/yap/YAP_historical.json
+  reports/yap/yap_historical.json
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import tomllib
 META_AD_ACCOUNT_ID = "act_1808641036591815"
 GOOGLE_ADS_CUSTOMER_ID = "6495122409"
 GA4_PROPERTY_ID = "299663070"
-GA4_GTC_SOLICITAR_CODIGO_EVENT = "form_gtc_otp_solicitar_codigo"
+GA4_DEFAULT_CONVERSION_EVENT = "form_gtc_otp_solicitar_codigo"
 
 GRAPH_API_VERSION = "v25.0"
 GOOGLE_ADS_API_VERSION = "v20"
@@ -38,8 +38,9 @@ GA4_DATA_API_VERSION = "v1beta"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 GA4_OAUTH_PATH = ROOT_DIR / "ga4_user_oauth_analytics_ipalmera.json"
-DEFAULT_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "YAP_historical.json"
-DEFAULT_ORGANIC_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "YAP_organic_historical.json"
+TENANTS_CONFIG_PATH = ROOT_DIR / "config" / "tenants.json"
+DEFAULT_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_historical.json"
+DEFAULT_ORGANIC_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_organic_historical.json"
 DEFAULT_ORGANIC_LOOKBACK_DAYS = 30
 
 
@@ -94,6 +95,104 @@ def _load_codex_config(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
     return tomllib.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def _resolve_repo_path(raw_path: Any) -> Path:
+    p = Path(str(raw_path or "").strip())
+    return p if p.is_absolute() else (ROOT_DIR / p).resolve()
+
+
+def _default_tenants_config() -> Dict[str, Dict[str, Any]]:
+    return {
+        "yap": {
+            "id": "yap",
+            "name": "YAP",
+            "report_path": str(DEFAULT_OUTPUT_PATH),
+            "organic_report_path": str(DEFAULT_ORGANIC_OUTPUT_PATH),
+            "meta_ad_account_id": META_AD_ACCOUNT_ID,
+            "google_ads_customer_id": GOOGLE_ADS_CUSTOMER_ID,
+            "google_ads_login_customer_id": GOOGLE_ADS_CUSTOMER_ID,
+            "ga4_property_id": GA4_PROPERTY_ID,
+            "ga4_conversion_event_name": GA4_DEFAULT_CONVERSION_EVENT,
+        }
+    }
+
+
+def _load_tenants_config(path: Path) -> Dict[str, Dict[str, Any]]:
+    default_cfg = _default_tenants_config()
+    if not path.exists():
+        return default_cfg
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default_cfg
+
+    entries = payload.get("tenants", [])
+    if not isinstance(entries, list):
+        return default_cfg
+
+    loaded: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        tenant_id = str(entry.get("id", "")).strip().lower()
+        if not tenant_id:
+            continue
+        loaded[tenant_id] = {
+            "id": tenant_id,
+            "name": str(entry.get("name", tenant_id.upper())),
+            "report_path": str(
+                _resolve_repo_path(entry.get("report_path", DEFAULT_OUTPUT_PATH))
+            ),
+            "organic_report_path": str(
+                _resolve_repo_path(entry.get("organic_report_path", DEFAULT_ORGANIC_OUTPUT_PATH))
+            ),
+            "meta_ad_account_id": str(
+                entry.get(
+                    "meta_ad_account_id",
+                    entry.get("meta_account_id", META_AD_ACCOUNT_ID),
+                )
+            ),
+            "google_ads_customer_id": str(
+                entry.get(
+                    "google_ads_customer_id",
+                    entry.get("google_customer_id", GOOGLE_ADS_CUSTOMER_ID),
+                )
+            ),
+            "google_ads_login_customer_id": str(
+                entry.get(
+                    "google_ads_login_customer_id",
+                    entry.get(
+                        "google_login_customer_id",
+                        entry.get(
+                            "google_ads_customer_id",
+                            entry.get("google_customer_id", GOOGLE_ADS_CUSTOMER_ID),
+                        ),
+                    ),
+                )
+            ),
+            "ga4_property_id": str(entry.get("ga4_property_id", GA4_PROPERTY_ID)),
+            "ga4_conversion_event_name": str(
+                entry.get("ga4_conversion_event_name", GA4_DEFAULT_CONVERSION_EVENT)
+            ).strip()
+            or GA4_DEFAULT_CONVERSION_EVENT,
+        }
+    return loaded if loaded else default_cfg
+
+
+def _resolve_tenant_config(
+    *,
+    tenant_id: str,
+    tenants_config_path: Path,
+) -> Dict[str, Any]:
+    tenants = _load_tenants_config(tenants_config_path)
+    t_id = str(tenant_id or "yap").strip().lower()
+    if t_id not in tenants:
+        raise RuntimeError(
+            f"Tenant '{t_id}' not found in tenants config: {tenants_config_path}"
+        )
+    return tenants[t_id]
 
 
 def _safe_float(value: Any) -> float:
@@ -1125,6 +1224,7 @@ def _fetch_google_ads_range(
     *,
     access_token: str,
     developer_token: str,
+    customer_id: str,
     login_customer_id: str,
     quota_project: str | None,
     start_day: date,
@@ -1132,7 +1232,7 @@ def _fetch_google_ads_range(
 ) -> Dict[str, Dict[str, float]]:
     endpoint = (
         f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
-        f"{GOOGLE_ADS_CUSTOMER_ID}/googleAds:searchStream"
+        f"{customer_id}/googleAds:searchStream"
     )
     query = (
         "SELECT segments.date, metrics.cost_micros, metrics.clicks, metrics.impressions, "
@@ -1179,6 +1279,7 @@ def _fetch_google_device_range(
     *,
     access_token: str,
     developer_token: str,
+    customer_id: str,
     login_customer_id: str,
     quota_project: str | None,
     start_day: date,
@@ -1186,7 +1287,7 @@ def _fetch_google_device_range(
 ) -> List[Dict[str, Any]]:
     endpoint = (
         f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
-        f"{GOOGLE_ADS_CUSTOMER_ID}/googleAds:searchStream"
+        f"{customer_id}/googleAds:searchStream"
     )
     query = (
         "SELECT segments.date, segments.device, metrics.cost_micros, "
@@ -1243,6 +1344,7 @@ def _fetch_google_campaign_range(
     *,
     access_token: str,
     developer_token: str,
+    customer_id: str,
     login_customer_id: str,
     quota_project: str | None,
     start_day: date,
@@ -1250,7 +1352,7 @@ def _fetch_google_campaign_range(
 ) -> List[Dict[str, Any]]:
     endpoint = (
         f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
-        f"{GOOGLE_ADS_CUSTOMER_ID}/googleAds:searchStream"
+        f"{customer_id}/googleAds:searchStream"
     )
     query = (
         "SELECT segments.date, campaign.id, campaign.name, metrics.cost_micros, "
@@ -1346,6 +1448,7 @@ def _source_medium_to_platform(source_medium: str) -> str:
 def _fetch_ga4_run_report(
     *,
     access_token: str,
+    ga4_property_id: str,
     start_day: date,
     end_day: date,
     dimensions: List[str],
@@ -1355,7 +1458,7 @@ def _fetch_ga4_run_report(
 ) -> List[Dict[str, Any]]:
     endpoint = (
         f"https://analyticsdata.googleapis.com/{GA4_DATA_API_VERSION}/properties/"
-        f"{GA4_PROPERTY_ID}:runReport"
+        f"{ga4_property_id}:runReport"
     )
     headers = {"Authorization": f"Bearer {access_token}"}
     if quota_project:
@@ -1388,10 +1491,15 @@ def _fetch_ga4_run_report(
 
 
 def _fetch_ga4_main_range(
-    access_token: str, start_day: date, end_day: date, quota_project: str | None
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
 ) -> Dict[str, Dict[str, float]]:
     rows = _fetch_ga4_run_report(
         access_token=access_token,
+        ga4_property_id=ga4_property_id,
         start_day=start_day,
         end_day=end_day,
         dimensions=["date"],
@@ -1420,10 +1528,15 @@ def _fetch_ga4_main_range(
 
 
 def _fetch_ga4_device_range(
-    access_token: str, start_day: date, end_day: date, quota_project: str | None
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
 ) -> List[Dict[str, Any]]:
     rows = _fetch_ga4_run_report(
         access_token=access_token,
+        ga4_property_id=ga4_property_id,
         start_day=start_day,
         end_day=end_day,
         dimensions=["date", "deviceCategory"],
@@ -1443,10 +1556,15 @@ def _fetch_ga4_device_range(
 
 
 def _fetch_ga4_country_range(
-    access_token: str, start_day: date, end_day: date, quota_project: str | None
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
 ) -> List[Dict[str, Any]]:
     rows = _fetch_ga4_run_report(
         access_token=access_token,
+        ga4_property_id=ga4_property_id,
         start_day=start_day,
         end_day=end_day,
         dimensions=["date", "country"],
@@ -1466,12 +1584,17 @@ def _fetch_ga4_country_range(
 
 
 def _fetch_ga4_channel_range(
-    access_token: str, start_day: date, end_day: date, quota_project: str | None
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
         rows = _fetch_ga4_run_report(
             access_token=access_token,
+            ga4_property_id=ga4_property_id,
             start_day=chunk_start,
             end_day=chunk_end,
             dimensions=["date", "sessionDefaultChannelGroup", "sessionSourceMedium"],
@@ -1505,12 +1628,17 @@ def _fetch_ga4_channel_range(
 
 
 def _fetch_ga4_top_pages_range(
-    access_token: str, start_day: date, end_day: date, quota_project: str | None
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for chunk_start, chunk_end in _date_chunks(start_day, end_day, 14):
         rows = _fetch_ga4_run_report(
             access_token=access_token,
+            ga4_property_id=ga4_property_id,
             start_day=chunk_start,
             end_day=chunk_end,
             dimensions=["date", "pagePath", "pageTitle"],
@@ -1533,6 +1661,7 @@ def _fetch_ga4_top_pages_range(
 
 def _fetch_ga4_event_range(
     access_token: str,
+    ga4_property_id: str,
     start_day: date,
     end_day: date,
     quota_project: str | None,
@@ -1543,6 +1672,7 @@ def _fetch_ga4_event_range(
     for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
         rows = _fetch_ga4_run_report(
             access_token=access_token,
+            ga4_property_id=ga4_property_id,
             start_day=chunk_start,
             end_day=chunk_end,
             dimensions=["date", "eventName", "sessionSourceMedium"],
@@ -1782,8 +1912,18 @@ def _resolve_range(
 
 def _parse_args() -> argparse.Namespace:
     current_year_start = date.today().replace(month=1, day=1).isoformat()
-    default_end = (date.today() - timedelta(days=1)).isoformat()
+    default_end = date.today().isoformat()
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--tenant-id",
+        default="yap",
+        help="Tenant id defined in config/tenants.json (default: yap).",
+    )
+    parser.add_argument(
+        "--tenants-config-path",
+        default=str(TENANTS_CONFIG_PATH),
+        help="Path to tenants JSON config.",
+    )
     parser.add_argument(
         "--mode",
         choices=["auto", "bootstrap", "daily"],
@@ -1797,13 +1937,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-path",
-        default=str(DEFAULT_OUTPUT_PATH),
-        help="Output JSON path.",
+        default=None,
+        help="Output JSON path. If omitted, uses tenant config path.",
     )
     parser.add_argument(
         "--organic-output-path",
-        default=str(DEFAULT_ORGANIC_OUTPUT_PATH),
-        help="Output JSON path for organic module.",
+        default=None,
+        help="Output JSON path for organic module. If omitted, uses tenant config path.",
     )
     parser.add_argument(
         "--organic-lookback-days",
@@ -1814,7 +1954,27 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--end-date",
         default=default_end,
-        help="End date for extraction range (YYYY-MM-DD). Default: yesterday.",
+        help="End date for extraction range (YYYY-MM-DD). Default: today.",
+    )
+    parser.add_argument(
+        "--meta-ad-account-id",
+        default=None,
+        help="Override Meta ad account id (with or without act_ prefix).",
+    )
+    parser.add_argument(
+        "--google-ads-customer-id",
+        default=None,
+        help="Override Google Ads customer id for data extraction.",
+    )
+    parser.add_argument(
+        "--google-ads-login-customer-id",
+        default=None,
+        help="Override Google Ads login customer id (MCC).",
+    )
+    parser.add_argument(
+        "--ga4-property-id",
+        default=None,
+        help="Override GA4 property id for Data API reports.",
     )
     return parser.parse_args()
 
@@ -1839,8 +1999,38 @@ def _resolve_meta_app_credentials(cfg: Dict[str, Any]) -> Tuple[str | None, str 
 
 def main() -> int:
     args = _parse_args()
-    output_path = Path(args.output_path)
-    organic_output_path = Path(args.organic_output_path)
+    tenants_config_path = _resolve_repo_path(args.tenants_config_path)
+    tenant_cfg = _resolve_tenant_config(
+        tenant_id=str(args.tenant_id),
+        tenants_config_path=tenants_config_path,
+    )
+    tenant_id = str(tenant_cfg.get("id", str(args.tenant_id))).strip().lower()
+    tenant_name = str(tenant_cfg.get("name", tenant_id.upper()))
+    output_path = (
+        _resolve_repo_path(args.output_path)
+        if args.output_path
+        else _resolve_repo_path(tenant_cfg.get("report_path", DEFAULT_OUTPUT_PATH))
+    )
+    organic_output_path = (
+        _resolve_repo_path(args.organic_output_path)
+        if args.organic_output_path
+        else _resolve_repo_path(tenant_cfg.get("organic_report_path", DEFAULT_ORGANIC_OUTPUT_PATH))
+    )
+    tenant_meta_ad_account_id = str(
+        args.meta_ad_account_id or tenant_cfg.get("meta_ad_account_id", META_AD_ACCOUNT_ID)
+    )
+    tenant_google_ads_customer_id = str(
+        args.google_ads_customer_id
+        or tenant_cfg.get("google_ads_customer_id", GOOGLE_ADS_CUSTOMER_ID)
+    )
+    tenant_ga4_property_id = str(
+        args.ga4_property_id or tenant_cfg.get("ga4_property_id", GA4_PROPERTY_ID)
+    )
+    tenant_ga4_conversion_event_name = (
+        str(tenant_cfg.get("ga4_conversion_event_name", GA4_DEFAULT_CONVERSION_EVENT)).strip()
+        or GA4_DEFAULT_CONVERSION_EVENT
+    )
+    ga4_oauth_path = _resolve_repo_path(tenant_cfg.get("ga4_oauth_path", GA4_OAUTH_PATH))
     bootstrap_start = datetime.strptime(args.bootstrap_start, "%Y-%m-%d").date()
     anchor_end = datetime.strptime(args.end_date, "%Y-%m-%d").date()
     organic_lookback_days = max(int(args.organic_lookback_days), 1)
@@ -1852,7 +2042,7 @@ def main() -> int:
     meta_env = cfg.get("mcp_servers", {}).get("meta-ads-mcp", {}).get("env", {})
     meta_token = meta_env.get("META_ADS_ACCESS_TOKEN")
     meta_ad_account_id = _normalize_meta_ad_account_id(
-        meta_env.get("META_AD_ACCOUNT_ID", META_AD_ACCOUNT_ID)
+        tenant_meta_ad_account_id or meta_env.get("META_AD_ACCOUNT_ID", META_AD_ACCOUNT_ID)
     )
     if not meta_token:
         raise RuntimeError("META_ADS_ACCESS_TOKEN not found in ~/.codex/config.toml")
@@ -1863,7 +2053,12 @@ def main() -> int:
     ga_client_secret = google_env.get("GOOGLE_ADS_CLIENT_SECRET")
     ga_refresh_token = google_env.get("GOOGLE_ADS_REFRESH_TOKEN")
     ga_developer_token = google_env.get("GOOGLE_ADS_DEVELOPER_TOKEN")
-    ga_login_customer_id = google_env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID", GOOGLE_ADS_CUSTOMER_ID)
+    ga_login_customer_id = (
+        args.google_ads_login_customer_id
+        or tenant_cfg.get("google_ads_login_customer_id")
+        or google_env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+        or tenant_google_ads_customer_id
+    )
     ga_quota_project = google_env.get("GOOGLE_ADS_QUOTA_PROJECT")
     if not all([ga_client_id, ga_client_secret, ga_refresh_token, ga_developer_token]):
         raise RuntimeError("Missing Google Ads OAuth/developer token values in ~/.codex/config.toml")
@@ -1873,7 +2068,7 @@ def main() -> int:
         ga4_client_secret,
         ga4_refresh_token,
         ga4_quota_project,
-    ) = _load_ga4_oauth_credentials(GA4_OAUTH_PATH)
+    ) = _load_ga4_oauth_credentials(ga4_oauth_path)
 
     meta_data = _fetch_meta_range(str(meta_token), meta_ad_account_id, start_day, end_day)
     meta_campaign_daily = _fetch_meta_campaign_range(
@@ -1890,6 +2085,7 @@ def main() -> int:
     google_data = _fetch_google_ads_range(
         access_token=google_ads_access_token,
         developer_token=str(ga_developer_token),
+        customer_id=tenant_google_ads_customer_id,
         login_customer_id=str(ga_login_customer_id),
         quota_project=str(ga_quota_project) if ga_quota_project else None,
         start_day=start_day,
@@ -1898,6 +2094,7 @@ def main() -> int:
     google_campaign_daily = _fetch_google_campaign_range(
         access_token=google_ads_access_token,
         developer_token=str(ga_developer_token),
+        customer_id=tenant_google_ads_customer_id,
         login_customer_id=str(ga_login_customer_id),
         quota_project=str(ga_quota_project) if ga_quota_project else None,
         start_day=start_day,
@@ -1906,6 +2103,7 @@ def main() -> int:
     google_device_daily = _fetch_google_device_range(
         access_token=google_ads_access_token,
         developer_token=str(ga_developer_token),
+        customer_id=tenant_google_ads_customer_id,
         login_customer_id=str(ga_login_customer_id),
         quota_project=str(ga_quota_project) if ga_quota_project else None,
         start_day=start_day,
@@ -1913,17 +2111,28 @@ def main() -> int:
     )
 
     ga4_access_token = _google_access_token(ga4_client_id, ga4_client_secret, ga4_refresh_token)
-    ga4_main = _fetch_ga4_main_range(ga4_access_token, start_day, end_day, ga4_quota_project)
-    ga4_device = _fetch_ga4_device_range(ga4_access_token, start_day, end_day, ga4_quota_project)
-    ga4_country = _fetch_ga4_country_range(ga4_access_token, start_day, end_day, ga4_quota_project)
-    ga4_channel = _fetch_ga4_channel_range(ga4_access_token, start_day, end_day, ga4_quota_project)
-    ga4_top_pages = _fetch_ga4_top_pages_range(ga4_access_token, start_day, end_day, ga4_quota_project)
+    ga4_main = _fetch_ga4_main_range(
+        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+    )
+    ga4_device = _fetch_ga4_device_range(
+        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+    )
+    ga4_country = _fetch_ga4_country_range(
+        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+    )
+    ga4_channel = _fetch_ga4_channel_range(
+        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+    )
+    ga4_top_pages = _fetch_ga4_top_pages_range(
+        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+    )
     ga4_event_daily = _fetch_ga4_event_range(
         ga4_access_token,
+        tenant_ga4_property_id,
         start_day,
         end_day,
         ga4_quota_project,
-        event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+        event_name=tenant_ga4_conversion_event_name,
     )
 
     new_daily = _build_daily_rows(
@@ -1993,13 +2202,15 @@ def main() -> int:
         "metadata": {
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
             "run_kind": run_kind,
+            "tenant": {"id": tenant_id, "name": tenant_name},
             "updated_range": {"start": start_day.isoformat(), "end": end_day.isoformat()},
             "meta_token_status": meta_token_status,
             "ids": {
                 "meta_ad_account_id": meta_ad_account_id,
-                "google_ads_customer_id": GOOGLE_ADS_CUSTOMER_ID,
-                "ga4_property_id": GA4_PROPERTY_ID,
+                "google_ads_customer_id": tenant_google_ads_customer_id,
+                "ga4_property_id": tenant_ga4_property_id,
             },
+            "ga4_conversion_event_name": tenant_ga4_conversion_event_name,
         },
         "daily": all_daily,
         "ga4_breakdowns": {
@@ -2020,7 +2231,7 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(
-        f"Report updated: {output_path} | run_kind={run_kind} | "
+        f"Report updated: {output_path} | tenant={tenant_id} | run_kind={run_kind} | "
         f"range={start_day.isoformat()}..{end_day.isoformat()}"
     )
 
@@ -2039,7 +2250,7 @@ def main() -> int:
         json.dumps(organic_report, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(
-        f"Organic report updated: {organic_output_path} | "
+        f"Organic report updated: {organic_output_path} | tenant={tenant_id} | "
         f"range={organic_start_day.isoformat()}..{organic_end_day.isoformat()}"
     )
     return 0

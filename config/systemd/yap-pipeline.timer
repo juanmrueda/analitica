@@ -1,8 +1,8 @@
 [Unit]
-Description=Run YAP daily pipeline at 02:00 (America/Bogota server time)
+Description=Run YAP pipeline every hour (America/Bogota server time)
 
 [Timer]
-OnCalendar=*-*-* 02:00:00
+OnCalendar=hourly
 Persistent=true
 Unit=yap-pipeline.service
 
