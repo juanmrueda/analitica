@@ -6,6 +6,7 @@ backups/
 ga4_user_oauth_analytics_ipalmera.json
 valiant-adviser-316513-6854721bd01b.json
 config/users.json
+config/admin_audit.jsonl
 
 # Local generated data/logs
 reports/

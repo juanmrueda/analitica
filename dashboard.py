@@ -6,8 +6,10 @@ import json
 import html
 import hashlib
 import math
+import secrets
+import shutil
 import textwrap
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,9 @@ BASE_DIR = Path(__file__).resolve().parent
 REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
 TENANTS_CONFIG_PATH = BASE_DIR / "config" / "tenants.json"
 USERS_CONFIG_PATH = BASE_DIR / "config" / "users.json"
+DASHBOARD_SETTINGS_PATH = BASE_DIR / "config" / "dashboard_settings.json"
+CONFIG_BACKUP_DIR = BASE_DIR / "config" / "backups"
+ADMIN_AUDIT_LOG_PATH = BASE_DIR / "config" / "admin_audit.jsonl"
 DEFAULT_TENANT_ID = "yap"
 LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
 LOGO_PLACEHOLDER = "https://via.placeholder.com/260x80/F8FAFC/0F172A?text=iPalmera+Logo"
@@ -34,6 +39,39 @@ C_MUTE = "#7A879D"
 C_PANEL_BORDER = "rgba(32,29,29,0.08)"
 C_PANEL_BG = "rgba(255,255,255,0.72)"
 C_GRID = "rgba(32,29,29,0.07)"
+
+VIEW_MODE_OPTIONS = ("Overview", "Tráfico y Adquisición")
+PLATFORM_OPTIONS = ("All", "Google", "Meta")
+DEFAULT_OVERVIEW_KPI_KEYS = ["spend", "conv", "cpl", "ctr"]
+DEFAULT_TRAFFIC_KPI_KEYS = ["sessions", "users", "avg_sess", "bounce"]
+DEFAULT_OVERVIEW_SECTION_KEYS = [
+    "kpis",
+    "trend_chart",
+    "funnel",
+    "ga4_conversion",
+    "device_breakdown",
+    "audit_table",
+    "top_pieces",
+    "daily_fact",
+]
+DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "top_pages", "campaigns"]
+
+OVERVIEW_SECTION_OPTIONS: dict[str, str] = {
+    "kpis": "Tarjetas KPI",
+    "trend_chart": "Gráfica Performance",
+    "funnel": "Embudo de Conversión",
+    "ga4_conversion": "Tarjeta Conversiones GA4",
+    "device_breakdown": "Dispositivos de Pauta",
+    "audit_table": "Tabla Maestra de Auditoría",
+    "top_pieces": "Top 10 Piezas",
+    "daily_fact": "Insight Diario",
+}
+TRAFFIC_SECTION_OPTIONS: dict[str, str] = {
+    "kpis": "Tarjetas KPI",
+    "channels": "Canales / Adquisición",
+    "top_pages": "Páginas Más Visitadas",
+    "campaigns": "Rendimiento de Campañas",
+}
 
 
 def sf(v: Any) -> float:
@@ -135,6 +173,25 @@ def fmt_duration(seconds: float | None) -> str:
     hrs = mins // 60
     mins_rem = mins % 60
     return f"{hrs} h {mins_rem} min"
+
+
+KPI_CATALOG: dict[str, dict[str, str]] = {
+    "spend": {"label": "Gasto Total", "fmt": "money", "delta_mode": "daily", "delta_color": "normal"},
+    "conv": {"label": "Conversiones", "fmt": "int", "delta_mode": "daily", "delta_color": "normal"},
+    "cpl": {"label": "CPL Promedio", "fmt": "money", "delta_mode": "direct", "delta_color": "inverse"},
+    "ctr": {"label": "CTR", "fmt": "pct", "delta_mode": "direct", "delta_color": "normal"},
+    "clicks": {"label": "Clics", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
+    "impr": {"label": "Impresiones", "fmt": "compact", "delta_mode": "direct", "delta_color": "normal"},
+    "sessions": {"label": "Sesiones", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
+    "users": {"label": "Usuarios", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
+    "avg_sess": {
+        "label": "Tiempo Promedio de Interacción",
+        "fmt": "duration",
+        "delta_mode": "direct",
+        "delta_color": "normal",
+    },
+    "bounce": {"label": "Tasa de Rebote", "fmt": "pct", "delta_mode": "direct", "delta_color": "inverse"},
+}
 
 
 def _digits_only(value: Any) -> str:
@@ -1443,6 +1500,105 @@ def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
     return loaded if loaded else tenants
 
 
+def _normalize_allowed_tenants(raw_allowed: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(raw_allowed, list):
+        values = [str(v).strip().lower() for v in raw_allowed if str(v).strip()]
+    elif isinstance(raw_allowed, str):
+        val = raw_allowed.strip().lower()
+        values = [val] if val else []
+    if not values:
+        return ["*"]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        tenant_id = "*" if value == "*" else value
+        if tenant_id in seen:
+            continue
+        seen.add(tenant_id)
+        normalized.append(tenant_id)
+    return normalized
+
+
+def _normalize_tenant_scopes(
+    raw_scopes: Any,
+    fallback_allowed_tenants: list[str],
+    fallback_role: str,
+) -> list[dict[str, str]]:
+    scopes: list[dict[str, str]] = []
+    if isinstance(raw_scopes, list):
+        for raw_scope in raw_scopes:
+            tenant_id = ""
+            tenant_role = fallback_role
+            if isinstance(raw_scope, dict):
+                tenant_id = str(raw_scope.get("tenant_id", raw_scope.get("id", ""))).strip().lower()
+                tenant_role = str(raw_scope.get("role", raw_scope.get("tenant_role", fallback_role))).strip().lower()
+            else:
+                tenant_id = str(raw_scope).strip().lower()
+            if not tenant_id:
+                continue
+            scopes.append(
+                {
+                    "tenant_id": tenant_id,
+                    "role": tenant_role or fallback_role,
+                }
+            )
+    if not scopes:
+        scopes = [{"tenant_id": t, "role": fallback_role} for t in fallback_allowed_tenants]
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for scope in scopes:
+        tenant_id = str(scope.get("tenant_id", "")).strip().lower()
+        if not tenant_id or tenant_id in seen:
+            continue
+        seen.add(tenant_id)
+        normalized.append(
+            {
+                "tenant_id": tenant_id,
+                "role": str(scope.get("role", fallback_role)).strip().lower() or fallback_role,
+            }
+        )
+    return normalized
+
+
+def _auth_user_is_admin(auth_user: Any) -> bool:
+    if not isinstance(auth_user, dict):
+        return False
+    role = str(auth_user.get("role", "")).strip().lower()
+    if role == "admin":
+        return True
+    global_role = str(auth_user.get("global_role", "")).strip().lower()
+    return global_role in {"admin", "owner", "superadmin", "sysadmin"}
+
+
+def _auth_user_tenant_ids(auth_user: Any, tenants: dict[str, dict[str, Any]]) -> list[str]:
+    tenant_keys = list(tenants.keys())
+    if not tenant_keys:
+        return []
+    if not isinstance(auth_user, dict):
+        return tenant_keys
+
+    scope_tenants: list[str] = []
+    raw_scopes = auth_user.get("tenant_scopes", [])
+    if isinstance(raw_scopes, list):
+        for raw_scope in raw_scopes:
+            if isinstance(raw_scope, dict):
+                tenant_id = str(raw_scope.get("tenant_id", raw_scope.get("id", ""))).strip().lower()
+            else:
+                tenant_id = str(raw_scope).strip().lower()
+            if tenant_id:
+                scope_tenants.append(tenant_id)
+    if scope_tenants:
+        if "*" in scope_tenants:
+            return tenant_keys
+        return [tenant_id for tenant_id in tenant_keys if tenant_id in set(scope_tenants)]
+
+    allowed_tenants = _normalize_allowed_tenants(auth_user.get("allowed_tenants", ["*"]))
+    if "*" in allowed_tenants:
+        return tenant_keys
+    return [tenant_id for tenant_id in tenant_keys if tenant_id in set(allowed_tenants)]
+
+
 def load_users_config(path: Path) -> dict[str, dict[str, Any]]:
     users: dict[str, dict[str, Any]] = {}
     if not path.exists():
@@ -1460,16 +1616,650 @@ def load_users_config(path: Path) -> dict[str, dict[str, Any]]:
         username = str(entry.get("username", "")).strip().lower()
         if not username:
             continue
+        role = str(entry.get("role", "viewer")).strip().lower() or "viewer"
+        allowed_tenants = _normalize_allowed_tenants(entry.get("allowed_tenants", ["*"]))
+        global_role = str(entry.get("global_role", "")).strip().lower()
+        if not global_role:
+            global_role = "admin" if role == "admin" else "user"
+        tenant_scopes = _normalize_tenant_scopes(entry.get("tenant_scopes"), allowed_tenants, role)
         users[username] = {
             "username": username,
             "name": str(entry.get("name", username)).strip() or username,
-            "role": str(entry.get("role", "viewer")).strip().lower() or "viewer",
+            "role": role,
+            "global_role": global_role,
             "enabled": bool(entry.get("enabled", True)),
-            "allowed_tenants": entry.get("allowed_tenants", ["*"]) or ["*"],
+            "allowed_tenants": allowed_tenants,
+            "tenant_scopes": tenant_scopes,
             "password_salt": str(entry.get("password_salt", "")),
             "password_hash": str(entry.get("password_hash", "")).lower(),
         }
     return users
+
+
+def _normalize_tenant_selection(raw_selected: Any) -> list[str]:
+    selected: list[str] = []
+    if isinstance(raw_selected, list):
+        selected = [str(v).strip().lower() for v in raw_selected if str(v).strip()]
+    elif isinstance(raw_selected, str):
+        val = raw_selected.strip().lower()
+        selected = [val] if val else []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tenant_id in selected:
+        key = "*" if tenant_id == "*" else tenant_id
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    if "*" in normalized:
+        return ["*"]
+    return normalized
+
+
+def _widget_safe_key(value: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in str(value))
+
+
+def _scope_map_for_user(user: dict[str, Any]) -> dict[str, str]:
+    role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+    scopes = _normalize_tenant_scopes(
+        user.get("tenant_scopes"),
+        _normalize_allowed_tenants(user.get("allowed_tenants", ["*"])),
+        role,
+    )
+    return {
+        str(scope.get("tenant_id", "")).strip().lower(): str(scope.get("role", role)).strip().lower() or role
+        for scope in scopes
+        if str(scope.get("tenant_id", "")).strip()
+    }
+
+
+def _build_tenant_access(
+    selected_tenants: list[str],
+    scope_roles: dict[str, str],
+    fallback_role: str,
+) -> tuple[list[str], list[dict[str, str]]]:
+    allowed_tenants = _normalize_tenant_selection(selected_tenants)
+    if "*" in allowed_tenants:
+        tenant_scopes = [
+            {
+                "tenant_id": "*",
+                "role": str(scope_roles.get("*", fallback_role)).strip().lower() or fallback_role,
+            }
+        ]
+        return ["*"], tenant_scopes
+    tenant_scopes = []
+    for tenant_id in allowed_tenants:
+        tenant_scopes.append(
+            {
+                "tenant_id": tenant_id,
+                "role": str(scope_roles.get(tenant_id, fallback_role)).strip().lower() or fallback_role,
+            }
+        )
+    return allowed_tenants, tenant_scopes
+
+
+def _new_password_salt() -> str:
+    return secrets.token_urlsafe(12)
+
+
+def _hash_password_with_salt(password: str, salt: str) -> str:
+    raw = f"{salt}{password}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest().lower()
+
+
+def _user_record_is_admin(user: dict[str, Any]) -> bool:
+    return _auth_user_is_admin(user)
+
+
+def _enabled_admin_count(users: dict[str, dict[str, Any]]) -> int:
+    return sum(
+        1
+        for user in users.values()
+        if bool(user.get("enabled", True)) and _user_record_is_admin(user)
+    )
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _safe_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_safe_json_value(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _safe_json_value(v) for k, v in value.items()}
+    return str(value)
+
+
+def _backup_config_file(path: Path) -> tuple[bool, str]:
+    try:
+        if not path.exists():
+            return True, ""
+        CONFIG_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = CONFIG_BACKUP_DIR / f"{path.stem}_{stamp}.bak{path.suffix}"
+        shutil.copy2(path, backup_path)
+        return True, str(backup_path)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def append_admin_audit(
+    action: str,
+    actor: str,
+    *,
+    target: str = "",
+    details: dict[str, Any] | None = None,
+) -> None:
+    try:
+        ADMIN_AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp_utc": _utc_now_iso(),
+            "action": str(action).strip() or "unknown",
+            "actor": str(actor).strip() or "unknown",
+            "target": str(target).strip(),
+            "details": _safe_json_value(details or {}),
+        }
+        with ADMIN_AUDIT_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+def read_admin_audit(limit: int = 200) -> list[dict[str, Any]]:
+    if not ADMIN_AUDIT_LOG_PATH.exists():
+        return []
+    try:
+        lines = ADMIN_AUDIT_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in lines[-max(limit, 1):]:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            rows.append(parsed)
+    rows.reverse()
+    return rows
+
+
+def validate_users_integrity(users: dict[str, dict[str, Any]], tenants: dict[str, dict[str, Any]]) -> list[str]:
+    issues: list[str] = []
+    if not users:
+        issues.append("No hay usuarios definidos en config/users.json.")
+        return issues
+    enabled_admins = _enabled_admin_count(users)
+    if enabled_admins < 1:
+        issues.append("No hay admins activos.")
+    tenant_ids = set(tenants.keys())
+    for username, user in users.items():
+        uname = str(username).strip().lower()
+        if not uname:
+            issues.append("Existe un usuario con username vacío.")
+            continue
+        if bool(user.get("enabled", True)):
+            if not str(user.get("password_hash", "")).strip() or not str(user.get("password_salt", "")).strip():
+                issues.append(f"Usuario activo '{uname}' sin password_hash/password_salt.")
+        allowed = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+        for tenant_id in allowed:
+            if tenant_id != "*" and tenant_id not in tenant_ids:
+                issues.append(f"Usuario '{uname}' apunta a tenant inexistente '{tenant_id}'.")
+    return issues
+
+
+def validate_dashboard_settings_integrity(settings: dict[str, Any], tenants: dict[str, dict[str, Any]]) -> list[str]:
+    issues: list[str] = []
+    tenant_ids = set(tenants.keys())
+    defaults = settings.get("defaults", {}) if isinstance(settings, dict) else {}
+    if not isinstance(defaults, dict):
+        issues.append("El bloque defaults en dashboard_settings es inválido.")
+    tenants_cfg = settings.get("tenants", {}) if isinstance(settings, dict) else {}
+    if not isinstance(tenants_cfg, dict):
+        issues.append("El bloque tenants en dashboard_settings es inválido.")
+        return issues
+    for tenant_id in tenant_ids:
+        if tenant_id not in tenants_cfg:
+            issues.append(f"Falta configuración de dashboard para tenant '{tenant_id}'.")
+    for tenant_id in tenants_cfg.keys():
+        if tenant_id not in tenant_ids:
+            issues.append(f"Existe configuración huérfana de dashboard para tenant '{tenant_id}'.")
+    return issues
+
+
+def _serialize_users_payload(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for username in sorted(users.keys()):
+        user = users.get(username, {})
+        uname = str(user.get("username", username)).strip().lower()
+        if not uname:
+            continue
+        role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+        global_role = str(user.get("global_role", "")).strip().lower()
+        if not global_role:
+            global_role = "admin" if role == "admin" else "user"
+        allowed_tenants = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+        tenant_scopes = _normalize_tenant_scopes(user.get("tenant_scopes"), allowed_tenants, role)
+        entries.append(
+            {
+                "username": uname,
+                "name": str(user.get("name", uname)).strip() or uname,
+                "global_role": global_role,
+                "role": role,
+                "enabled": bool(user.get("enabled", True)),
+                "allowed_tenants": allowed_tenants,
+                "tenant_scopes": tenant_scopes,
+                "password_salt": str(user.get("password_salt", "")),
+                "password_hash": str(user.get("password_hash", "")).lower(),
+            }
+        )
+    return {"users": entries}
+
+
+def save_users_config(path: Path, users: dict[str, dict[str, Any]]) -> tuple[bool, str]:
+    try:
+        payload = _serialize_users_payload(users)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ok_backup, backup_info = _backup_config_file(path)
+        if not ok_backup:
+            return False, f"No se pudo crear backup: {backup_info}"
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _normalize_platform_option(raw_value: Any) -> str:
+    value = str(raw_value or "").strip()
+    return value if value in PLATFORM_OPTIONS else "All"
+
+
+def _normalize_view_mode_option(raw_value: Any) -> str:
+    value = str(raw_value or "").strip()
+    return value if value in VIEW_MODE_OPTIONS else "Overview"
+
+
+def _coerce_bool(raw_value: Any, default: bool = False) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return default
+    text = str(raw_value).strip().lower()
+    if text in {"1", "true", "yes", "si", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _normalize_kpi_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
+    allowed = set(KPI_CATALOG.keys())
+    values: list[str] = []
+    if isinstance(raw_keys, list):
+        values = [str(v).strip().lower() for v in raw_keys if str(v).strip()]
+    elif isinstance(raw_keys, str):
+        values = [part.strip().lower() for part in raw_keys.split(",") if part.strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for key in values:
+        if key not in allowed or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    if not normalized:
+        for key in fallback_keys:
+            if key in allowed and key not in seen:
+                seen.add(key)
+                normalized.append(key)
+    if not normalized:
+        normalized = [k for k in DEFAULT_OVERVIEW_KPI_KEYS if k in allowed]
+    return normalized[:6]
+
+
+def _normalize_section_keys(raw_keys: Any, allowed_options: dict[str, str], fallback_keys: list[str]) -> list[str]:
+    allowed = set(allowed_options.keys())
+    values: list[str] = []
+    if isinstance(raw_keys, list):
+        values = [str(v).strip().lower() for v in raw_keys if str(v).strip()]
+    elif isinstance(raw_keys, str):
+        values = [part.strip().lower() for part in raw_keys.split(",") if part.strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for key in values:
+        if key not in allowed or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    if not normalized:
+        for key in fallback_keys:
+            if key in allowed and key not in seen:
+                seen.add(key)
+                normalized.append(key)
+    if not normalized:
+        normalized = list(allowed_options.keys())
+    return normalized
+
+
+def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    defaults = {
+        "overview_kpis": list(DEFAULT_OVERVIEW_KPI_KEYS),
+        "traffic_kpis": list(DEFAULT_TRAFFIC_KPI_KEYS),
+        "overview_sections": list(DEFAULT_OVERVIEW_SECTION_KEYS),
+        "traffic_sections": list(DEFAULT_TRAFFIC_SECTION_KEYS),
+        "default_platform": "All",
+        "default_view_mode": "Overview",
+        "show_sidebar_meta_token_health": True,
+    }
+    tenant_cfg: dict[str, dict[str, Any]] = {}
+    for tenant_id in tenants.keys():
+        tenant_cfg[tenant_id] = {
+            "overview_kpis": list(DEFAULT_OVERVIEW_KPI_KEYS),
+            "traffic_kpis": list(DEFAULT_TRAFFIC_KPI_KEYS),
+            "overview_sections": list(DEFAULT_OVERVIEW_SECTION_KEYS),
+            "traffic_sections": list(DEFAULT_TRAFFIC_SECTION_KEYS),
+            "default_platform": "All",
+            "default_view_mode": "Overview",
+            "show_sidebar_meta_token_health": True,
+        }
+    return {"defaults": defaults, "tenants": tenant_cfg}
+
+
+def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    base = default_dashboard_settings(tenants)
+    if not path.exists():
+        return base
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return base
+    raw_defaults = payload.get("defaults", {}) if isinstance(payload, dict) else {}
+    defaults = {
+        "overview_kpis": _normalize_kpi_keys(
+            raw_defaults.get("overview_kpis", base["defaults"]["overview_kpis"]),
+            base["defaults"]["overview_kpis"],
+        ),
+        "traffic_kpis": _normalize_kpi_keys(
+            raw_defaults.get("traffic_kpis", base["defaults"]["traffic_kpis"]),
+            base["defaults"]["traffic_kpis"],
+        ),
+        "overview_sections": _normalize_section_keys(
+            raw_defaults.get("overview_sections", base["defaults"]["overview_sections"]),
+            OVERVIEW_SECTION_OPTIONS,
+            base["defaults"]["overview_sections"],
+        ),
+        "traffic_sections": _normalize_section_keys(
+            raw_defaults.get("traffic_sections", base["defaults"]["traffic_sections"]),
+            TRAFFIC_SECTION_OPTIONS,
+            base["defaults"]["traffic_sections"],
+        ),
+        "default_platform": _normalize_platform_option(
+            raw_defaults.get("default_platform", base["defaults"]["default_platform"])
+        ),
+        "default_view_mode": _normalize_view_mode_option(
+            raw_defaults.get("default_view_mode", base["defaults"]["default_view_mode"])
+        ),
+        "show_sidebar_meta_token_health": _coerce_bool(
+            raw_defaults.get(
+                "show_sidebar_meta_token_health",
+                base["defaults"].get("show_sidebar_meta_token_health", True),
+            ),
+            default=True,
+        ),
+    }
+    raw_tenants = payload.get("tenants", {}) if isinstance(payload, dict) else {}
+    if not isinstance(raw_tenants, dict):
+        raw_tenants = {}
+    tenant_cfg: dict[str, dict[str, Any]] = {}
+    for tenant_id in tenants.keys():
+        raw_cfg = raw_tenants.get(tenant_id, {})
+        if not isinstance(raw_cfg, dict):
+            raw_cfg = {}
+        tenant_cfg[tenant_id] = {
+            "overview_kpis": _normalize_kpi_keys(
+                raw_cfg.get("overview_kpis", defaults["overview_kpis"]),
+                defaults["overview_kpis"],
+            ),
+            "traffic_kpis": _normalize_kpi_keys(
+                raw_cfg.get("traffic_kpis", defaults["traffic_kpis"]),
+                defaults["traffic_kpis"],
+            ),
+            "overview_sections": _normalize_section_keys(
+                raw_cfg.get("overview_sections", defaults["overview_sections"]),
+                OVERVIEW_SECTION_OPTIONS,
+                defaults["overview_sections"],
+            ),
+            "traffic_sections": _normalize_section_keys(
+                raw_cfg.get("traffic_sections", defaults["traffic_sections"]),
+                TRAFFIC_SECTION_OPTIONS,
+                defaults["traffic_sections"],
+            ),
+            "default_platform": _normalize_platform_option(
+                raw_cfg.get("default_platform", defaults["default_platform"])
+            ),
+            "default_view_mode": _normalize_view_mode_option(
+                raw_cfg.get("default_view_mode", defaults["default_view_mode"])
+            ),
+            "show_sidebar_meta_token_health": _coerce_bool(
+                raw_cfg.get("show_sidebar_meta_token_health", defaults["show_sidebar_meta_token_health"]),
+                default=defaults["show_sidebar_meta_token_health"],
+            ),
+        }
+    return {"defaults": defaults, "tenants": tenant_cfg}
+
+
+def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[str, dict[str, Any]]) -> tuple[bool, str]:
+    try:
+        normalized = load_dashboard_settings(path, tenants) if path.exists() else default_dashboard_settings(tenants)
+        incoming_defaults = settings.get("defaults", {}) if isinstance(settings, dict) else {}
+        normalized["defaults"] = {
+            "overview_kpis": _normalize_kpi_keys(
+                incoming_defaults.get("overview_kpis", normalized["defaults"]["overview_kpis"]),
+                DEFAULT_OVERVIEW_KPI_KEYS,
+            ),
+            "traffic_kpis": _normalize_kpi_keys(
+                incoming_defaults.get("traffic_kpis", normalized["defaults"]["traffic_kpis"]),
+                DEFAULT_TRAFFIC_KPI_KEYS,
+            ),
+            "overview_sections": _normalize_section_keys(
+                incoming_defaults.get("overview_sections", normalized["defaults"]["overview_sections"]),
+                OVERVIEW_SECTION_OPTIONS,
+                DEFAULT_OVERVIEW_SECTION_KEYS,
+            ),
+            "traffic_sections": _normalize_section_keys(
+                incoming_defaults.get("traffic_sections", normalized["defaults"]["traffic_sections"]),
+                TRAFFIC_SECTION_OPTIONS,
+                DEFAULT_TRAFFIC_SECTION_KEYS,
+            ),
+            "default_platform": _normalize_platform_option(
+                incoming_defaults.get("default_platform", normalized["defaults"]["default_platform"])
+            ),
+            "default_view_mode": _normalize_view_mode_option(
+                incoming_defaults.get("default_view_mode", normalized["defaults"]["default_view_mode"])
+            ),
+            "show_sidebar_meta_token_health": _coerce_bool(
+                incoming_defaults.get(
+                    "show_sidebar_meta_token_health",
+                    normalized["defaults"].get("show_sidebar_meta_token_health", True),
+                ),
+                default=True,
+            ),
+        }
+        incoming_tenants = settings.get("tenants", {}) if isinstance(settings, dict) else {}
+        if not isinstance(incoming_tenants, dict):
+            incoming_tenants = {}
+        tenant_cfg: dict[str, dict[str, Any]] = {}
+        for tenant_id in tenants.keys():
+            raw_cfg = incoming_tenants.get(tenant_id, {})
+            if not isinstance(raw_cfg, dict):
+                raw_cfg = {}
+            tenant_cfg[tenant_id] = {
+                "overview_kpis": _normalize_kpi_keys(
+                    raw_cfg.get("overview_kpis", normalized["defaults"]["overview_kpis"]),
+                    normalized["defaults"]["overview_kpis"],
+                ),
+                "traffic_kpis": _normalize_kpi_keys(
+                    raw_cfg.get("traffic_kpis", normalized["defaults"]["traffic_kpis"]),
+                    normalized["defaults"]["traffic_kpis"],
+                ),
+                "overview_sections": _normalize_section_keys(
+                    raw_cfg.get("overview_sections", normalized["defaults"]["overview_sections"]),
+                    OVERVIEW_SECTION_OPTIONS,
+                    normalized["defaults"]["overview_sections"],
+                ),
+                "traffic_sections": _normalize_section_keys(
+                    raw_cfg.get("traffic_sections", normalized["defaults"]["traffic_sections"]),
+                    TRAFFIC_SECTION_OPTIONS,
+                    normalized["defaults"]["traffic_sections"],
+                ),
+                "default_platform": _normalize_platform_option(
+                    raw_cfg.get("default_platform", normalized["defaults"]["default_platform"])
+                ),
+                "default_view_mode": _normalize_view_mode_option(
+                    raw_cfg.get("default_view_mode", normalized["defaults"]["default_view_mode"])
+                ),
+                "show_sidebar_meta_token_health": _coerce_bool(
+                    raw_cfg.get(
+                        "show_sidebar_meta_token_health",
+                        normalized["defaults"].get("show_sidebar_meta_token_health", True),
+                    ),
+                    default=normalized["defaults"].get("show_sidebar_meta_token_health", True),
+                ),
+            }
+        payload = {"defaults": normalized["defaults"], "tenants": tenant_cfg}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ok_backup, backup_info = _backup_config_file(path)
+        if not ok_backup:
+            return False, f"No se pudo crear backup: {backup_info}"
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[str, Any]:
+    defaults = settings.get("defaults", {}) if isinstance(settings, dict) else {}
+    tenants_cfg = settings.get("tenants", {}) if isinstance(settings, dict) else {}
+    raw_cfg = tenants_cfg.get(tenant_id, {}) if isinstance(tenants_cfg, dict) else {}
+    if not isinstance(raw_cfg, dict):
+        raw_cfg = {}
+    defaults_overview_kpis = _normalize_kpi_keys(
+        defaults.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
+        DEFAULT_OVERVIEW_KPI_KEYS,
+    )
+    defaults_traffic_kpis = _normalize_kpi_keys(
+        defaults.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
+        DEFAULT_TRAFFIC_KPI_KEYS,
+    )
+    defaults_overview_sections = _normalize_section_keys(
+        defaults.get("overview_sections", DEFAULT_OVERVIEW_SECTION_KEYS),
+        OVERVIEW_SECTION_OPTIONS,
+        DEFAULT_OVERVIEW_SECTION_KEYS,
+    )
+    defaults_traffic_sections = _normalize_section_keys(
+        defaults.get("traffic_sections", DEFAULT_TRAFFIC_SECTION_KEYS),
+        TRAFFIC_SECTION_OPTIONS,
+        DEFAULT_TRAFFIC_SECTION_KEYS,
+    )
+    defaults_token_health = _coerce_bool(defaults.get("show_sidebar_meta_token_health", True), default=True)
+    return {
+        "overview_kpis": _normalize_kpi_keys(
+            raw_cfg.get("overview_kpis", defaults.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS)),
+            defaults_overview_kpis,
+        ),
+        "traffic_kpis": _normalize_kpi_keys(
+            raw_cfg.get("traffic_kpis", defaults.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS)),
+            defaults_traffic_kpis,
+        ),
+        "overview_sections": _normalize_section_keys(
+            raw_cfg.get("overview_sections", defaults_overview_sections),
+            OVERVIEW_SECTION_OPTIONS,
+            defaults_overview_sections,
+        ),
+        "traffic_sections": _normalize_section_keys(
+            raw_cfg.get("traffic_sections", defaults_traffic_sections),
+            TRAFFIC_SECTION_OPTIONS,
+            defaults_traffic_sections,
+        ),
+        "default_platform": _normalize_platform_option(raw_cfg.get("default_platform", defaults.get("default_platform", "All"))),
+        "default_view_mode": _normalize_view_mode_option(
+            raw_cfg.get("default_view_mode", defaults.get("default_view_mode", "Overview"))
+        ),
+        "show_sidebar_meta_token_health": _coerce_bool(
+            raw_cfg.get("show_sidebar_meta_token_health", defaults_token_health),
+            default=defaults_token_health,
+        ),
+    }
+
+
+def _format_kpi_value(fmt_key: str, value: float | None) -> str:
+    if fmt_key == "money":
+        return fmt_money(value)
+    if fmt_key == "pct":
+        return fmt_pct(value)
+    if fmt_key == "duration":
+        return fmt_duration(value)
+    if fmt_key == "compact":
+        return fmt_compact(value)
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):,.0f}"
+    except Exception:
+        return "N/A"
+
+
+def _kpi_delta(cur: dict[str, float | None], prev: dict[str, float | None], key: str, mode: str, cur_days: int, prev_days: int) -> float | None:
+    cur_val = cur.get(key)
+    prev_val = prev.get(key)
+    if mode == "daily":
+        cur_daily = sdiv(sf(cur_val), float(max(cur_days, 1)))
+        prev_daily = sdiv(sf(prev_val), float(prev_days)) if prev_days else None
+        return pct_delta(cur_daily, prev_daily)
+    return pct_delta(cur_val, prev_val)
+
+
+def build_kpi_payload(
+    cur: dict[str, float | None],
+    prev: dict[str, float | None],
+    cur_days: int,
+    prev_days: int,
+) -> dict[str, dict[str, str]]:
+    payload: dict[str, dict[str, str]] = {}
+    for key, meta in KPI_CATALOG.items():
+        value = cur.get(key)
+        delta = _kpi_delta(cur, prev, key, str(meta.get("delta_mode", "direct")), cur_days, prev_days)
+        payload[key] = {
+            "label": str(meta.get("label", key)),
+            "value": _format_kpi_value(str(meta.get("fmt", "int")), value),
+            "delta": fmt_delta_compact(delta),
+            "delta_color": str(meta.get("delta_color", "normal")),
+        }
+    return payload
+
+
+def render_kpi_cards(
+    selected_keys: list[str],
+    payload: dict[str, dict[str, str]],
+    fallback_keys: list[str],
+) -> None:
+    valid = [k for k in selected_keys if k in payload]
+    if not valid:
+        valid = [k for k in fallback_keys if k in payload]
+    if not valid:
+        valid = [k for k in list(payload.keys())[:4]]
+    cols = st.columns(len(valid))
+    for col, key in zip(cols, valid):
+        item = payload.get(key, {})
+        col.metric(
+            str(item.get("label", key)),
+            str(item.get("value", "N/A")),
+            str(item.get("delta", "N/A")),
+            delta_color=str(item.get("delta_color", "normal")),
+        )
 
 
 def _password_matches(username: str, password: str, salt: str, expected_hash: str) -> bool:
@@ -1496,7 +2286,25 @@ def _password_matches(username: str, password: str, salt: str, expected_hash: st
 def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
     auth_user = st.session_state.get("auth_user")
     if isinstance(auth_user, dict) and auth_user.get("username"):
-        return auth_user
+        session_username = str(auth_user.get("username", "")).strip().lower()
+        persisted_user = users.get(session_username, {})
+        if isinstance(persisted_user, dict) and persisted_user.get("enabled", True):
+            synced_user = {
+                "username": str(persisted_user.get("username", session_username)),
+                "name": str(persisted_user.get("name", session_username)),
+                "role": str(persisted_user.get("role", "viewer")).strip().lower() or "viewer",
+                "global_role": str(persisted_user.get("global_role", "user")).strip().lower() or "user",
+                "allowed_tenants": _normalize_allowed_tenants(persisted_user.get("allowed_tenants", ["*"])),
+                "tenant_scopes": _normalize_tenant_scopes(
+                    persisted_user.get("tenant_scopes"),
+                    _normalize_allowed_tenants(persisted_user.get("allowed_tenants", ["*"])),
+                    str(persisted_user.get("role", "viewer")).strip().lower() or "viewer",
+                ),
+            }
+            st.session_state["auth_user"] = synced_user
+            return synced_user
+        st.session_state.pop("auth_user", None)
+        st.session_state.pop("sidebar_view_mode", None)
 
     st.markdown(
         """
@@ -1719,7 +2527,9 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "username": user["username"],
             "name": user["name"],
             "role": user["role"],
+            "global_role": user.get("global_role", "user"),
             "allowed_tenants": user.get("allowed_tenants", ["*"]),
+            "tenant_scopes": user.get("tenant_scopes", []),
         }
         st.session_state.pop("login_password", None)
         st.rerun()
@@ -1891,16 +2701,11 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
 def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
     auth_user = st.session_state.get("auth_user", {}) if isinstance(st.session_state.get("auth_user"), dict) else {}
     user_name = str(auth_user.get("name", "Admin User"))
-    allowed_tenants = auth_user.get("allowed_tenants", ["*"])
-    if not isinstance(allowed_tenants, list) or not allowed_tenants:
-        allowed_tenants = ["*"]
-    if "*" in allowed_tenants:
-        tenant_ids = list(tenants.keys())
-    else:
-        tenant_ids = [t for t in tenants.keys() if t in set(str(x) for x in allowed_tenants)]
+    tenant_ids = _auth_user_tenant_ids(auth_user, tenants)
     if not tenant_ids:
         st.sidebar.error("Tu usuario no tiene tenants asignados.")
         st.stop()
+    is_admin_user = _auth_user_is_admin(auth_user)
     default_id = DEFAULT_TENANT_ID if DEFAULT_TENANT_ID in tenants else tenant_ids[0]
     if st.session_state.get("active_tenant_id") not in tenants:
         st.session_state["active_tenant_id"] = default_id
@@ -1934,6 +2739,9 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
     if "sidebar_view_mode" not in st.session_state:
         st.session_state["sidebar_view_mode"] = "Overview"
     view_mode = str(st.session_state.get("sidebar_view_mode", "Overview"))
+    if view_mode == "Administración" and not is_admin_user:
+        st.session_state["sidebar_view_mode"] = "Overview"
+        view_mode = "Overview"
     if st.sidebar.button(
         "Overview",
         key="nav_overview_btn",
@@ -1952,13 +2760,24 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
     ):
         st.session_state["sidebar_view_mode"] = "Tráfico y Adquisición"
         view_mode = "Tráfico y Adquisición"
+    if is_admin_user and st.sidebar.button(
+        "Administración",
+        key="nav_admin_btn",
+        icon=":material/admin_panel_settings:",
+        type="primary" if view_mode == "Administración" else "secondary",
+        width="stretch",
+    ):
+        st.session_state["sidebar_view_mode"] = "Administración"
+        view_mode = "Administración"
     st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
     if st.sidebar.button("Logout", key="sidebar_logout_btn", width="stretch"):
         for k in (
             "auth_user",
             "sidebar_view_mode",
+            "sidebar_view_tenant_cfg",
             "active_tenant_id",
             "platform_filter_radio_v2",
+            "platform_filter_tenant_id",
             "top_date_range",
             "login_username",
             "login_password",
@@ -2036,7 +2855,18 @@ def render_sidebar_meta_token_health(report: dict[str, Any]) -> None:
     )
 
 
-def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date, date, str]:
+def render_top_filters(
+    min_d: date,
+    max_d: date,
+    tenant_name: str,
+    tenant_id: str,
+    default_platform: str,
+) -> tuple[date, date, str]:
+    default_platform_value = _normalize_platform_option(default_platform)
+    last_tenant = str(st.session_state.get("platform_filter_tenant_id", ""))
+    if last_tenant != tenant_id or st.session_state.get("platform_filter_radio_v2") not in PLATFORM_OPTIONS:
+        st.session_state["platform_filter_radio_v2"] = default_platform_value
+        st.session_state["platform_filter_tenant_id"] = tenant_id
     wrapper_left, wrapper_right = st.columns([2.2, 1.8], gap="large")
     with wrapper_left:
         st.markdown(
@@ -2051,16 +2881,15 @@ def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date
     with wrapper_right:
         pcol, dcol = st.columns([1.65, 0.95], gap="small")
         with pcol:
-            platform_options = ("All", "Google", "Meta")
             platform = st.radio(
                 "Plataforma",
-                list(platform_options),
+                list(PLATFORM_OPTIONS),
                 key="platform_filter_radio_v2",
                 horizontal=True,
                 label_visibility="collapsed",
             )
-            if platform not in platform_options:
-                platform = "All"
+            if platform not in PLATFORM_OPTIONS:
+                platform = default_platform_value
         with dcol:
             st.markdown("<div class='app-filter-title' style='margin-top:0.1rem;'>Rango</div>", unsafe_allow_html=True)
             sel = st.date_input(
@@ -2080,6 +2909,8 @@ def render_exec(
     df_sel: pd.DataFrame,
     df_prev: pd.DataFrame,
     platform: str,
+    overview_kpi_keys: list[str],
+    overview_section_keys: list[str],
     paid_dev_df: pd.DataFrame,
     camp_df: pd.DataFrame,
     ga4_event_df: pd.DataFrame,
@@ -2091,27 +2922,21 @@ def render_exec(
     prev_s,
     prev_e,
 ):
+    selected_sections = _normalize_section_keys(
+        overview_section_keys,
+        OVERVIEW_SECTION_OPTIONS,
+        DEFAULT_OVERVIEW_SECTION_KEYS,
+    )
+    section_set = set(selected_sections)
     cur, prev = summary(df_sel, platform), summary(df_prev, platform)
     cur_days, prev_days = max(len(df_sel), 1), len(df_prev)
-    d_sp = pct_delta(
-        sdiv(sf(cur["spend"]), float(cur_days)),
-        sdiv(sf(prev["spend"]), float(prev_days)) if prev_days else None,
-    )
-    d_cv = pct_delta(
-        sdiv(sf(cur["conv"]), float(cur_days)),
-        sdiv(sf(prev["conv"]), float(prev_days)) if prev_days else None,
-    )
-    d_cpl = pct_delta(cur["cpl"], prev["cpl"])
-    d_ctr = pct_delta(cur["ctr"], prev["ctr"])
+    kpi_payload = build_kpi_payload(cur, prev, cur_days, prev_days)
+    if "kpis" in section_set:
+        render_kpi_cards(overview_kpi_keys, kpi_payload, DEFAULT_OVERVIEW_KPI_KEYS)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Gasto Total", fmt_money(cur["spend"]), fmt_delta_compact(d_sp))
-    c2.metric("Conversiones", f"{cur['conv']:,.0f}", fmt_delta_compact(d_cv))
-    c3.metric("CPL Promedio", fmt_money(cur["cpl"]), fmt_delta_compact(d_cpl), delta_color="inverse")
-    c4.metric("CTR", fmt_pct(cur["ctr"]), fmt_delta_compact(d_ctr))
+    c = metric_cols(platform)
 
-    chart_col, funnel_col = st.columns([3.1, 1.2], gap="large")
-    with chart_col:
+    def _render_trend_chart() -> None:
         st.markdown(
             """
             <div class="viz-card">
@@ -2156,285 +2981,301 @@ def render_exec(
             st.plotly_chart(fig, width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with funnel_col:
-        c = metric_cols(platform)
-        impr = float(df_sel[c["impr"]].sum())
-        clicks = float(df_sel[c["clicks"]].sum())
-        conv = float(df_sel[c["conv"]].sum())
-        sess_total = float(df_sel["ga4_sessions"].sum())
-        sess = sess_total if platform == "All" else sess_total * (sdiv(clicks, float(df_sel["total_clicks"].sum())) or 0.0)
-        if impr <= 0 and clicks > 0:
-            impr = clicks / 0.03
+    def _render_funnel_and_ga4() -> None:
+        if "funnel" in section_set:
+            impr = float(df_sel[c["impr"]].sum())
+            clicks = float(df_sel[c["clicks"]].sum())
+            conv = float(df_sel[c["conv"]].sum())
+            sess_total = float(df_sel["ga4_sessions"].sum())
+            sess = sess_total if platform == "All" else sess_total * (sdiv(clicks, float(df_sel["total_clicks"].sum())) or 0.0)
+            if impr <= 0 and clicks > 0:
+                impr = clicks / 0.03
 
-        funnel_vals = [
-            ("Impresiones", max(impr, 0.0)),
-            ("Clics", max(min(clicks, impr), 0.0)),
-            ("Sesiones", max(min(sess, clicks), 0.0)),
-            ("Conversiones", max(min(conv, sess), 0.0)),
-        ]
-        top_val = max(float(funnel_vals[0][1]), 1.0)
-        funnel_stage_colors = ["#7BCC35", "#3AE7FC", "#7A879D", "#FE492A"]
-        rows_html: list[str] = []
-        prev_val: float | None = None
-        for idx, (name, value) in enumerate(funnel_vals):
-            pct = 0.0 if value <= 0 else min(max((value / top_val) * 100.0, 0.0), 100.0)
-            stage_color = funnel_stage_colors[idx % len(funnel_stage_colors)]
-            if prev_val is None or prev_val <= 0:
-                drop_html = "<span class='funnel-drop funnel-drop-base' title='Etapa base'>Base</span>"
-            else:
-                drop_pct = max(0.0, min(100.0, (1.0 - sdiv(value, prev_val)) * 100.0))
-                drop_html = f"<span class='funnel-drop' title='Caída vs etapa anterior'>&darr; {drop_pct:.1f}%</span>"
-            rows_html.append(
-                f"<div class='funnel-row'>"
-                f"<div class='funnel-fill' style='width:{pct:.2f}%; background:{stage_color}33; border:1px solid {stage_color}66;'></div>"
-                f"<div class='funnel-content'>"
-                f"<span class='funnel-name'>{name}</span>"
-                f"<span class='funnel-metrics'><span class='funnel-value'>{fmt_compact(value)}</span>{drop_html}</span>"
-                f"</div>"
-                f"</div>"
+            funnel_vals = [
+                ("Impresiones", max(impr, 0.0)),
+                ("Clics", max(min(clicks, impr), 0.0)),
+                ("Sesiones", max(min(sess, clicks), 0.0)),
+                ("Conversiones", max(min(conv, sess), 0.0)),
+            ]
+            top_val = max(float(funnel_vals[0][1]), 1.0)
+            funnel_stage_colors = ["#7BCC35", "#3AE7FC", "#7A879D", "#FE492A"]
+            rows_html: list[str] = []
+            prev_val: float | None = None
+            for idx, (name, value) in enumerate(funnel_vals):
+                pct = 0.0 if value <= 0 else min(max((value / top_val) * 100.0, 0.0), 100.0)
+                stage_color = funnel_stage_colors[idx % len(funnel_stage_colors)]
+                if prev_val is None or prev_val <= 0:
+                    drop_html = "<span class='funnel-drop funnel-drop-base' title='Etapa base'>Base</span>"
+                else:
+                    drop_pct = max(0.0, min(100.0, (1.0 - sdiv(value, prev_val)) * 100.0))
+                    drop_html = f"<span class='funnel-drop' title='Caída vs etapa anterior'>&darr; {drop_pct:.1f}%</span>"
+                rows_html.append(
+                    f"<div class='funnel-row'>"
+                    f"<div class='funnel-fill' style='width:{pct:.2f}%; background:{stage_color}33; border:1px solid {stage_color}66;'></div>"
+                    f"<div class='funnel-content'>"
+                    f"<span class='funnel-name'>{name}</span>"
+                    f"<span class='funnel-metrics'><span class='funnel-value'>{fmt_compact(value)}</span>{drop_html}</span>"
+                    f"</div>"
+                    f"</div>"
+                )
+                prev_val = value
+
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div class='funnel-card'>
+                      <div class='funnel-title'>Funnel de Conversión</div>
+                      <div class='funnel-stack'>{''.join(rows_html)}</div>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
             )
-            prev_val = value
 
+        if "ga4_conversion" in section_set:
+            ga4_event_name = str(ga4_conversion_event_name or GA4_GTC_SOLICITAR_CODIGO_EVENT).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT
+            ga4_filtered = ga4_event_df.copy() if not ga4_event_df.empty else pd.DataFrame()
+            ga4_conv_total = 0.0
+            if not ga4_filtered.empty:
+                if "date" in ga4_filtered.columns:
+                    ga4_filtered = ga4_filtered[(ga4_filtered["date"] >= s) & (ga4_filtered["date"] <= e)]
+                event_col = "eventName" if "eventName" in ga4_filtered.columns else ("event_name" if "event_name" in ga4_filtered.columns else None)
+                if event_col:
+                    ga4_filtered = ga4_filtered[
+                        ga4_filtered[event_col].astype(str).str.strip().str.lower() == ga4_event_name.lower()
+                    ]
+                if platform in ("Google", "Meta") and "platform" in ga4_filtered.columns:
+                    ga4_filtered = ga4_filtered[
+                        ga4_filtered["platform"].astype(str).str.strip().str.lower() == platform.lower()
+                    ]
+                conv_col = (
+                    "conversions"
+                    if "conversions" in ga4_filtered.columns
+                    else ("eventCount" if "eventCount" in ga4_filtered.columns else ("event_count" if "event_count" in ga4_filtered.columns else None))
+                )
+                if conv_col:
+                    ga4_conv_total = float(pd.to_numeric(ga4_filtered[conv_col], errors="coerce").fillna(0.0).sum())
+
+            spend_total = float(df_sel[c["spend"]].sum()) if not df_sel.empty else 0.0
+            ga4_cpl = sdiv(spend_total, ga4_conv_total)
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div class='ga4-conv-card'>
+                      <div class='ga4-conv-title'>Conversiones GA4</div>
+                      <div class='ga4-conv-event'>Evento: {html.escape(ga4_event_name)}</div>
+                      <div class='ga4-conv-grid'>
+                        <div class='ga4-conv-item'>
+                          <span class='ga4-conv-label'>Conversiones</span>
+                          <span class='ga4-conv-value'>{fmt_compact(ga4_conv_total)}</span>
+                        </div>
+                        <div class='ga4-conv-item'>
+                          <span class='ga4-conv-label'>Inversión</span>
+                          <span class='ga4-conv-value'>{fmt_money(spend_total)}</span>
+                        </div>
+                        <div class='ga4-conv-item'>
+                          <span class='ga4-conv-label'>Plataforma</span>
+                          <span class='ga4-conv-value'>{html.escape(platform)}</span>
+                        </div>
+                        <div class='ga4-conv-item'>
+                          <span class='ga4-conv-label'>CPL GA4</span>
+                          <span class='ga4-conv-value'>{fmt_money(ga4_cpl)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
+
+    show_trend = "trend_chart" in section_set
+    show_right_stack = ("funnel" in section_set) or ("ga4_conversion" in section_set)
+    if show_trend and show_right_stack:
+        chart_col, funnel_col = st.columns([3.1, 1.2], gap="large")
+        with chart_col:
+            _render_trend_chart()
+        with funnel_col:
+            _render_funnel_and_ga4()
+    elif show_trend:
+        _render_trend_chart()
+    elif show_right_stack:
+        _render_funnel_and_ga4()
+
+    if "device_breakdown" in section_set:
+        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
         st.markdown(
-            textwrap.dedent(
-                f"""
-                <div class='funnel-card'>
-                  <div class='funnel-title'>Funnel de Conversión</div>
-                  <div class='funnel-stack'>{''.join(rows_html)}</div>
-                </div>
-                """
-            ).strip(),
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
             unsafe_allow_html=True,
         )
 
-        ga4_event_name = str(ga4_conversion_event_name or GA4_GTC_SOLICITAR_CODIGO_EVENT).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT
-        ga4_filtered = ga4_event_df.copy() if not ga4_event_df.empty else pd.DataFrame()
-        ga4_conv_total = 0.0
-        if not ga4_filtered.empty:
-            if "date" in ga4_filtered.columns:
-                ga4_filtered = ga4_filtered[(ga4_filtered["date"] >= s) & (ga4_filtered["date"] <= e)]
-            event_col = "eventName" if "eventName" in ga4_filtered.columns else ("event_name" if "event_name" in ga4_filtered.columns else None)
-            if event_col:
-                ga4_filtered = ga4_filtered[
-                    ga4_filtered[event_col].astype(str).str.strip().str.lower() == ga4_event_name.lower()
-                ]
-            if platform in ("Google", "Meta") and "platform" in ga4_filtered.columns:
-                ga4_filtered = ga4_filtered[
-                    ga4_filtered["platform"].astype(str).str.strip().str.lower() == platform.lower()
-                ]
-            conv_col = (
-                "conversions"
-                if "conversions" in ga4_filtered.columns
-                else ("eventCount" if "eventCount" in ga4_filtered.columns else ("event_count" if "event_count" in ga4_filtered.columns else None))
+        pcur = paid_dev_df[
+            (paid_dev_df["date"] >= s) & (paid_dev_df["date"] <= e)
+        ].copy() if not paid_dev_df.empty else pd.DataFrame()
+        pprev = paid_dev_df[
+            (paid_dev_df["date"] >= prev_s) & (paid_dev_df["date"] <= prev_e)
+        ].copy() if not paid_dev_df.empty else pd.DataFrame()
+        if platform in ("Google", "Meta"):
+            pcur = pcur[pcur["platform"] == platform]
+            pprev = pprev[pprev["platform"] == platform]
+
+        if pcur.empty:
+            st.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
+        else:
+            cur_roll = (
+                pcur.groupby("device", as_index=False)
+                .agg(
+                    spend=("spend", "sum"),
+                    impressions=("impressions", "sum"),
+                    clicks=("clicks", "sum"),
+                    conversions=("conversions", "sum"),
+                )
             )
-            if conv_col:
-                ga4_conv_total = float(pd.to_numeric(ga4_filtered[conv_col], errors="coerce").fillna(0.0).sum())
-
-        spend_total = float(df_sel[c["spend"]].sum()) if not df_sel.empty else 0.0
-        ga4_cpl = sdiv(spend_total, ga4_conv_total)
-        st.markdown(
-            textwrap.dedent(
-                f"""
-                <div class='ga4-conv-card'>
-                  <div class='ga4-conv-title'>Conversiones GA4</div>
-                  <div class='ga4-conv-event'>Evento: {html.escape(ga4_event_name)}</div>
-                  <div class='ga4-conv-grid'>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>Conversiones</span>
-                      <span class='ga4-conv-value'>{fmt_compact(ga4_conv_total)}</span>
-                    </div>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>Inversión</span>
-                      <span class='ga4-conv-value'>{fmt_money(spend_total)}</span>
-                    </div>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>Plataforma</span>
-                      <span class='ga4-conv-value'>{html.escape(platform)}</span>
-                    </div>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>CPL GA4</span>
-                      <span class='ga4-conv-value'>{fmt_money(ga4_cpl)}</span>
-                    </div>
-                  </div>
-                </div>
-                """
-            ).strip(),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
-        unsafe_allow_html=True,
-    )
-
-    pcur = paid_dev_df[
-        (paid_dev_df["date"] >= s) & (paid_dev_df["date"] <= e)
-    ].copy() if not paid_dev_df.empty else pd.DataFrame()
-    pprev = paid_dev_df[
-        (paid_dev_df["date"] >= prev_s) & (paid_dev_df["date"] <= prev_e)
-    ].copy() if not paid_dev_df.empty else pd.DataFrame()
-    if platform in ("Google", "Meta"):
-        pcur = pcur[pcur["platform"] == platform]
-        pprev = pprev[pprev["platform"] == platform]
-
-    if pcur.empty:
-        st.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
-    else:
-        cur_roll = (
-            pcur.groupby("device", as_index=False)
-            .agg(
-                spend=("spend", "sum"),
-                impressions=("impressions", "sum"),
-                clicks=("clicks", "sum"),
-                conversions=("conversions", "sum"),
+            prev_roll = (
+                pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
+                if not pprev.empty
+                else pd.DataFrame(columns=["device", "impressions_prev"])
             )
-        )
-        prev_roll = (
-            pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
-            if not pprev.empty
-            else pd.DataFrame(columns=["device", "impressions_prev"])
-        )
-        cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
-        cur_roll["ctr"] = cur_roll.apply(
-            lambda r: sdiv(float(r["clicks"]), float(r["impressions"])),
-            axis=1,
-        )
-        cur_roll["cpl"] = cur_roll.apply(
-            lambda r: sdiv(float(r["spend"]), float(r["conversions"])),
-            axis=1,
-        )
-        cur_roll["delta_impressions"] = cur_roll.apply(
-            lambda r: pct_delta(float(r["impressions"]), float(r["impressions_prev"])),
-            axis=1,
-        )
-        order = ["Desktop", "Mobile", "Other"]
-        roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
-
-        m1, m2, m3 = st.columns(3)
-        for idx, dname in enumerate(order):
-            row = roll[roll["device"] == dname].iloc[0]
-            target_col = [m1, m2, m3][idx]
-            target_col.metric(
-                f"{dname} Impresiones",
-                f"{float(row['impressions']):,.0f}",
-                fmt_delta_compact(row["delta_impressions"]),
+            cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
+            cur_roll["ctr"] = cur_roll.apply(
+                lambda r: sdiv(float(r["clicks"]), float(r["impressions"])),
+                axis=1,
             )
-
-        st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
-        bar = go.Figure(
-            go.Bar(
-                x=roll["device"],
-                y=roll["impressions"],
-                marker={
-                    "color": ["#7BCC35", "#FE492A", "#7A879D"],
-                    "line": {"color": "rgba(32,29,29,0.08)", "width": 1},
-                },
-                text=[f"{v:,.0f}" for v in roll["impressions"]],
-                textposition="outside",
-                textfont={"color": "#334761", "size": 12},
-                hovertemplate="%{x}: %{y:,.0f}<extra></extra>",
+            cur_roll["cpl"] = cur_roll.apply(
+                lambda r: sdiv(float(r["spend"]), float(r["conversions"])),
+                axis=1,
             )
-        )
-        pbi_layout(bar, xaxis_title="", yaxis_title="Impresiones", legend_h=False)
-        bar.update_layout(height=280, margin={"l": 12, "r": 12, "t": 8, "b": 12})
-        st.plotly_chart(bar, width="stretch")
-        st.markdown("</div>", unsafe_allow_html=True)
+            cur_roll["delta_impressions"] = cur_roll.apply(
+                lambda r: pct_delta(float(r["impressions"]), float(r["impressions_prev"])),
+                axis=1,
+            )
+            order = ["Desktop", "Mobile", "Other"]
+            roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
 
-        table = roll.rename(
-            columns={
-                "device": "Device",
-                "spend": "Spend",
-                "impressions": "Impressions",
-                "clicks": "Clicks",
-                "conversions": "Conversions",
-                "ctr": "CTR",
-                "cpl": "CPL",
-            }
-        )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
+            m1, m2, m3 = st.columns(3)
+            for idx, dname in enumerate(order):
+                row = roll[roll["device"] == dname].iloc[0]
+                target_col = [m1, m2, m3][idx]
+                target_col.metric(
+                    f"{dname} Impresiones",
+                    f"{float(row['impressions']):,.0f}",
+                    fmt_delta_compact(row["delta_impressions"]),
+                )
 
-        st.dataframe(
-            table.style.format(
-                {
-                    "Spend": lambda v: fmt_money(float(v)),
-                    "Impressions": "{:.0f}",
-                    "Clicks": "{:.0f}",
-                    "Conversions": "{:.2f}",
-                    "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-                    "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+            st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
+            bar = go.Figure(
+                go.Bar(
+                    x=roll["device"],
+                    y=roll["impressions"],
+                    marker={
+                        "color": ["#7BCC35", "#FE492A", "#7A879D"],
+                        "line": {"color": "rgba(32,29,29,0.08)", "width": 1},
+                    },
+                    text=[f"{v:,.0f}" for v in roll["impressions"]],
+                    textposition="outside",
+                    textfont={"color": "#334761", "size": 12},
+                    hovertemplate="%{x}: %{y:,.0f}<extra></extra>",
+                )
+            )
+            pbi_layout(bar, xaxis_title="", yaxis_title="Impresiones", legend_h=False)
+            bar.update_layout(height=280, margin={"l": 12, "r": 12, "t": 8, "b": 12})
+            st.plotly_chart(bar, width="stretch")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            table = roll.rename(
+                columns={
+                    "device": "Device",
+                    "spend": "Spend",
+                    "impressions": "Impressions",
+                    "clicks": "Clicks",
+                    "conversions": "Conversions",
+                    "ctr": "CTR",
+                    "cpl": "CPL",
                 }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
+            )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
 
-    st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Tabla Maestra de Auditoria</div>",
-        unsafe_allow_html=True,
-    )
-    c = metric_cols(platform)
-    t = df_sel[
-        [
-            "date",
-            "meta_spend",
-            "google_spend",
-            c["spend"],
-            c["clicks"],
-            c["impr"],
-            c["conv"],
-            "ga4_sessions",
-            "ga4_avg_sess",
-            "ga4_bounce",
+            st.dataframe(
+                table.style.format(
+                    {
+                        "Spend": lambda v: fmt_money(float(v)),
+                        "Impressions": "{:.0f}",
+                        "Clicks": "{:.0f}",
+                        "Conversions": "{:.2f}",
+                        "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
+                        "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+    if "audit_table" in section_set:
+        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Tabla Maestra de Auditoria</div>",
+            unsafe_allow_html=True,
+        )
+        t = df_sel[
+            [
+                "date",
+                "meta_spend",
+                "google_spend",
+                c["spend"],
+                c["clicks"],
+                c["impr"],
+                c["conv"],
+                "ga4_sessions",
+                "ga4_avg_sess",
+                "ga4_bounce",
+            ]
+        ].copy()
+        t.columns = [
+            "Date",
+            "Meta Spend",
+            "Google Spend",
+            "Spend",
+            "Clicks",
+            "Impressions",
+            "Conversions",
+            "Sessions",
+            "Avg Session (s)",
+            "Bounce Rate",
         ]
-    ].copy()
-    t.columns = [
-        "Date",
-        "Meta Spend",
-        "Google Spend",
-        "Spend",
-        "Clicks",
-        "Impressions",
-        "Conversions",
-        "Sessions",
-        "Avg Session (s)",
-        "Bounce Rate",
-    ]
-    t["CPL"] = t.apply(lambda r: sdiv(float(r["Spend"]), float(r["Conversions"])), axis=1)
-    t["CTR"] = t.apply(lambda r: sdiv(float(r["Clicks"]), float(r["Impressions"])), axis=1)
-    t = t.sort_values("Date", ascending=False)
-    sty = (
-        t.style.format(
-            {
-                "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
-                "Meta Spend": lambda v: fmt_money(float(v)),
-                "Google Spend": lambda v: fmt_money(float(v)),
-                "Spend": lambda v: fmt_money(float(v)),
-                "Clicks": "{:.0f}",
-                "Impressions": "{:.0f}",
-                "Conversions": "{:.2f}",
-                "Sessions": "{:.0f}",
-                "Avg Session (s)": "{:.1f}",
-                "Bounce Rate": lambda v: fmt_pct(float(v)),
-                "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
-                "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-            }
+        t["CPL"] = t.apply(lambda r: sdiv(float(r["Spend"]), float(r["Conversions"])), axis=1)
+        t["CTR"] = t.apply(lambda r: sdiv(float(r["Clicks"]), float(r["Impressions"])), axis=1)
+        t = t.sort_values("Date", ascending=False)
+        sty = (
+            t.style.format(
+                {
+                    "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
+                    "Meta Spend": lambda v: fmt_money(float(v)),
+                    "Google Spend": lambda v: fmt_money(float(v)),
+                    "Spend": lambda v: fmt_money(float(v)),
+                    "Clicks": "{:.0f}",
+                    "Impressions": "{:.0f}",
+                    "Conversions": "{:.2f}",
+                    "Sessions": "{:.0f}",
+                    "Avg Session (s)": "{:.1f}",
+                    "Bounce Rate": lambda v: fmt_pct(float(v)),
+                    "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+                    "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
+                }
+            )
+            .background_gradient(subset=["Spend"], cmap="Blues")
+            .background_gradient(subset=["Conversions"], cmap="Greens")
+            .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
+            .background_gradient(subset=["CTR"], cmap="PuBu")
         )
-        .background_gradient(subset=["Spend"], cmap="Blues")
-        .background_gradient(subset=["Conversions"], cmap="Greens")
-        .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
-        .background_gradient(subset=["CTR"], cmap="PuBu")
-    )
-    st.dataframe(sty, width="stretch", hide_index=True)
+        st.dataframe(sty, width="stretch", hide_index=True)
 
-    render_top_pieces_range(
-        camp_df,
-        platform,
-        s,
-        e,
-        tenant_meta_account_id=tenant_meta_account_id,
-        tenant_google_customer_id=tenant_google_customer_id,
-    )
+    if "top_pieces" in section_set:
+        render_top_pieces_range(
+            camp_df,
+            platform,
+            s,
+            e,
+            tenant_meta_account_id=tenant_meta_account_id,
+            tenant_google_customer_id=tenant_google_customer_id,
+        )
 
 def render_top_pieces_range(
     camp_df: pd.DataFrame,
@@ -2531,27 +3372,32 @@ def render_top_pieces_range(
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
+def render_traffic(
+    df_sel,
+    df_prev,
+    ch_df,
+    pg_df,
+    camp_df,
+    platform,
+    s,
+    e,
+    traffic_kpi_keys: list[str],
+    traffic_section_keys: list[str],
+):
     section_title("03 > Rendimiento de Trafico y Adquisicion")
+    selected_sections = _normalize_section_keys(
+        traffic_section_keys,
+        TRAFFIC_SECTION_OPTIONS,
+        DEFAULT_TRAFFIC_SECTION_KEYS,
+    )
+    section_set = set(selected_sections)
     sm = summary(df_sel, platform)
     sm_prev = summary(df_prev, platform)
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Sesiones", f"{sm['sessions']:,.0f}", fmt_delta(pct_delta(sm["sessions"], sm_prev["sessions"])))
-    k2.metric("Usuarios", f"{sm['users']:,.0f}", fmt_delta(pct_delta(sm["users"], sm_prev["users"])))
-    k3.metric(
-        "Tiempo Promedio de Interaccion",
-        fmt_duration(sm["avg_sess"]),
-        fmt_delta(pct_delta(sm["avg_sess"], sm_prev["avg_sess"])),
-    )
-    k4.metric(
-        "Tasa de Rebote",
-        fmt_pct(sm["bounce"]),
-        fmt_delta(pct_delta(sm["bounce"], sm_prev["bounce"])),
-        delta_color="inverse",
-    )
+    kpi_payload = build_kpi_payload(sm, sm_prev, max(len(df_sel), 1), len(df_prev))
+    if "kpis" in section_set:
+        render_kpi_cards(traffic_kpi_keys, kpi_payload, DEFAULT_TRAFFIC_KPI_KEYS)
 
-    c1, c2 = st.columns(2)
-    with c1:
+    def _render_channels() -> None:
         section_title("Canales / Adquisicion")
         if ch_df.empty:
             st.info("No hay datos de canales en JSON.")
@@ -2560,14 +3406,19 @@ def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
             if ch.empty:
                 st.info("Sin datos para el rango seleccionado.")
             else:
-                b = ch.groupby("sessionDefaultChannelGroup", as_index=False).agg(sessions=("sessions", "sum"), conversions=("conversions", "sum")).sort_values("sessions", ascending=False).head(10)
+                b = (
+                    ch.groupby("sessionDefaultChannelGroup", as_index=False)
+                    .agg(sessions=("sessions", "sum"), conversions=("conversions", "sum"))
+                    .sort_values("sessions", ascending=False)
+                    .head(10)
+                )
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=b["sessionDefaultChannelGroup"], y=b["sessions"], name="Sessions", marker={"color": C_ACCENT}))
                 fig.add_trace(go.Scatter(x=b["sessionDefaultChannelGroup"], y=b["conversions"], name="Conversions", mode="lines+markers", line={"color": C_META, "width": 2}, yaxis="y2"))
                 pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
                 st.plotly_chart(fig, width="stretch")
 
-    with c2:
+    def _render_top_pages() -> None:
         section_title("Paginas Mas Visitadas")
         if pg_df.empty:
             st.info("No hay datos de paginas en JSON.")
@@ -2576,38 +3427,632 @@ def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
             if pg.empty:
                 st.info("Sin datos para el rango seleccionado.")
             else:
-                top_p = pg.groupby(["pagePath", "pageTitle"], as_index=False).agg(views=("screenPageViews", "sum"), sessions=("sessions", "sum"), avg_session=("averageSessionDuration", "mean")).sort_values("views", ascending=False).head(10)
+                top_p = (
+                    pg.groupby(["pagePath", "pageTitle"], as_index=False)
+                    .agg(views=("screenPageViews", "sum"), sessions=("sessions", "sum"), avg_session=("averageSessionDuration", "mean"))
+                    .sort_values("views", ascending=False)
+                    .head(10)
+                )
                 st.dataframe(top_p, width="stretch", hide_index=True)
 
-    section_title("Rendimiento de Campanas (Paid Media)")
-    if camp_df.empty:
-        st.info("No hay datos de campanas en JSON.")
-    else:
-        cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
-        if platform in ("Google", "Meta"):
-            cp = cp[cp["platform"] == platform]
-        required_defaults: dict[str, Any] = {
-            "platform": "",
-            "campaign_id": "",
-            "campaign_name": "",
-            "spend": 0.0,
-            "impressions": 0.0,
-            "clicks": 0.0,
-            "conversions": 0.0,
-            "ctr": 0.0,
-            "cpc": 0.0,
-            "reach": 0.0,
-            "frequency": 0.0,
-        }
-        for col, default in required_defaults.items():
-            if col not in cp.columns:
-                cp[col] = default
-        if cp.empty:
-            st.info("Sin datos de campanas para filtros actuales.")
+    show_channels = "channels" in section_set
+    show_top_pages = "top_pages" in section_set
+    if show_channels and show_top_pages:
+        c1, c2 = st.columns(2)
+        with c1:
+            _render_channels()
+        with c2:
+            _render_top_pages()
+    elif show_channels:
+        _render_channels()
+    elif show_top_pages:
+        _render_top_pages()
+
+    if "campaigns" in section_set:
+        section_title("Rendimiento de Campanas (Paid Media)")
+        if camp_df.empty:
+            st.info("No hay datos de campanas en JSON.")
         else:
-            roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(spend=("spend", "sum"), impressions=("impressions", "sum"), clicks=("clicks", "sum"), conversions=("conversions", "sum"), ctr=("ctr", "mean"), cpc=("cpc", "mean"), reach=("reach", "max"), frequency=("frequency", "mean")).sort_values("spend", ascending=False)
-            roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
-            st.dataframe(roll.head(20), width="stretch", hide_index=True)
+            cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
+            if platform in ("Google", "Meta"):
+                cp = cp[cp["platform"] == platform]
+            required_defaults: dict[str, Any] = {
+                "platform": "",
+                "campaign_id": "",
+                "campaign_name": "",
+                "spend": 0.0,
+                "impressions": 0.0,
+                "clicks": 0.0,
+                "conversions": 0.0,
+                "ctr": 0.0,
+                "cpc": 0.0,
+                "reach": 0.0,
+                "frequency": 0.0,
+            }
+            for col, default in required_defaults.items():
+                if col not in cp.columns:
+                    cp[col] = default
+            if cp.empty:
+                st.info("Sin datos de campanas para filtros actuales.")
+            else:
+                roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(spend=("spend", "sum"), impressions=("impressions", "sum"), clicks=("clicks", "sum"), conversions=("conversions", "sum"), ctr=("ctr", "mean"), cpc=("cpc", "mean"), reach=("reach", "max"), frequency=("frequency", "mean")).sort_values("spend", ascending=False)
+                roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
+                st.dataframe(roll.head(20), width="stretch", hide_index=True)
+
+
+def render_admin_panel(
+    users: dict[str, dict[str, Any]],
+    tenants: dict[str, dict[str, Any]],
+    auth_user: dict[str, Any],
+    dashboard_settings: dict[str, Any],
+) -> None:
+    section_title("04 > Administración por Tenant (Fase 4)")
+
+    if not USERS_CONFIG_PATH.exists():
+        st.warning("No existe config/users.json todavía. Puedes crearlo desde este panel.")
+
+    total_users = len(users)
+    active_users = sum(1 for u in users.values() if bool(u.get("enabled", True)))
+    enabled_admins = _enabled_admin_count(users)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Usuarios", f"{total_users}")
+    m2.metric("Activos", f"{active_users}")
+    m3.metric("Admins activos", f"{enabled_admins}")
+
+    rows: list[dict[str, Any]] = []
+    for username in sorted(users.keys()):
+        user = users.get(username, {})
+        role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+        global_role = str(user.get("global_role", "user")).strip().lower() or "user"
+        scope_map = _scope_map_for_user(user)
+        labels: list[str] = []
+        for tenant_id in sorted(scope_map.keys()):
+            tenant_role = scope_map.get(tenant_id, role)
+            if tenant_id == "*":
+                labels.append(f"Todos (*):{tenant_role}")
+            else:
+                tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
+                labels.append(f"{tenant_name}:{tenant_role}")
+        rows.append(
+            {
+                "Usuario": str(user.get("username", username)),
+                "Nombre": str(user.get("name", "")),
+                "Global Role": global_role,
+                "Role (legacy)": role,
+                "Activo": bool(user.get("enabled", True)),
+                "Scopes por tenant": " | ".join(labels) if labels else "Sin scope",
+            }
+        )
+    if rows:
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    else:
+        st.info("No hay usuarios cargados en config/users.json.")
+
+    tenant_options = ["*"] + sorted(tenants.keys())
+    role_options = ["viewer", "editor", "admin"]
+    global_role_options = ["user", "admin"]
+
+    tab_edit, tab_create, tab_dashboard, tab_audit = st.tabs(
+        ["Editar Usuario", "Crear Usuario", "Variables Dashboard", "Auditoría"]
+    )
+
+    with tab_edit:
+        if not users:
+            st.info("No hay usuarios para editar.")
+        else:
+            selected_username = st.selectbox(
+                "Selecciona usuario",
+                options=sorted(users.keys()),
+                key="adm_edit_username",
+            )
+            user = users.get(selected_username, {})
+            existing_role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+            existing_global_role = str(user.get("global_role", "user")).strip().lower() or "user"
+            existing_scope_map = _scope_map_for_user(user)
+            selected_defaults = _normalize_tenant_selection(list(existing_scope_map.keys()))
+            if not selected_defaults:
+                selected_defaults = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+
+            col_left, col_right = st.columns(2)
+            with col_left:
+                edit_name = st.text_input(
+                    "Nombre",
+                    value=str(user.get("name", selected_username)),
+                    key=f"adm_edit_name_{selected_username}",
+                )
+                edit_enabled = st.toggle(
+                    "Usuario activo",
+                    value=bool(user.get("enabled", True)),
+                    key=f"adm_edit_enabled_{selected_username}",
+                )
+            with col_right:
+                edit_global_role = st.selectbox(
+                    "Rol global",
+                    options=global_role_options,
+                    index=global_role_options.index(existing_global_role)
+                    if existing_global_role in global_role_options
+                    else 0,
+                    key=f"adm_edit_global_role_{selected_username}",
+                )
+                edit_role = st.selectbox(
+                    "Rol base (legacy)",
+                    options=role_options,
+                    index=role_options.index(existing_role) if existing_role in role_options else 0,
+                    key=f"adm_edit_role_{selected_username}",
+                )
+
+            selected_tenants = st.multiselect(
+                "Tenants asignados",
+                options=tenant_options,
+                default=selected_defaults,
+                format_func=lambda t: "Todos (*)" if t == "*" else str(tenants.get(t, {}).get("name", t)),
+                key=f"adm_edit_tenants_{selected_username}",
+            )
+            normalized_selected = _normalize_tenant_selection(selected_tenants)
+            if "*" in normalized_selected and len(selected_tenants) > 1:
+                st.info("Al incluir '*', se aplicará acceso total y se ignorarán otros tenants.")
+            if edit_global_role == "admin" and not normalized_selected:
+                normalized_selected = ["*"]
+
+            scope_roles: dict[str, str] = {}
+            if normalized_selected:
+                st.caption("Roles por tenant")
+                for tenant_id in normalized_selected:
+                    default_scope_role = existing_scope_map.get(tenant_id, edit_role)
+                    safe_tenant = _widget_safe_key(tenant_id)
+                    scope_roles[tenant_id] = st.selectbox(
+                        f"Rol para {'Todos (*)' if tenant_id == '*' else tenants.get(tenant_id, {}).get('name', tenant_id)}",
+                        options=role_options,
+                        index=role_options.index(default_scope_role) if default_scope_role in role_options else 0,
+                        key=f"adm_edit_scope_role_{selected_username}_{safe_tenant}",
+                    )
+
+            pwd_col_1, pwd_col_2 = st.columns(2)
+            with pwd_col_1:
+                edit_new_password = st.text_input(
+                    "Nueva contraseña (opcional)",
+                    type="password",
+                    key=f"adm_edit_password_{selected_username}",
+                )
+            with pwd_col_2:
+                edit_confirm_password = st.text_input(
+                    "Confirmar contraseña",
+                    type="password",
+                    key=f"adm_edit_password_confirm_{selected_username}",
+                )
+
+            save_col, delete_col = st.columns(2)
+            if save_col.button(
+                "Guardar cambios",
+                key=f"adm_edit_save_{selected_username}",
+                type="primary",
+                width="stretch",
+            ):
+                errors: list[str] = []
+                clean_name = str(edit_name).strip()
+                if not clean_name:
+                    errors.append("El nombre no puede ir vacío.")
+                if edit_global_role != "admin" and not normalized_selected:
+                    errors.append("Debes asignar al menos un tenant.")
+                if edit_new_password or edit_confirm_password:
+                    if edit_new_password != edit_confirm_password:
+                        errors.append("La contraseña y su confirmación no coinciden.")
+                    if len(edit_new_password) < 8:
+                        errors.append("La nueva contraseña debe tener al menos 8 caracteres.")
+
+                was_enabled_admin = bool(user.get("enabled", True)) and _user_record_is_admin(user)
+                will_be_admin = edit_global_role == "admin" or edit_role == "admin"
+                if was_enabled_admin and not (edit_enabled and will_be_admin) and _enabled_admin_count(users) <= 1:
+                    errors.append("No puedes dejar el sistema sin al menos un admin activo.")
+
+                if errors:
+                    for err in errors:
+                        st.error(err)
+                else:
+                    allowed_tenants, tenant_scopes = _build_tenant_access(
+                        normalized_selected,
+                        scope_roles,
+                        edit_role,
+                    )
+                    updated = dict(user)
+                    updated["username"] = selected_username
+                    updated["name"] = clean_name
+                    updated["global_role"] = edit_global_role
+                    updated["role"] = edit_role
+                    updated["enabled"] = bool(edit_enabled)
+                    updated["allowed_tenants"] = allowed_tenants
+                    updated["tenant_scopes"] = tenant_scopes
+                    if edit_new_password:
+                        new_salt = _new_password_salt()
+                        updated["password_salt"] = new_salt
+                        updated["password_hash"] = _hash_password_with_salt(edit_new_password, new_salt)
+
+                    users_next = dict(users)
+                    users_next[selected_username] = updated
+                    ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+                    if not ok:
+                        st.error(f"No se pudo guardar config/users.json: {err_msg}")
+                    else:
+                        append_admin_audit(
+                            "user_updated",
+                            str(auth_user.get("username", "unknown")),
+                            target=selected_username,
+                            details={
+                                "enabled": bool(edit_enabled),
+                                "global_role": edit_global_role,
+                                "role": edit_role,
+                                "allowed_tenants": allowed_tenants,
+                                "password_reset": bool(edit_new_password),
+                            },
+                        )
+                        if str(auth_user.get("username", "")).strip().lower() == selected_username:
+                            st.session_state["auth_user"] = {
+                                "username": updated["username"],
+                                "name": updated["name"],
+                                "role": updated["role"],
+                                "global_role": updated["global_role"],
+                                "allowed_tenants": updated["allowed_tenants"],
+                                "tenant_scopes": updated["tenant_scopes"],
+                            }
+                        st.success("Usuario actualizado.")
+                        st.rerun()
+
+            st.caption("Eliminar usuario")
+            delete_confirm = st.text_input(
+                "Escribe el username para confirmar eliminación",
+                value="",
+                key=f"adm_edit_delete_confirm_{selected_username}",
+            )
+            if delete_col.button(
+                "Eliminar usuario",
+                key=f"adm_edit_delete_{selected_username}",
+                width="stretch",
+            ):
+                errors: list[str] = []
+                current_username = str(auth_user.get("username", "")).strip().lower()
+                if selected_username == current_username:
+                    errors.append("No puedes eliminar tu propio usuario en sesión.")
+                if delete_confirm.strip().lower() != selected_username:
+                    errors.append("Confirmación inválida: escribe exactamente el username.")
+                if bool(user.get("enabled", True)) and _user_record_is_admin(user) and _enabled_admin_count(users) <= 1:
+                    errors.append("No puedes eliminar el último admin activo.")
+                if errors:
+                    for err in errors:
+                        st.error(err)
+                else:
+                    users_next = dict(users)
+                    users_next.pop(selected_username, None)
+                    ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+                    if not ok:
+                        st.error(f"No se pudo guardar config/users.json: {err_msg}")
+                    else:
+                        append_admin_audit(
+                            "user_deleted",
+                            str(auth_user.get("username", "unknown")),
+                            target=selected_username,
+                            details={},
+                        )
+                        st.success(f"Usuario '{selected_username}' eliminado.")
+                        st.rerun()
+
+    with tab_create:
+        create_username_raw = st.text_input(
+            "Username",
+            value="",
+            key="adm_create_username",
+            help="Solo minúsculas, números, punto, guión o guión bajo.",
+        )
+        create_name = st.text_input("Nombre", value="", key="adm_create_name")
+        col_create_1, col_create_2 = st.columns(2)
+        with col_create_1:
+            create_global_role = st.selectbox(
+                "Rol global",
+                options=global_role_options,
+                index=0,
+                key="adm_create_global_role",
+            )
+        with col_create_2:
+            create_role = st.selectbox(
+                "Rol base (legacy)",
+                options=role_options,
+                index=0,
+                key="adm_create_role",
+            )
+        create_enabled = st.toggle("Usuario activo", value=True, key="adm_create_enabled")
+        create_tenants = st.multiselect(
+            "Tenants asignados",
+            options=tenant_options,
+            default=["*"] if create_global_role == "admin" else [],
+            format_func=lambda t: "Todos (*)" if t == "*" else str(tenants.get(t, {}).get("name", t)),
+            key="adm_create_tenants",
+        )
+        create_selected = _normalize_tenant_selection(create_tenants)
+        if create_global_role == "admin" and not create_selected:
+            create_selected = ["*"]
+        create_scope_roles: dict[str, str] = {}
+        if create_selected:
+            st.caption("Roles por tenant")
+            for tenant_id in create_selected:
+                safe_tenant = _widget_safe_key(tenant_id)
+                create_scope_roles[tenant_id] = st.selectbox(
+                    f"Rol para {'Todos (*)' if tenant_id == '*' else tenants.get(tenant_id, {}).get('name', tenant_id)}",
+                    options=role_options,
+                    index=role_options.index(create_role) if create_role in role_options else 0,
+                    key=f"adm_create_scope_role_{safe_tenant}",
+                )
+
+        create_pwd_col_1, create_pwd_col_2 = st.columns(2)
+        with create_pwd_col_1:
+            create_password = st.text_input(
+                "Contraseña",
+                type="password",
+                key="adm_create_password",
+            )
+        with create_pwd_col_2:
+            create_password_confirm = st.text_input(
+                "Confirmar contraseña",
+                type="password",
+                key="adm_create_password_confirm",
+            )
+
+        if st.button("Crear usuario", key="adm_create_submit", type="primary", width="stretch"):
+            errors: list[str] = []
+            create_username = str(create_username_raw).strip().lower()
+            valid_chars = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+            if not create_username:
+                errors.append("El username es obligatorio.")
+            elif any(ch not in valid_chars for ch in create_username):
+                errors.append("El username contiene caracteres no permitidos.")
+            elif create_username in users:
+                errors.append("Ese username ya existe.")
+
+            clean_name = str(create_name).strip()
+            if not clean_name:
+                clean_name = create_username
+            if len(create_password) < 8:
+                errors.append("La contraseña debe tener al menos 8 caracteres.")
+            if create_password != create_password_confirm:
+                errors.append("La contraseña y su confirmación no coinciden.")
+            if create_global_role != "admin" and not create_selected:
+                errors.append("Debes asignar al menos un tenant.")
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                allowed_tenants, tenant_scopes = _build_tenant_access(
+                    create_selected,
+                    create_scope_roles,
+                    create_role,
+                )
+                salt = _new_password_salt()
+                users_next = dict(users)
+                users_next[create_username] = {
+                    "username": create_username,
+                    "name": clean_name,
+                    "global_role": create_global_role,
+                    "role": create_role,
+                    "enabled": bool(create_enabled),
+                    "allowed_tenants": allowed_tenants,
+                    "tenant_scopes": tenant_scopes,
+                    "password_salt": salt,
+                    "password_hash": _hash_password_with_salt(create_password, salt),
+                }
+                ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+                if not ok:
+                    st.error(f"No se pudo guardar config/users.json: {err_msg}")
+                else:
+                    append_admin_audit(
+                        "user_created",
+                        str(auth_user.get("username", "unknown")),
+                        target=create_username,
+                        details={
+                            "enabled": bool(create_enabled),
+                            "global_role": create_global_role,
+                            "role": create_role,
+                            "allowed_tenants": allowed_tenants,
+                        },
+                    )
+                    st.success(f"Usuario '{create_username}' creado.")
+                    st.rerun()
+
+    with tab_dashboard:
+        scope_options = ["__defaults__"] + sorted(tenants.keys())
+        target_scope = st.selectbox(
+            "Configurar scope",
+            options=scope_options,
+            format_func=lambda x: "Defaults (global)" if x == "__defaults__" else str(tenants.get(x, {}).get("name", x)),
+            key="adm_dash_scope",
+        )
+        if target_scope == "__defaults__":
+            base_cfg = dashboard_settings.get("defaults", {})
+        else:
+            base_cfg = tenant_dashboard_settings(dashboard_settings, target_scope)
+
+        overview_defaults = _normalize_kpi_keys(base_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS), DEFAULT_OVERVIEW_KPI_KEYS)
+        traffic_defaults = _normalize_kpi_keys(base_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS), DEFAULT_TRAFFIC_KPI_KEYS)
+        overview_sections_defaults = _normalize_section_keys(
+            base_cfg.get("overview_sections", DEFAULT_OVERVIEW_SECTION_KEYS),
+            OVERVIEW_SECTION_OPTIONS,
+            DEFAULT_OVERVIEW_SECTION_KEYS,
+        )
+        traffic_sections_defaults = _normalize_section_keys(
+            base_cfg.get("traffic_sections", DEFAULT_TRAFFIC_SECTION_KEYS),
+            TRAFFIC_SECTION_OPTIONS,
+            DEFAULT_TRAFFIC_SECTION_KEYS,
+        )
+        default_platform = _normalize_platform_option(base_cfg.get("default_platform", "All"))
+        default_view_mode = _normalize_view_mode_option(base_cfg.get("default_view_mode", "Overview"))
+        default_token_health = _coerce_bool(base_cfg.get("show_sidebar_meta_token_health", True), default=True)
+        kpi_options = list(KPI_CATALOG.keys())
+        overview_section_options = list(OVERVIEW_SECTION_OPTIONS.keys())
+        traffic_section_options = list(TRAFFIC_SECTION_OPTIONS.keys())
+
+        overview_selected = st.multiselect(
+            "KPIs para Overview",
+            options=kpi_options,
+            default=overview_defaults,
+            format_func=lambda k: str(KPI_CATALOG.get(k, {}).get("label", k)),
+            key=f"adm_dash_overview_{target_scope}",
+            help="Selecciona entre 1 y 6 KPIs para las tarjetas superiores del Overview.",
+        )
+        traffic_selected = st.multiselect(
+            "KPIs para Tráfico y Adquisición",
+            options=kpi_options,
+            default=traffic_defaults,
+            format_func=lambda k: str(KPI_CATALOG.get(k, {}).get("label", k)),
+            key=f"adm_dash_traffic_{target_scope}",
+            help="Selecciona entre 1 y 6 KPIs para las tarjetas superiores de Tráfico.",
+        )
+        overview_sections_selected = st.multiselect(
+            "Secciones Overview",
+            options=overview_section_options,
+            default=overview_sections_defaults,
+            format_func=lambda k: str(OVERVIEW_SECTION_OPTIONS.get(k, k)),
+            key=f"adm_dash_overview_sections_{target_scope}",
+        )
+        traffic_sections_selected = st.multiselect(
+            "Secciones Tráfico y Adquisición",
+            options=traffic_section_options,
+            default=traffic_sections_defaults,
+            format_func=lambda k: str(TRAFFIC_SECTION_OPTIONS.get(k, k)),
+            key=f"adm_dash_traffic_sections_{target_scope}",
+        )
+        cfg_col_1, cfg_col_2 = st.columns(2)
+        with cfg_col_1:
+            selected_platform = st.selectbox(
+                "Plataforma por defecto",
+                options=list(PLATFORM_OPTIONS),
+                index=list(PLATFORM_OPTIONS).index(default_platform) if default_platform in PLATFORM_OPTIONS else 0,
+                key=f"adm_dash_platform_{target_scope}",
+            )
+        with cfg_col_2:
+            selected_view_mode = st.selectbox(
+                "Vista por defecto",
+                options=list(VIEW_MODE_OPTIONS),
+                index=list(VIEW_MODE_OPTIONS).index(default_view_mode) if default_view_mode in VIEW_MODE_OPTIONS else 0,
+                key=f"adm_dash_view_{target_scope}",
+            )
+        show_sidebar_token = st.toggle(
+            "Mostrar Meta Token Health en sidebar",
+            value=default_token_health,
+            key=f"adm_dash_sidebar_token_{target_scope}",
+        )
+
+        save_dashboard_button = st.button(
+            "Guardar Variables Dashboard",
+            key=f"adm_dash_save_{target_scope}",
+            type="primary",
+            width="stretch",
+        )
+        if save_dashboard_button:
+            errors: list[str] = []
+            overview_norm = _normalize_kpi_keys(overview_selected, DEFAULT_OVERVIEW_KPI_KEYS)
+            traffic_norm = _normalize_kpi_keys(traffic_selected, DEFAULT_TRAFFIC_KPI_KEYS)
+            overview_sections_norm = _normalize_section_keys(
+                overview_sections_selected,
+                OVERVIEW_SECTION_OPTIONS,
+                DEFAULT_OVERVIEW_SECTION_KEYS,
+            )
+            traffic_sections_norm = _normalize_section_keys(
+                traffic_sections_selected,
+                TRAFFIC_SECTION_OPTIONS,
+                DEFAULT_TRAFFIC_SECTION_KEYS,
+            )
+            if not overview_norm:
+                errors.append("Debes seleccionar al menos 1 KPI para Overview.")
+            if not traffic_norm:
+                errors.append("Debes seleccionar al menos 1 KPI para Tráfico y Adquisición.")
+            if not overview_sections_norm:
+                errors.append("Debes seleccionar al menos 1 sección para Overview.")
+            if not traffic_sections_norm:
+                errors.append("Debes seleccionar al menos 1 sección para Tráfico y Adquisición.")
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                updated_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
+                cfg_payload = {
+                    "overview_kpis": overview_norm,
+                    "traffic_kpis": traffic_norm,
+                    "overview_sections": overview_sections_norm,
+                    "traffic_sections": traffic_sections_norm,
+                    "default_platform": _normalize_platform_option(selected_platform),
+                    "default_view_mode": _normalize_view_mode_option(selected_view_mode),
+                    "show_sidebar_meta_token_health": bool(show_sidebar_token),
+                }
+                if target_scope == "__defaults__":
+                    updated_settings["defaults"] = cfg_payload
+                else:
+                    tenants_cfg = updated_settings.get("tenants", {})
+                    if not isinstance(tenants_cfg, dict):
+                        tenants_cfg = {}
+                    tenants_cfg[target_scope] = cfg_payload
+                    updated_settings["tenants"] = tenants_cfg
+                ok, err_msg = save_dashboard_settings(DASHBOARD_SETTINGS_PATH, updated_settings, tenants)
+                if not ok:
+                    st.error(f"No se pudo guardar {DASHBOARD_SETTINGS_PATH.name}: {err_msg}")
+                else:
+                    append_admin_audit(
+                        "dashboard_settings_updated",
+                        str(auth_user.get("username", "unknown")),
+                        target="defaults" if target_scope == "__defaults__" else target_scope,
+                        details={
+                            "overview_kpis": overview_norm,
+                            "traffic_kpis": traffic_norm,
+                            "overview_sections": overview_sections_norm,
+                            "traffic_sections": traffic_sections_norm,
+                            "default_platform": _normalize_platform_option(selected_platform),
+                            "default_view_mode": _normalize_view_mode_option(selected_view_mode),
+                            "show_sidebar_meta_token_health": bool(show_sidebar_token),
+                        },
+                    )
+                    st.success("Variables de dashboard guardadas.")
+                    st.rerun()
+
+        st.caption(f"Fuente: {DASHBOARD_SETTINGS_PATH.name} | Scope: {'defaults' if target_scope == '__defaults__' else target_scope}")
+
+    with tab_audit:
+        st.markdown("### Salud de Configuración")
+        user_issues = validate_users_integrity(users, tenants)
+        settings_snapshot = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
+        settings_issues = validate_dashboard_settings_integrity(settings_snapshot, tenants)
+        all_issues = user_issues + settings_issues
+        if all_issues:
+            st.error(f"Se detectaron {len(all_issues)} issue(s) de integridad.")
+            for issue in all_issues:
+                st.write(f"- {issue}")
+        else:
+            st.success("Integridad OK en usuarios y dashboard settings.")
+
+        st.markdown("### Log de Cambios (Admin)")
+        audit_rows = read_admin_audit(limit=300)
+        if not audit_rows:
+            st.info("Sin eventos en auditoría todavía.")
+        else:
+            view_rows: list[dict[str, Any]] = []
+            for row in audit_rows:
+                view_rows.append(
+                    {
+                        "timestamp_utc": str(row.get("timestamp_utc", "")),
+                        "action": str(row.get("action", "")),
+                        "actor": str(row.get("actor", "")),
+                        "target": str(row.get("target", "")),
+                        "details": json.dumps(row.get("details", {}), ensure_ascii=False),
+                    }
+                )
+            st.dataframe(pd.DataFrame(view_rows), width="stretch", hide_index=True)
+            st.caption(f"Fuente: {ADMIN_AUDIT_LOG_PATH.name}")
+            download_payload = "\n".join(json.dumps(r, ensure_ascii=True) for r in audit_rows) + "\n"
+            st.download_button(
+                "Descargar auditoría (jsonl)",
+                data=download_payload,
+                file_name=f"admin_audit_{date.today().isoformat()}.jsonl",
+                mime="application/json",
+                width="stretch",
+            )
+
+    st.caption("Fase 6 hardening: layout dinámico + auditoría + backups automáticos + chequeos de integridad.")
 
 
 def main() -> None:
@@ -2619,11 +4064,21 @@ def main() -> None:
     apply_theme()
 
     users = load_users_config(USERS_CONFIG_PATH)
-    _ensure_authenticated(users)
+    auth_user = _ensure_authenticated(users)
 
     tenants = load_tenants_config(TENANTS_CONFIG_PATH)
+    dashboard_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
     tenant_id, view_mode = render_sidebar(tenants)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
+    tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
+    desired_view_mode = _normalize_view_mode_option(tenant_dash_cfg.get("default_view_mode", "Overview"))
+    last_view_tenant = str(st.session_state.get("sidebar_view_tenant_cfg", ""))
+    if last_view_tenant != tenant_id:
+        st.session_state["sidebar_view_tenant_cfg"] = tenant_id
+        if str(st.session_state.get("sidebar_view_mode", "")) != desired_view_mode:
+            st.session_state["sidebar_view_mode"] = desired_view_mode
+            st.rerun()
+    view_mode = str(st.session_state.get("sidebar_view_mode", desired_view_mode))
     tenant_name = str(tenant_cfg.get("name", tenant_id))
     tenant_meta_account_id = str(
         tenant_cfg.get("meta_account_id", tenant_cfg.get("meta_ad_account_id", ""))
@@ -2635,6 +4090,25 @@ def main() -> None:
         str(tenant_cfg.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)).strip()
         or GA4_GTC_SOLICITAR_CODIGO_EVENT
     )
+    if view_mode == "Administración":
+        if not _auth_user_is_admin(auth_user):
+            st.error("Tu usuario no tiene permiso para Administración.")
+            st.stop()
+        render_admin_panel(users, tenants, auth_user, dashboard_settings)
+        st.caption(
+            f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | "
+            f"Fuente usuarios: {USERS_CONFIG_PATH.name} | Variables: {DASHBOARD_SETTINGS_PATH.name}"
+        )
+        st.markdown(
+            """
+            <div class="desktop-powered-footer">
+              POWERED BY <a href="https://www.ipalmera.com" target="_blank">iPalmera</a> 2026
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
     report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
     try:
         report = load_report(report_path)
@@ -2668,22 +4142,58 @@ def main() -> None:
         camp_all = pd.concat([camp, gcamp], ignore_index=True)
 
     min_d, max_d = df["date"].min(), df["date"].max()
-    s, e, platform = render_top_filters(min_d, max_d, tenant_name)
+    s, e, platform = render_top_filters(
+        min_d,
+        max_d,
+        tenant_name,
+        tenant_id,
+        str(tenant_dash_cfg.get("default_platform", "All")),
+    )
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
     period_days = max((e - s).days + 1, 1)
     prev_e = s - timedelta(days=1)
     prev_s = prev_e - timedelta(days=period_days - 1)
     df_prev = df[(df["date"] >= prev_s) & (df["date"] <= prev_e)].copy()
+    overview_sections = _normalize_section_keys(
+        tenant_dash_cfg.get("overview_sections", DEFAULT_OVERVIEW_SECTION_KEYS),
+        OVERVIEW_SECTION_OPTIONS,
+        DEFAULT_OVERVIEW_SECTION_KEYS,
+    )
+    traffic_sections = _normalize_section_keys(
+        tenant_dash_cfg.get("traffic_sections", DEFAULT_TRAFFIC_SECTION_KEYS),
+        TRAFFIC_SECTION_OPTIONS,
+        DEFAULT_TRAFFIC_SECTION_KEYS,
+    )
 
     if view_mode == "Tráfico y Adquisición":
-        render_traffic(df_sel, df_prev, ch, pg, camp_all, platform, s, e)
+        render_traffic(
+            df_sel,
+            df_prev,
+            ch,
+            pg,
+            camp_all,
+            platform,
+            s,
+            e,
+            _normalize_kpi_keys(
+                tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
+                DEFAULT_TRAFFIC_KPI_KEYS,
+            ),
+            traffic_sections,
+        )
     else:
-        render_daily_fact(df_sel, platform)
+        if "daily_fact" in set(overview_sections):
+            render_daily_fact(df_sel, platform)
         render_exec(
             df_sel,
             df_prev,
             platform,
+            _normalize_kpi_keys(
+                tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
+                DEFAULT_OVERVIEW_KPI_KEYS,
+            ),
+            overview_sections,
             paid_dev,
             camp_all,
             ga4_event_daily,
@@ -2696,7 +4206,8 @@ def main() -> None:
             prev_e,
         )
 
-    render_sidebar_meta_token_health(report)
+    if _coerce_bool(tenant_dash_cfg.get("show_sidebar_meta_token_health", True), default=True):
+        render_sidebar_meta_token_health(report)
 
     st.caption(
         f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | Plataforma: {platform} | "

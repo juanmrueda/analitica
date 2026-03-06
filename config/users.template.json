@@ -3,18 +3,26 @@
     {
       "username": "admin",
       "name": "Administrador",
+      "global_role": "admin",
       "role": "admin",
       "enabled": true,
       "allowed_tenants": ["*"],
+      "tenant_scopes": [
+        {"tenant_id": "*", "role": "admin"}
+      ],
       "password_salt": "n8mQJ4sV2pLx7eTa",
       "password_hash": "41e076c40d4271eb4c9a1c95fa55dbb9b9e38ac586adb12bd26fc14e42143761"
     },
     {
       "username": "regional",
       "name": "Equipo Regional",
+      "global_role": "user",
       "role": "viewer",
       "enabled": true,
       "allowed_tenants": ["ipalmera_regional"],
+      "tenant_scopes": [
+        {"tenant_id": "ipalmera_regional", "role": "viewer"}
+      ],
       "password_salt": "b3RkP9wL6zTq1mXe",
       "password_hash": "3253f9f640fc0c746f818bb08773764ff2742cc2f011f37db9f499bd861856c4"
     }

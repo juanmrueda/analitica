@@ -54,6 +54,9 @@ streamlit run dashboard.py --server.address 0.0.0.0 --server.port 8501
 - `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion.
 - `reports/yap/yap_historical.json` -> fuente principal del dashboard.
 - `reports/yap/yap_organic_historical.json` -> modulo organico (si hay acceso/permisos).
+- `config/dashboard_settings.json` -> variables dinamicas del dashboard por tenant.
+- `config/admin_audit.jsonl` -> bitacora local de cambios administrativos (usuarios/settings).
+- `config/backups/` -> backups automaticos previos a cada guardado de configuracion.
 - `requirements.txt` -> dependencias de runtime.
 - `scripts/meta-token-guard.ps1` -> utilidad opcional de refresh de token Meta (flujo local Windows).
 
@@ -119,6 +122,20 @@ copy config\users.template.json config\users.json
   - `admin` / `AdminYAP2026!` (rol `admin`, ve todos los tenants)
   - `regional` / `RegionalYAP2026!` (rol `viewer`, solo `ipalmera_regional`)
 - Ajustar `config/users.json` antes de usar en produccion.
+
+4. Panel administrativo (Fase 6 hardening):
+
+- Vista `Administración`:
+  - Gestion de usuarios por tenant (crear/editar/eliminar, activar/desactivar, reset de password).
+  - Variables dinamicas por tenant para dashboard (`KPIs`, `secciones`, `vista/plataforma por defecto`).
+  - Toggle de `Meta Token Health` en sidebar por tenant.
+  - Tab `Auditoría` con:
+    - chequeo de integridad de configuracion;
+    - log de cambios administrativos (`config/admin_audit.jsonl`);
+    - descarga de auditoria en formato `jsonl`.
+
+- Persistencia segura:
+  - Antes de guardar `users.json` o `dashboard_settings.json`, se crea backup en `config/backups/`.
 
 ## Operacion en produccion (DigitalOcean)
 
