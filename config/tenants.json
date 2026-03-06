@@ -25,6 +25,19 @@
       "google_customer_id": "9180837800",
       "ga4_property_id": "320596460",
       "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
+    },
+    {
+      "id": "hyundai_hn",
+      "name": "Hyundai HN",
+      "report_path": "reports/hyundai_hn/hyundai_hn_historical.json",
+      "organic_report_path": "reports/hyundai_hn/hyundai_hn_organic_historical.json",
+      "meta_ad_account_id": "act_443644872763396",
+      "meta_account_id": "443644872763396",
+      "google_ads_customer_id": "1425513168",
+      "google_ads_login_customer_id": "1425513168",
+      "google_customer_id": "1425513168",
+      "ga4_property_id": "",
+      "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
     }
   ]
 }

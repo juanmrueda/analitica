@@ -21,6 +21,7 @@ Repositorio operativo para analitica y performance de YAP:
 
 - UI/login:
   - Se elimino el background del login para que no herede el fondo del dashboard (`dashboard.py`).
+  - Se migraron componentes Streamlit de `use_container_width` a `width="stretch"` para compatibilidad post-2025.
 - Accesos:
   - Se agrego usuario local `yap` (rol `viewer`) con acceso restringido a tenant `yap` en `config/users.json`.
 - Red local:

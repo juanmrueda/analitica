@@ -2023,9 +2023,12 @@ def main() -> int:
         args.google_ads_customer_id
         or tenant_cfg.get("google_ads_customer_id", GOOGLE_ADS_CUSTOMER_ID)
     )
-    tenant_ga4_property_id = str(
-        args.ga4_property_id or tenant_cfg.get("ga4_property_id", GA4_PROPERTY_ID)
+    tenant_ga4_property_raw = (
+        args.ga4_property_id
+        if args.ga4_property_id is not None
+        else tenant_cfg.get("ga4_property_id", GA4_PROPERTY_ID)
     )
+    tenant_ga4_property_id = str(tenant_ga4_property_raw or "").strip()
     tenant_ga4_conversion_event_name = (
         str(tenant_cfg.get("ga4_conversion_event_name", GA4_DEFAULT_CONVERSION_EVENT)).strip()
         or GA4_DEFAULT_CONVERSION_EVENT
@@ -2062,13 +2065,6 @@ def main() -> int:
     ga_quota_project = google_env.get("GOOGLE_ADS_QUOTA_PROJECT")
     if not all([ga_client_id, ga_client_secret, ga_refresh_token, ga_developer_token]):
         raise RuntimeError("Missing Google Ads OAuth/developer token values in ~/.codex/config.toml")
-
-    (
-        ga4_client_id,
-        ga4_client_secret,
-        ga4_refresh_token,
-        ga4_quota_project,
-    ) = _load_ga4_oauth_credentials(ga4_oauth_path)
 
     meta_data = _fetch_meta_range(str(meta_token), meta_ad_account_id, start_day, end_day)
     meta_campaign_daily = _fetch_meta_campaign_range(
@@ -2110,30 +2106,47 @@ def main() -> int:
         end_day=end_day,
     )
 
-    ga4_access_token = _google_access_token(ga4_client_id, ga4_client_secret, ga4_refresh_token)
-    ga4_main = _fetch_ga4_main_range(
-        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
-    )
-    ga4_device = _fetch_ga4_device_range(
-        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
-    )
-    ga4_country = _fetch_ga4_country_range(
-        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
-    )
-    ga4_channel = _fetch_ga4_channel_range(
-        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
-    )
-    ga4_top_pages = _fetch_ga4_top_pages_range(
-        ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
-    )
-    ga4_event_daily = _fetch_ga4_event_range(
-        ga4_access_token,
-        tenant_ga4_property_id,
-        start_day,
-        end_day,
-        ga4_quota_project,
-        event_name=tenant_ga4_conversion_event_name,
-    )
+    ga4_main: Dict[str, Dict[str, float]] = {}
+    ga4_device: List[Dict[str, Any]] = []
+    ga4_country: List[Dict[str, Any]] = []
+    ga4_channel: List[Dict[str, Any]] = []
+    ga4_top_pages: List[Dict[str, Any]] = []
+    ga4_event_daily: List[Dict[str, Any]] = []
+    if tenant_ga4_property_id:
+        (
+            ga4_client_id,
+            ga4_client_secret,
+            ga4_refresh_token,
+            ga4_quota_project,
+        ) = _load_ga4_oauth_credentials(ga4_oauth_path)
+        ga4_access_token = _google_access_token(
+            ga4_client_id, ga4_client_secret, ga4_refresh_token
+        )
+        ga4_main = _fetch_ga4_main_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_device = _fetch_ga4_device_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_country = _fetch_ga4_country_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_channel = _fetch_ga4_channel_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_top_pages = _fetch_ga4_top_pages_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_event_daily = _fetch_ga4_event_range(
+            ga4_access_token,
+            tenant_ga4_property_id,
+            start_day,
+            end_day,
+            ga4_quota_project,
+            event_name=tenant_ga4_conversion_event_name,
+        )
+    else:
+        print("GA4 skipped: tenant has no ga4_property_id configured.")
 
     new_daily = _build_daily_rows(
         start_day=start_day, end_day=end_day, meta_data=meta_data, google_data=google_data, ga4_data=ga4_main

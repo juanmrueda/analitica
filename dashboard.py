@@ -962,17 +962,17 @@ def apply_theme() -> None:
             background: rgba(32,29,29,0.05);
             border: 1px solid rgba(32,29,29,0.08);
             border-radius: 999px;
-            padding: 0.22rem;
-            min-height: 2.65rem;
-            gap: 0.2rem;
+            padding: 0.32rem;
+            min-height: 3.1rem;
+            gap: 0.28rem;
             width: 100% !important;
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label {
             margin: 0 !important;
-            padding: 0.44rem 1rem !important;
+            padding: 0.62rem 1.18rem !important;
             border-radius: 999px;
             border: 1px solid transparent;
-            min-height: 2.2rem;
+            min-height: 2.55rem;
             cursor: pointer !important;
             color: #4d627f !important;
             font-weight: 700 !important;
@@ -981,9 +981,10 @@ def apply_theme() -> None:
             justify-content: center !important;
             flex: 1 1 0 !important;
             width: 100% !important;
-            min-width: 0 !important;
-            transition: background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            min-width: 6.2rem !important;
+            transition: background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, color 0.18s ease;
             overflow: hidden !important;
+            touch-action: manipulation;
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label > div:first-child {
             position: absolute !important;
@@ -1004,19 +1005,23 @@ def apply_theme() -> None:
             white-space: nowrap !important;
             word-break: keep-all !important;
             overflow-wrap: normal !important;
-            font-size: 0.98rem !important;
+            font-size: 1.03rem !important;
             line-height: 1 !important;
           }
           [data-testid="stMain"] .stRadio [role="radiogroup"] > label:hover {
             background: rgba(255,255,255,0.72) !important;
           }
-          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
-            background: rgba(123, 204, 53, 0.22) !important;
-            border-color: rgba(123, 204, 53, 0.46) !important;
-            box-shadow: 0 3px 10px rgba(103, 178, 45, 0.24);
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"],
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[aria-checked="true"],
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label:has(input:checked) {
+            background: linear-gradient(180deg, rgba(123, 204, 53, 0.30) 0%, rgba(123, 204, 53, 0.24) 100%) !important;
+            border-color: rgba(103, 178, 45, 0.72) !important;
+            box-shadow: 0 4px 12px rgba(103, 178, 45, 0.28);
           }
-          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] p {
-            color: #2F5E13 !important;
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[aria-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label:has(input:checked) [data-testid="stMarkdownContainer"] p {
+            color: #1F4D0A !important;
             font-weight: 800 !important;
           }
           [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
@@ -1024,20 +1029,21 @@ def apply_theme() -> None:
             background: rgba(32,29,29,0.05) !important;
             border: 1px solid rgba(32,29,29,0.08) !important;
             border-radius: 999px !important;
-            padding: 0.26rem !important;
-            gap: 0.24rem !important;
+            padding: 0.32rem !important;
+            gap: 0.28rem !important;
             display: flex !important;
             flex-wrap: nowrap !important;
             overflow: hidden !important;
-            min-height: 2.9rem !important;
+            min-height: 3.1rem !important;
           }
           [data-testid="stSegmentedControl"] [data-baseweb="button"] {
             border-radius: 999px !important;
             border: 1px solid transparent !important;
             color: #4d627f !important;
             font-weight: 700 !important;
-            min-height: 2.35rem !important;
-            padding: 0.48rem 1rem !important;
+            min-height: 2.55rem !important;
+            min-width: 6.2rem !important;
+            padding: 0.62rem 1.18rem !important;
             white-space: nowrap !important;
             flex: 1 1 0 !important;
             justify-content: center !important;
@@ -1047,11 +1053,13 @@ def apply_theme() -> None:
           [data-testid="stSegmentedControl"] [data-baseweb="button"]:hover {
             background: rgba(255,255,255,0.74) !important;
           }
-          [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-pressed="true"] {
-            background: rgba(123, 204, 53, 0.22) !important;
-            color: #2F5E13 !important;
-            border-color: rgba(123, 204, 53, 0.46) !important;
-            box-shadow: 0 3px 10px rgba(103, 178, 45, 0.24);
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-pressed="true"],
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-selected="true"],
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][data-active="true"] {
+            background: linear-gradient(180deg, rgba(123, 204, 53, 0.30) 0%, rgba(123, 204, 53, 0.24) 100%) !important;
+            color: #1F4D0A !important;
+            border-color: rgba(103, 178, 45, 0.72) !important;
+            box-shadow: 0 4px 12px rgba(103, 178, 45, 0.28);
             font-weight: 800 !important;
           }
           [data-testid="stMain"] .stDateInput > div > div,
@@ -1669,21 +1677,16 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "Usuario",
             key="login_username",
             label_visibility="collapsed",
-            placeholder="nombre@corporativo.com",
         )
-        st.markdown(
-            "<div class='login-field-row'><span class='login-label'>Contraseña</span>"
-            "<span class='login-forgot'>¿Olvidó su clave?</span></div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("<div class='login-label'>Contraseña</div>", unsafe_allow_html=True)
         password = st.text_input(
             "Contraseña",
             type="password",
             key="login_password",
             label_visibility="collapsed",
-            placeholder="••••••••",
+            placeholder="",
         )
-        submitted = st.form_submit_button("Iniciar Sesión  →", use_container_width=True)
+        submitted = st.form_submit_button("Iniciar Sesión  →", width="stretch")
         st.markdown(
             """
             <div class="login-secure">
@@ -1936,7 +1939,7 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
         key="nav_overview_btn",
         icon=":material/dashboard:",
         type="primary" if view_mode == "Overview" else "secondary",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state["sidebar_view_mode"] = "Overview"
         view_mode = "Overview"
@@ -1945,12 +1948,12 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
         key="nav_traffic_btn",
         icon=":material/analytics:",
         type="primary" if view_mode == "Tráfico y Adquisición" else "secondary",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state["sidebar_view_mode"] = "Tráfico y Adquisición"
         view_mode = "Tráfico y Adquisición"
     st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
-    if st.sidebar.button("Logout", key="sidebar_logout_btn", use_container_width=True):
+    if st.sidebar.button("Logout", key="sidebar_logout_btn", width="stretch"):
         for k in (
             "auth_user",
             "sidebar_view_mode",
@@ -2034,7 +2037,7 @@ def render_sidebar_meta_token_health(report: dict[str, Any]) -> None:
 
 
 def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date, date, str]:
-    wrapper_left, wrapper_right = st.columns([2.35, 1.65], gap="large")
+    wrapper_left, wrapper_right = st.columns([2.2, 1.8], gap="large")
     with wrapper_left:
         st.markdown(
             f"""
@@ -2046,7 +2049,7 @@ def render_top_filters(min_d: date, max_d: date, tenant_name: str) -> tuple[date
             unsafe_allow_html=True,
         )
     with wrapper_right:
-        pcol, dcol = st.columns([1.35, 1.05], gap="small")
+        pcol, dcol = st.columns([1.65, 0.95], gap="small")
         with pcol:
             platform_options = ("All", "Google", "Meta")
             platform = st.radio(
@@ -2150,7 +2153,7 @@ def render_exec(
             fig.update_layout(height=355, hovermode="x unified", showlegend=True)
             fig.update_xaxes(tickformat="%d %b", tickfont={"size": 10, "color": "#7A879D"})
             fig.update_yaxes(tickfont={"size": 10, "color": "#7A879D"})
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
 
     with funnel_col:
@@ -2335,7 +2338,7 @@ def render_exec(
         )
         pbi_layout(bar, xaxis_title="", yaxis_title="Impresiones", legend_h=False)
         bar.update_layout(height=280, margin={"l": 12, "r": 12, "t": 8, "b": 12})
-        st.plotly_chart(bar, use_container_width=True)
+        st.plotly_chart(bar, width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
 
         table = roll.rename(
@@ -2361,7 +2364,7 @@ def render_exec(
                     "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
                 }
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -2422,7 +2425,7 @@ def render_exec(
         .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
         .background_gradient(subset=["CTR"], cmap="PuBu")
     )
-    st.dataframe(sty, use_container_width=True, hide_index=True)
+    st.dataframe(sty, width="stretch", hide_index=True)
 
     render_top_pieces_range(
         camp_df,
@@ -2515,7 +2518,7 @@ def render_top_pieces_range(
     )
     st.dataframe(
         top_view,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Ver": st.column_config.LinkColumn("Ver", help="Abrir campaña/pieza", display_text="Abrir"),
@@ -2562,7 +2565,7 @@ def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
                 fig.add_trace(go.Bar(x=b["sessionDefaultChannelGroup"], y=b["sessions"], name="Sessions", marker={"color": C_ACCENT}))
                 fig.add_trace(go.Scatter(x=b["sessionDefaultChannelGroup"], y=b["conversions"], name="Conversions", mode="lines+markers", line={"color": C_META, "width": 2}, yaxis="y2"))
                 pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     with c2:
         section_title("Paginas Mas Visitadas")
@@ -2574,7 +2577,7 @@ def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
                 st.info("Sin datos para el rango seleccionado.")
             else:
                 top_p = pg.groupby(["pagePath", "pageTitle"], as_index=False).agg(views=("screenPageViews", "sum"), sessions=("sessions", "sum"), avg_session=("averageSessionDuration", "mean")).sort_values("views", ascending=False).head(10)
-                st.dataframe(top_p, use_container_width=True, hide_index=True)
+                st.dataframe(top_p, width="stretch", hide_index=True)
 
     section_title("Rendimiento de Campanas (Paid Media)")
     if camp_df.empty:
@@ -2604,7 +2607,7 @@ def render_traffic(df_sel, df_prev, ch_df, pg_df, camp_df, platform, s, e):
         else:
             roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(spend=("spend", "sum"), impressions=("impressions", "sum"), clicks=("clicks", "sum"), conversions=("conversions", "sum"), ctr=("ctr", "mean"), cpc=("cpc", "mean"), reach=("reach", "max"), frequency=("frequency", "mean")).sort_values("spend", ascending=False)
             roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
-            st.dataframe(roll.head(20), use_container_width=True, hide_index=True)
+            st.dataframe(roll.head(20), width="stretch", hide_index=True)
 
 
 def main() -> None:
