@@ -1885,29 +1885,37 @@ def _load_existing(path: Path) -> Dict[str, Any]:
 
 
 def _resolve_range(
-    mode: str, output_path: Path, bootstrap_start: date, anchor_end: date
+    mode: str,
+    output_path: Path,
+    bootstrap_start: date,
+    anchor_end: date,
+    refresh_lookback_days: int = 1,
 ) -> Tuple[date, date, str]:
-    yesterday = anchor_end
+    end_day = anchor_end
     if mode == "bootstrap":
-        return bootstrap_start, yesterday, "bootstrap"
+        return bootstrap_start, end_day, "bootstrap"
     if mode == "daily":
-        return yesterday, yesterday, "daily"
+        return end_day, end_day, "daily"
 
     # auto
     if not output_path.exists():
-        return bootstrap_start, yesterday, "bootstrap"
+        return bootstrap_start, end_day, "bootstrap"
 
     existing = _load_existing(output_path)
     daily = existing.get("daily", [])
     if not daily:
-        return bootstrap_start, yesterday, "bootstrap"
+        return bootstrap_start, end_day, "bootstrap"
 
     last_date_str = max(str(r.get("date")) for r in daily if r.get("date"))
     last_day = datetime.strptime(last_date_str, "%Y-%m-%d").date()
-    start = last_day + timedelta(days=1)
-    if start > yesterday:
-        return yesterday, yesterday, "daily"
-    return start, yesterday, "daily"
+    lookback = max(int(refresh_lookback_days), 0)
+    overlap_start = end_day - timedelta(days=lookback)
+    if overlap_start < bootstrap_start:
+        overlap_start = bootstrap_start
+    start = min(last_day + timedelta(days=1), overlap_start)
+    if start > end_day:
+        start = end_day
+    return start, end_day, "daily"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1955,6 +1963,12 @@ def _parse_args() -> argparse.Namespace:
         "--end-date",
         default=default_end,
         help="End date for extraction range (YYYY-MM-DD). Default: today.",
+    )
+    parser.add_argument(
+        "--refresh-lookback-days",
+        type=int,
+        default=1,
+        help="For mode=auto, reprocess this many days before end-date to absorb late platform adjustments.",
     )
     parser.add_argument(
         "--meta-ad-account-id",
@@ -2039,7 +2053,13 @@ def main() -> int:
     organic_lookback_days = max(int(args.organic_lookback_days), 1)
     organic_start_day = anchor_end - timedelta(days=organic_lookback_days - 1)
     organic_end_day = anchor_end
-    start_day, end_day, run_kind = _resolve_range(args.mode, output_path, bootstrap_start, anchor_end)
+    start_day, end_day, run_kind = _resolve_range(
+        args.mode,
+        output_path,
+        bootstrap_start,
+        anchor_end,
+        args.refresh_lookback_days,
+    )
 
     cfg = _load_codex_config(CODEX_CONFIG_PATH)
     meta_env = cfg.get("mcp_servers", {}).get("meta-ads-mcp", {}).get("env", {})

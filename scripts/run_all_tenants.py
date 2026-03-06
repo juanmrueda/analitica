@@ -77,6 +77,12 @@ def _parse_args() -> argparse.Namespace:
         help="Organic lookback days per tenant.",
     )
     parser.add_argument(
+        "--refresh-lookback-days",
+        type=int,
+        default=1,
+        help="For mode=auto, reprocess this many days before end-date.",
+    )
+    parser.add_argument(
         "--tenants-config-path",
         default=str(DEFAULT_TENANTS_CONFIG_PATH),
         help="Path to tenants JSON config.",
@@ -137,6 +143,8 @@ def main() -> int:
             str(args.end_date),
             "--organic-lookback-days",
             str(args.organic_lookback_days),
+            "--refresh-lookback-days",
+            str(args.refresh_lookback_days),
         ]
         print(f"[{tenant_id}] Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, cwd=str(ROOT_DIR))
