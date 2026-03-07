@@ -31,7 +31,8 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - `reports/*/*_organic_historical.json` -> modulo organico por tenant.
 - `config/tenants.json` -> ids y rutas por tenant.
 - `config/users.json` -> usuarios y permisos.
-- `config/dashboard_settings.json` -> variables dinamicas del dashboard por tenant.
+- `config/dashboard_settings.template.json` -> plantilla versionada de variables de dashboard.
+- `config/dashboard_settings.json` -> runtime local/no versionado (se crea desde template si no existe).
 - `config/admin_audit.jsonl` -> bitacora de cambios administrativos.
 - `config/backups/` -> backups automaticos antes de guardar config.
 
@@ -66,6 +67,7 @@ python -m venv .venv
 
 ```powershell
 copy config\users.template.json config\users.json
+copy config\dashboard_settings.template.json config\dashboard_settings.json
 ```
 
 Usuarios base del template:
@@ -138,6 +140,7 @@ journalctl -u yap-pipeline.service -n 120 --no-pager
 
 Nota:
 - Si un tenant no tiene `ga4_property_id` (ejemplo actual `hyundai_hn`), GA4 se omite para ese tenant y el pipeline continua normalmente.
+- `dashboard.py` bootstrapea `config/dashboard_settings.json` desde `config/dashboard_settings.template.json` cuando falta el runtime.
 
 ## Deploy de cambios
 
@@ -155,10 +158,15 @@ sudo systemctl restart yap-dashboard
 sudo systemctl start yap-pipeline.service
 ```
 
+Nota deploy:
+- `config/users.json` y `config/dashboard_settings.json` no se versionan, por lo que `git pull` no los reemplaza.
+
 ## Configuracion sensible (no versionar)
 
 - `~/.codex/config.toml` real con tokens.
 - `ga4_user_oauth_analytics_ipalmera.json` real.
+- `config/users.json` runtime.
+- `config/dashboard_settings.json` runtime.
 - Backups o archivos privados con credenciales (`*.bak`, `*.private`, etc.).
 
 ## Cloudflare recomendado

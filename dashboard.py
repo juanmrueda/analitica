@@ -23,6 +23,7 @@ REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
 TENANTS_CONFIG_PATH = BASE_DIR / "config" / "tenants.json"
 USERS_CONFIG_PATH = BASE_DIR / "config" / "users.json"
 DASHBOARD_SETTINGS_PATH = BASE_DIR / "config" / "dashboard_settings.json"
+DASHBOARD_SETTINGS_TEMPLATE_PATH = BASE_DIR / "config" / "dashboard_settings.template.json"
 CONFIG_BACKUP_DIR = BASE_DIR / "config" / "backups"
 ADMIN_AUDIT_LOG_PATH = BASE_DIR / "config" / "admin_audit.jsonl"
 TENANT_LOGOS_DIR = BASE_DIR / "assets" / "logos"
@@ -2325,6 +2326,16 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
             "tenant_logo": "",
         }
     return {"defaults": defaults, "tenants": tenant_cfg}
+
+
+def ensure_dashboard_settings_runtime_file(runtime_path: Path, template_path: Path) -> None:
+    if runtime_path.exists() or not template_path.exists():
+        return
+    try:
+        runtime_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_path.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -5487,6 +5498,7 @@ def main() -> None:
     auth_user = _ensure_authenticated(users)
 
     tenants = load_tenants_config(TENANTS_CONFIG_PATH)
+    ensure_dashboard_settings_runtime_file(DASHBOARD_SETTINGS_PATH, DASHBOARD_SETTINGS_TEMPLATE_PATH)
     dashboard_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
     tenant_id, view_mode, admin_section = render_sidebar(tenants, dashboard_settings)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
