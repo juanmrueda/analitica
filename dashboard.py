@@ -8,6 +8,7 @@ import hashlib
 import math
 import secrets
 import shutil
+import base64
 import textwrap
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
@@ -2338,6 +2339,31 @@ def _resolve_logo_image_source(raw_value: Any) -> str:
     return LOGO_PLACEHOLDER
 
 
+def _image_source_to_data_uri(image_source: str) -> str:
+    src = str(image_source or "").strip()
+    if not src:
+        return src
+    if src.startswith(("http://", "https://", "data:image/")):
+        return src
+    path = Path(src)
+    if not path.exists():
+        return src
+    mime_by_suffix = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+    }
+    mime = mime_by_suffix.get(path.suffix.lower(), "image/png")
+    try:
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    except Exception:
+        return src
+
+
 def _normalize_kpi_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
     allowed = set(KPI_CATALOG.keys())
     values: list[str] = []
@@ -2423,7 +2449,6 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
         "enabled_view_modes": list(VIEW_MODE_OPTIONS),
         "default_platform": "All",
         "default_view_mode": "Overview",
-        "show_sidebar_meta_token_health": True,
         "tenant_logo": "",
     }
     tenant_cfg: dict[str, dict[str, Any]] = {}
@@ -2437,7 +2462,6 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
             "enabled_view_modes": list(VIEW_MODE_OPTIONS),
             "default_platform": "All",
             "default_view_mode": "Overview",
-            "show_sidebar_meta_token_health": True,
             "tenant_logo": "",
         }
     return {"defaults": defaults, "tenants": tenant_cfg}
@@ -2495,13 +2519,6 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
         "default_view_mode": _normalize_view_mode_option(
             raw_defaults.get("default_view_mode", base["defaults"]["default_view_mode"])
         ),
-        "show_sidebar_meta_token_health": _coerce_bool(
-            raw_defaults.get(
-                "show_sidebar_meta_token_health",
-                base["defaults"].get("show_sidebar_meta_token_health", True),
-            ),
-            default=True,
-        ),
         "tenant_logo": _normalize_logo_source(
             raw_defaults.get("tenant_logo", base["defaults"].get("tenant_logo", ""))
         ),
@@ -2547,10 +2564,6 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
             "default_view_mode": _normalize_view_mode_option(
                 raw_cfg.get("default_view_mode", defaults["default_view_mode"])
             ),
-            "show_sidebar_meta_token_health": _coerce_bool(
-                raw_cfg.get("show_sidebar_meta_token_health", defaults["show_sidebar_meta_token_health"]),
-                default=defaults["show_sidebar_meta_token_health"],
-            ),
             "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo", defaults.get("tenant_logo", ""))),
         }
     return {"defaults": defaults, "tenants": tenant_cfg}
@@ -2592,13 +2605,6 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
             ),
             "default_view_mode": _normalize_view_mode_option(
                 incoming_defaults.get("default_view_mode", normalized["defaults"]["default_view_mode"])
-            ),
-            "show_sidebar_meta_token_health": _coerce_bool(
-                incoming_defaults.get(
-                    "show_sidebar_meta_token_health",
-                    normalized["defaults"].get("show_sidebar_meta_token_health", True),
-                ),
-                default=True,
             ),
             "tenant_logo": _normalize_logo_source(
                 incoming_defaults.get("tenant_logo", normalized["defaults"].get("tenant_logo", ""))
@@ -2646,13 +2652,6 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                 ),
                 "default_view_mode": _normalize_view_mode_option(
                     raw_cfg.get("default_view_mode", normalized["defaults"]["default_view_mode"])
-                ),
-                "show_sidebar_meta_token_health": _coerce_bool(
-                    raw_cfg.get(
-                        "show_sidebar_meta_token_health",
-                        normalized["defaults"].get("show_sidebar_meta_token_health", True),
-                    ),
-                    default=normalized["defaults"].get("show_sidebar_meta_token_health", True),
                 ),
                 "tenant_logo": _normalize_logo_source(
                     raw_cfg.get("tenant_logo", normalized["defaults"].get("tenant_logo", ""))
@@ -2703,7 +2702,6 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         defaults.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
         list(VIEW_MODE_OPTIONS),
     )
-    defaults_token_health = _coerce_bool(defaults.get("show_sidebar_meta_token_health", True), default=True)
     defaults_tenant_logo = _normalize_logo_source(defaults.get("tenant_logo", ""))
     enabled_view_modes = _normalize_view_mode_keys(
         raw_cfg.get("enabled_view_modes", defaults_enabled_view_modes),
@@ -2740,10 +2738,6 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         "enabled_view_modes": enabled_view_modes,
         "default_platform": _normalize_platform_option(raw_cfg.get("default_platform", defaults.get("default_platform", "All"))),
         "default_view_mode": default_view_mode,
-        "show_sidebar_meta_token_health": _coerce_bool(
-            raw_cfg.get("show_sidebar_meta_token_health", defaults_token_health),
-            default=defaults_token_health,
-        ),
         "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo")) or defaults_tenant_logo,
     }
 
@@ -2865,10 +2859,11 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
           :root {
             --login-card-width: 432px;
             --login-title-size: 2.15rem;
+            --login-logo-size: 108px;
           }
           .stApp,
           [data-testid="stAppViewContainer"] {
-            background: none !important;
+            background: #fe492a !important;
             background-image: none !important;
           }
           [data-testid="stSidebar"],
@@ -2876,30 +2871,60 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
           [data-testid="stSidebarCollapseButton"] {
             display: none !important;
           }
+          html,
+          body,
+          [data-testid="stAppViewContainer"],
+          [data-testid="stMain"] {
+            height: 100% !important;
+          }
+          [data-testid="stMainBlockContainer"],
           .block-container {
             max-width: 100% !important;
-            padding-top: 4.2rem !important;
-            padding-bottom: 1.8rem !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
+            min-height: 100vh !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+            box-sizing: border-box !important;
           }
-          [data-testid="stForm"] {
-            background: rgba(255,255,255,0.78) !important;
+          [data-testid="stForm"],
+          .stForm {
+            background: #FFFFFF !important;
             border: 1px solid rgba(32,29,29,0.07) !important;
             border-radius: 30px !important;
             padding: 1.9rem 1.8rem 1.4rem 1.8rem !important;
             box-shadow: 0 22px 50px rgba(15,23,42,0.10) !important;
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
             width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
             max-width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
-            margin: 0 auto !important;
+            min-height: 0 !important;
+            height: auto !important;
+            box-sizing: border-box !important;
+            position: fixed !important;
+            left: 50% !important;
+            top: 54% !important;
+            transform: translate(-50%, -50%) !important;
+            margin: 0 !important;
+            z-index: 20 !important;
           }
-          [data-testid="stForm"] form {
-            width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
-            max-width: min(var(--login-card-width), calc(100vw - 2.4rem)) !important;
-            margin: 0 auto !important;
+          [data-testid="stForm"] form,
+          .stForm form {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+          }
+          .login-logo-wrap {
+            width: var(--login-logo-size);
+            height: var(--login-logo-size);
+            margin: 0 auto 0.62rem auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .login-logo-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
           }
           .login-brand {
             display: flex;
@@ -2907,10 +2932,6 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
             align-items: center;
             text-align: center;
             margin-bottom: 1.2rem;
-          }
-          .login-top-spacer {
-            height: 72px;
-            width: 1px;
           }
           .login-title {
             margin-top: 1rem;
@@ -2997,24 +3018,39 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
             font-size: 1rem;
           }
           .login-footer {
-            margin-top: 1.2rem;
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0.78rem;
+            margin: 0;
             text-align: center;
-            color: #8B9099;
-            font-size: 0.76rem;
+            color: #FFFFFF;
+            font-size: 0.98rem;
+            font-weight: 700;
             line-height: 1.35;
+            z-index: 1000;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
           }
           .login-footer a {
-            color: #5A6170;
+            color: #FFFFFF;
             text-decoration: none;
-            font-weight: 700;
+            font-weight: 800;
           }
           .login-footer a:hover { text-decoration: underline; }
           @media (max-width: 640px) {
-            .block-container { padding-top: 1.2rem !important; }
-            [data-testid="stForm"] {
+            .block-container {
+              padding-top: 1.2rem !important;
+            }
+            [data-testid="stForm"],
+            .stForm {
+              position: static !important;
+              left: auto !important;
+              top: auto !important;
+              transform: none !important;
               border-radius: 22px !important;
               width: calc(100vw - 1.3rem) !important;
               padding: 1.1rem !important;
+              margin: 0 auto !important;
             }
             .login-title { font-size: 1.95rem; }
           }
@@ -3023,10 +3059,14 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
         unsafe_allow_html=True,
     )
     with st.form("login_form", clear_on_submit=False):
+        login_logo_src = _image_source_to_data_uri(_resolve_logo_image_source("assets/login.png"))
+        st.markdown(
+            f"<div class='login-logo-wrap'><img src='{html.escape(login_logo_src, quote=True)}' alt='Logo login' /></div>",
+            unsafe_allow_html=True,
+        )
         st.markdown(
             """
             <div class="login-brand">
-              <div class="login-top-spacer" aria-hidden="true"></div>
               <div class="login-title">iPalmera Analítica</div>
               <div class="login-sub">Marketing Command Center</div>
             </div>
@@ -3090,7 +3130,7 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
     st.markdown(
         """
         <div class="login-footer">
-          Powered By iPalmera 2026 Vibe Coding
+          Powered By <a href="https://ipalmera.com" target="_blank" rel="noopener noreferrer">iPalmera</a> 2026 Vibe Coding
         </div>
         """,
         unsafe_allow_html=True,
@@ -3152,6 +3192,24 @@ def _normalize_date_range(sel: Any, min_d: date, max_d: date) -> tuple[date, dat
     if s > e:
         s, e = e, s
     return s, e
+
+
+def _default_business_date_range(min_d: date, max_d: date) -> tuple[date, date]:
+    today = date.today()
+    if today.day == 1:
+        # On the first day of month, default to the complete previous month.
+        end_candidate = today - timedelta(days=1)
+        start_candidate = end_candidate.replace(day=1)
+    else:
+        # Otherwise, current month to yesterday.
+        start_candidate = today.replace(day=1)
+        end_candidate = today - timedelta(days=1)
+
+    start = _coerce_date_value(start_candidate, min_d, max_d)
+    end = _coerce_date_value(end_candidate, min_d, max_d)
+    if start > end:
+        start = min_d
+    return start, end
 
 
 def daily_df(report: dict[str, Any]) -> pd.DataFrame:
@@ -3426,17 +3484,22 @@ def render_sidebar(
             </div>
           </div>
         </div>
-        <div class="sidebar-kicker">Workspace</div>
         """,
         unsafe_allow_html=True,
     )
-    tenant_id = st.sidebar.selectbox(
-        "Workspace",
-        options=tenant_ids,
-        key="active_tenant_id",
-        format_func=lambda t: str(tenants.get(t, {}).get("name", t)),
-        label_visibility="collapsed",
-    )
+    if len(tenant_ids) > 1:
+        st.sidebar.markdown("<div class='sidebar-kicker'>Workspace</div>", unsafe_allow_html=True)
+        tenant_id = st.sidebar.selectbox(
+            "Workspace",
+            options=tenant_ids,
+            key="active_tenant_id",
+            format_func=lambda t: str(tenants.get(t, {}).get("name", t)),
+            label_visibility="collapsed",
+        )
+    else:
+        tenant_id = tenant_ids[0]
+        if st.session_state.get("active_tenant_id") != tenant_id:
+            st.session_state["active_tenant_id"] = tenant_id
     tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
     enabled_view_modes = _normalize_view_mode_keys(
         tenant_dash_cfg.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
@@ -3665,9 +3728,10 @@ def render_top_filters(
                 platform = default_platform_value
         with dcol:
             st.markdown("<div class='app-filter-title' style='margin-top:0.1rem;'>Rango</div>", unsafe_allow_html=True)
+            default_start, default_end = _default_business_date_range(min_d, max_d)
             sel = st.date_input(
                 "Rango",
-                value=(max(min_d, max_d - timedelta(days=29)), max_d),
+                value=(default_start, default_end),
                 min_value=min_d,
                 max_value=max_d,
                 key="top_date_range",
@@ -5376,7 +5440,6 @@ def render_admin_panel(
         default_view_mode = _normalize_view_mode_option(base_cfg.get("default_view_mode", "Overview"))
         if default_view_mode not in enabled_view_modes_defaults:
             default_view_mode = enabled_view_modes_defaults[0]
-        default_token_health = _coerce_bool(base_cfg.get("show_sidebar_meta_token_health", True), default=True)
         default_tenant_logo = _normalize_logo_source(base_cfg.get("tenant_logo", ""))
         kpi_options = list(KPI_CATALOG.keys())
         overview_section_options = list(OVERVIEW_SECTION_OPTIONS.keys())
@@ -5475,12 +5538,6 @@ def render_admin_panel(
                 f"Archivo listo para guardar: {logo_upload.name} | "
                 f"Formato esperado: {TENANT_LOGO_UPLOAD_WIDTH_PX}x{TENANT_LOGO_UPLOAD_HEIGHT_PX}px"
             )
-        show_sidebar_token = st.toggle(
-            "Mostrar Meta Token Health en sidebar",
-            value=default_token_health,
-            key=f"adm_dash_sidebar_token_{target_scope}",
-        )
-
         save_dashboard_button = st.button(
             "Guardar Variables Dashboard",
             key=f"adm_dash_save_{target_scope}",
@@ -5543,7 +5600,6 @@ def render_admin_panel(
                     "enabled_view_modes": enabled_view_modes_norm,
                     "default_platform": _normalize_platform_option(selected_platform),
                     "default_view_mode": selected_view_mode_norm,
-                    "show_sidebar_meta_token_health": bool(show_sidebar_token),
                     "tenant_logo": tenant_logo_norm,
                 }
                 if target_scope == "__defaults__":
@@ -5571,7 +5627,6 @@ def render_admin_panel(
                             "enabled_view_modes": enabled_view_modes_norm,
                             "default_platform": _normalize_platform_option(selected_platform),
                             "default_view_mode": selected_view_mode_norm,
-                            "show_sidebar_meta_token_health": bool(show_sidebar_token),
                             "tenant_logo": tenant_logo_norm,
                         },
                     )
@@ -5699,13 +5754,12 @@ def main() -> None:
             st.error("Tu usuario no tiene permiso para Administración.")
             st.stop()
         admin_report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
-        if _coerce_bool(tenant_dash_cfg.get("show_sidebar_meta_token_health", True), default=True):
-            try:
-                admin_report = load_report(admin_report_path)
-            except Exception:
-                admin_report = {}
-            if isinstance(admin_report, dict):
-                render_sidebar_meta_token_health(admin_report)
+        try:
+            admin_report = load_report(admin_report_path)
+        except Exception:
+            admin_report = {}
+        if isinstance(admin_report, dict):
+            render_sidebar_meta_token_health(admin_report)
         render_sidebar_logout_button()
         render_admin_panel(users, tenants, auth_user, dashboard_settings, admin_section)
         st.caption(
@@ -5835,8 +5889,6 @@ def main() -> None:
             prev_e,
         )
 
-    if _coerce_bool(tenant_dash_cfg.get("show_sidebar_meta_token_health", True), default=True):
-        render_sidebar_meta_token_health(report)
     render_sidebar_logout_button()
 
     st.caption(
