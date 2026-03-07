@@ -41,7 +41,7 @@
     "default_platform": "All",
     "default_view_mode": "Overview",
     "show_sidebar_meta_token_health": true,
-    "tenant_logo": ""
+    "tenant_logo": "assets/logos/defaults_20260306_215035_363870d32f.png"
   },
   "tenants": {
     "yap": {
@@ -82,7 +82,7 @@
       "default_platform": "All",
       "default_view_mode": "Overview",
       "show_sidebar_meta_token_health": true,
-      "tenant_logo": ""
+      "tenant_logo": "assets/logos/yap_20260306_220501_bbf99d05b5.png"
     },
     "hyundai_hn": {
       "overview_kpis": [
@@ -119,7 +119,7 @@
       "default_platform": "All",
       "default_view_mode": "Overview",
       "show_sidebar_meta_token_health": false,
-      "tenant_logo": ""
+      "tenant_logo": "assets/logos/hyundai_hn_20260306_220905_3056a8b22e.png"
     }
   }
 }

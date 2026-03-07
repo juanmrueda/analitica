@@ -25,6 +25,7 @@ USERS_CONFIG_PATH = BASE_DIR / "config" / "users.json"
 DASHBOARD_SETTINGS_PATH = BASE_DIR / "config" / "dashboard_settings.json"
 CONFIG_BACKUP_DIR = BASE_DIR / "config" / "backups"
 ADMIN_AUDIT_LOG_PATH = BASE_DIR / "config" / "admin_audit.jsonl"
+TENANT_LOGOS_DIR = BASE_DIR / "assets" / "logos"
 DEFAULT_TENANT_ID = "yap"
 LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
 LOGO_PLACEHOLDER = "https://via.placeholder.com/260x80/F8FAFC/0F172A?text=iPalmera+Logo"
@@ -299,19 +300,26 @@ def apply_theme() -> None:
             width: 2.25rem !important;
             height: 2.25rem !important;
             border-radius: 10px !important;
-            border: 1px solid rgba(255, 255, 255, 0.18) !important;
-            background: rgba(15, 23, 42, 0.92) !important;
-            color: #E5E7EB !important;
-            box-shadow: 0 6px 14px rgba(2, 6, 23, 0.28) !important;
+            border: 1px solid rgba(32,29,29,0.10) !important;
+            background: rgba(255,255,255,0.86) !important;
+            color: #4D627F !important;
+            box-shadow: 0 8px 18px rgba(15,23,42,0.10) !important;
           }
           [data-testid="collapsedControl"] button:hover,
           [data-testid="stSidebarCollapseButton"] button:hover {
-            background: rgba(2, 6, 23, 0.95) !important;
+            background: linear-gradient(180deg, rgba(123,204,53,0.26) 0%, rgba(123,204,53,0.20) 100%) !important;
+            border-color: rgba(103,178,45,0.58) !important;
+            color: #1F4D0A !important;
           }
           [data-testid="collapsedControl"] button svg,
           [data-testid="stSidebarCollapseButton"] button svg {
-            fill: #E5E7EB !important;
-            stroke: #E5E7EB !important;
+            fill: #4D627F !important;
+            stroke: #4D627F !important;
+          }
+          [data-testid="collapsedControl"] button:hover svg,
+          [data-testid="stSidebarCollapseButton"] button:hover svg {
+            fill: #1F4D0A !important;
+            stroke: #1F4D0A !important;
           }
           .stApp {
             color: #1D1D1F;
@@ -794,6 +802,19 @@ def apply_theme() -> None:
             background: rgba(255, 255, 255, 0.62);
             margin-bottom: 1rem;
           }
+          .sidebar-tenant-logo {
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 14px;
+            padding: 0.45rem 0.5rem;
+            background: rgba(255,255,255,0.72);
+            margin-bottom: 0.78rem;
+            box-shadow: 0 8px 18px rgba(15,23,42,0.04);
+          }
+          .sidebar-tenant-logo img {
+            width: 100%;
+            border-radius: 10px;
+            object-fit: contain;
+          }
           .sidebar-profile-row {
             display: flex;
             align-items: center;
@@ -1001,18 +1022,21 @@ def apply_theme() -> None:
             background: rgba(255,255,255,0.65) !important;
             color: #4f617b !important;
             font-weight: 600 !important;
-            min-height: 2.6rem !important;
+            min-height: 2.9rem !important;
             justify-content: flex-start !important;
-            padding-left: 0.55rem !important;
+            padding-left: 0.78rem !important;
+            padding-right: 0.78rem !important;
           }
           [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
-            background: rgba(32,29,29,0.06) !important;
-            color: #201D1D !important;
-            border-color: rgba(32,29,29,0.10) !important;
-            font-weight: 700 !important;
+            background: linear-gradient(180deg, rgba(123,204,53,0.30) 0%, rgba(123,204,53,0.24) 100%) !important;
+            color: #1F4D0A !important;
+            border-color: rgba(103,178,45,0.70) !important;
+            box-shadow: 0 4px 12px rgba(103,178,45,0.24) !important;
+            font-weight: 800 !important;
           }
           [data-testid="stSidebar"] [data-testid="stButton"] button:hover {
-            border-color: rgba(32,29,29,0.16) !important;
+            border-color: rgba(103,178,45,0.40) !important;
+            background: rgba(123,204,53,0.16) !important;
           }
           .hero {
             background: transparent !important;
@@ -1029,13 +1053,18 @@ def apply_theme() -> None:
             letter-spacing: -0.03em !important;
             margin: 0 !important;
             white-space: nowrap;
+            text-transform: none !important;
           }
           .hero-title { display: none; }
           .hero-sub {
             color: #4d627f !important;
             font-size: 0.95rem !important;
-            font-weight: 500;
+            font-weight: 600;
             margin-top: 0.2rem;
+          }
+          .hero-tenant-name {
+            color: #2E7D1D !important;
+            font-weight: 800 !important;
           }
           .top-controls-hint {
             margin-top: 0.3rem;
@@ -1190,27 +1219,51 @@ def apply_theme() -> None:
             font-weight: 800;
           }
           .daily-fact {
-            background: rgba(255,255,255,0.72) !important;
-            border: 1px solid rgba(32,29,29,0.08) !important;
-            border-radius: 18px !important;
-            padding: 1rem 1.15rem !important;
-            margin-bottom: 0.9rem !important;
+            background: linear-gradient(135deg, #1F2937 0%, #2C3A4E 100%) !important;
+            border: 1px solid rgba(148,163,184,0.32) !important;
+            border-radius: 24px !important;
+            padding: 0.95rem 1.05rem !important;
+            margin: 0.12rem 0 0.95rem 0 !important;
             display: flex !important;
-            gap: 0.9rem !important;
+            gap: 0.82rem !important;
             align-items: center !important;
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.04) !important;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18) !important;
           }
           .daily-fact-icon {
-            width: 2.85rem;
-            height: 2.85rem;
+            width: 2.6rem;
+            height: 2.6rem;
             border-radius: 14px;
             border: 1px solid rgba(123, 204, 53, 0.28);
-            background: rgba(123, 204, 53, 0.12);
+            background: rgba(123, 204, 53, 0.16);
             color: #67b22d;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.35rem;
+            font-size: 1.15rem;
+            flex: 0 0 auto;
+          }
+          .daily-fact .title {
+            font-size: 1.2rem;
+            line-height: 1.14;
+            font-weight: 800;
+            letter-spacing: -0.01em;
+            color: #F8FAFC;
+            text-transform: none;
+            margin: 0;
+          }
+          .daily-fact .body {
+            margin-top: 0.16rem;
+            font-size: 0.94rem;
+            line-height: 1.35;
+            font-weight: 500;
+            color: #D3DCE8;
+          }
+          .daily-fact-highlight {
+            color: #67b22d;
+            font-weight: 800;
+          }
+          .daily-fact-highlight.neg {
+            color: #D14343;
           }
           .viz-card, .funnel-card, .top-pieces-card {
             background: rgba(255,255,255,0.72);
@@ -1350,6 +1403,25 @@ def apply_theme() -> None:
           .roas-good { color: #67b22d !important; font-weight: 800; }
           .roas-mid { color: #7a879d !important; font-weight: 800; }
           .top-pieces-footer { text-align: center; padding: 1rem; color: #7bcc35; font-size: 0.86rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+          @media (max-width: 960px) {
+            .daily-fact {
+              border-radius: 16px !important;
+              padding: 0.72rem 0.75rem !important;
+              gap: 0.58rem !important;
+            }
+            .daily-fact-icon {
+              width: 2.15rem;
+              height: 2.15rem;
+              border-radius: 12px;
+              font-size: 0.95rem;
+            }
+            .daily-fact .title {
+              font-size: 0.95rem;
+            }
+            .daily-fact .body {
+              font-size: 0.79rem;
+            }
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1433,28 +1505,57 @@ def render_daily_fact(df: pd.DataFrame, platform: str) -> None:
 
     cur_spend = float(cur_row[c["spend"]].sum())
     cur_impr = float(cur_row[c["impr"]].sum())
+    cur_clicks = float(cur_row[c["clicks"]].sum())
     cur_conv = float(cur_row[c["conv"]].sum())
     prev_spend = float(prev_row[c["spend"]].sum())
     prev_impr = float(prev_row[c["impr"]].sum())
+    prev_clicks = float(prev_row[c["clicks"]].sum())
     prev_conv = float(prev_row[c["conv"]].sum())
     cur_cpl = sdiv(cur_spend, cur_conv)
     prev_cpl = sdiv(prev_spend, prev_conv)
+    cur_cvr = sdiv(cur_conv, cur_clicks)
+    prev_cvr = sdiv(prev_conv, prev_clicks)
+    cur_ctr = sdiv(cur_clicks, cur_impr)
+    prev_ctr = sdiv(prev_clicks, prev_impr)
 
     d_impr = pct_delta(cur_impr, prev_impr)
+    d_clicks = pct_delta(cur_clicks, prev_clicks)
     d_conv = pct_delta(cur_conv, prev_conv)
     d_cpl = pct_delta(cur_cpl, prev_cpl)
+    d_cvr = pct_delta(cur_cvr, prev_cvr)
+    d_ctr = pct_delta(cur_ctr, prev_ctr)
 
-    if (d_conv or 0) >= 0:
-        conv_pct = abs(d_conv or 0.0)
+    def _pct_html(value: float | None, *, positive_good: bool = True) -> str:
+        v = float(value or 0.0)
+        cls = "daily-fact-highlight" if (v >= 0) == positive_good else "daily-fact-highlight neg"
+        sign = "+" if v >= 0 else ""
+        return f"<span class='{cls}'>{sign}{v:.1f}%</span>"
+
+    if (d_cvr or 0) >= 8 and (d_cpl or 0) <= -5:
         body = (
-            f"Yesterday's conversion rate increased by <b>{conv_pct:.1f}%</b> "
-            "due to optimized Meta bidding strategies across major retail campaigns."
+            f"Buen momentum: el CVR mejoró {_pct_html(d_cvr)} y el CPL cayó {_pct_html(d_cpl, positive_good=False)}. "
+            "Recomendación: subir entre 10% y 15% el presupuesto en campañas ganadoras y mantener creativos de alto rendimiento."
+        )
+    elif (d_cvr or 0) <= -8 and (d_cpl or 0) >= 8:
+        body = (
+            f"Señal de alerta: el CVR cayó {_pct_html(d_cvr)} y el CPL subió {_pct_html(d_cpl, positive_good=False)}. "
+            "Recomendación: pausar audiencias de baja intención, reforzar exclusiones y probar nuevas variantes de mensaje/oferta."
+        )
+    elif (d_impr or 0) >= 12 and (d_conv or 0) <= 2:
+        body = (
+            f"Hay más alcance ({_pct_html(d_impr)}) pero la conversión está plana ({_pct_html(d_conv)}). "
+            "Recomendación: optimizar segmentación y CTA para mejorar calidad de tráfico antes de seguir escalando inversión."
+        )
+    elif (d_ctr or 0) <= -7:
+        body = (
+            f"El CTR retrocedió {_pct_html(d_ctr)} y los clics variaron {_pct_html(d_clicks)}. "
+            "Recomendación: refrescar copys/creativos y revisar fatiga de anuncios en campañas con mayor frecuencia."
         )
     else:
-        conv_pct = abs(d_conv or 0.0)
         body = (
-            f"Yesterday's conversion rate decreased by <b>{conv_pct:.1f}%</b>. "
-            "Review audience segmentation and creative mix to recover performance."
+            f"Comportamiento estable: conversiones {_pct_html(d_conv)}, CPL {_pct_html(d_cpl, positive_good=False)} "
+            f"y gasto {_pct_html(pct_delta(cur_spend, prev_spend))}. "
+            "Recomendación: mantener presupuesto actual y priorizar tests A/B en audiencias y landings para ganar eficiencia incremental."
         )
 
     st.markdown(
@@ -1462,7 +1563,7 @@ def render_daily_fact(df: pd.DataFrame, platform: str) -> None:
         <div class="daily-fact">
           <div class="daily-fact-icon">✦</div>
           <div>
-            <div class="title">Daily Fact: AI Performance Insight</div>
+            <div class="title">Recomendación IA de Performance</div>
             <div class="body">{body}</div>
           </div>
         </div>
@@ -1697,6 +1798,53 @@ def _normalize_tenant_selection(raw_selected: Any) -> list[str]:
 
 def _widget_safe_key(value: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in str(value))
+
+
+def _safe_filename_part(raw: Any) -> str:
+    txt = str(raw or "").strip().lower()
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in txt)
+    cleaned = "_".join(part for part in cleaned.split("_") if part)
+    return cleaned or "tenant"
+
+
+def _save_uploaded_logo_file(uploaded: Any, scope_key: str) -> tuple[str | None, str | None]:
+    if uploaded is None:
+        return None, None
+    try:
+        raw = uploaded.getvalue()
+    except Exception:
+        raw = b""
+    if not raw:
+        return None, "El archivo de logo está vacío."
+
+    ext = Path(str(getattr(uploaded, "name", ""))).suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        ext = ".png"
+
+    scope_part = _safe_filename_part(scope_key)
+    digest_full = hashlib.sha1(raw).hexdigest()
+    digest = digest_full[:10]
+
+    try:
+        TENANT_LOGOS_DIR.mkdir(parents=True, exist_ok=True)
+        existing = sorted(
+            TENANT_LOGOS_DIR.glob(f"{scope_part}_*_{digest}{ext}"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if existing:
+            rel_existing = existing[0].relative_to(BASE_DIR).as_posix()
+            return rel_existing, None
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_name = f"{scope_part}_{stamp}_{digest}{ext}"
+        out_path = TENANT_LOGOS_DIR / file_name
+        out_path.write_bytes(raw)
+    except Exception as exc:
+        return None, f"No se pudo guardar el logo: {exc}"
+
+    rel_path = out_path.relative_to(BASE_DIR).as_posix()
+    return rel_path, None
 
 
 def _scope_map_for_user(user: dict[str, Any]) -> dict[str, str]:
@@ -2372,7 +2520,7 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
             raw_cfg.get("show_sidebar_meta_token_health", defaults_token_health),
             default=defaults_token_health,
         ),
-        "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo", defaults_tenant_logo)),
+        "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo")) or defaults_tenant_logo,
     }
 
 
@@ -3031,6 +3179,17 @@ def render_sidebar(
         st.session_state["active_tenant_id"] = tenant_ids[0]
     current_tenant_id = st.session_state.get("active_tenant_id", default_id)
     team_name = str(tenants.get(current_tenant_id, {}).get("name", "YAP Marketing"))
+    current_tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, current_tenant_id)
+    current_tenant_logo = _resolve_logo_image_source(
+        current_tenant_dash_cfg.get(
+            "tenant_logo",
+            tenants.get(current_tenant_id, {}).get("logo", ""),
+        )
+    )
+    try:
+        st.sidebar.image(current_tenant_logo, use_container_width=True)
+    except Exception:
+        st.sidebar.image(_resolve_logo_image_source(""), use_container_width=True)
     initial = user_name[:1].upper()
     st.sidebar.markdown(
         f"""
@@ -3214,22 +3373,15 @@ def render_top_filters(
         st.session_state["platform_filter_tenant_id"] = tenant_id
     wrapper_left, wrapper_right = st.columns([2.2, 1.8], gap="large")
     with wrapper_left:
-        logo_col, hero_col = st.columns([0.34, 1.66], gap="small")
-        with logo_col:
-            try:
-                st.image(tenant_logo_source, use_container_width=True)
-            except Exception:
-                st.image(_resolve_logo_image_source(""), use_container_width=True)
-        with hero_col:
-            st.markdown(
-                f"""
-                <div class='hero'>
-                  <div class='hero-kicker'>iPalmera IA Analítica</div>
-                  <div class='hero-sub'>{html.escape(tenant_name)} Marketing Performance</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+        st.markdown(
+            f"""
+            <div class='hero'>
+              <div class='hero-kicker'>iPalmera IA Analítica</div>
+              <div class='hero-sub'><span class='hero-tenant-name'>{html.escape(tenant_name)}</span> Marketing Performance</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     with wrapper_right:
         pcol, dcol = st.columns([1.65, 0.95], gap="small")
         with pcol:
@@ -5031,6 +5183,15 @@ def render_admin_panel(
             key=f"adm_dash_logo_{target_scope}",
             help="Ejemplo local: assets/logos/hyundai.png | Ejemplo URL: https://.../logo.png",
         )
+        logo_upload = st.file_uploader(
+            "Subir logo desde tu computador",
+            type=["png", "jpg", "jpeg", "webp"],
+            key=f"adm_dash_logo_upload_{target_scope}",
+            help="Al guardar, se almacenará en assets/logos y se actualizará la ruta automáticamente.",
+        )
+        if logo_upload is not None:
+            st.image(logo_upload, width=180)
+            st.caption(f"Archivo listo para guardar: {logo_upload.name}")
         show_sidebar_token = st.toggle(
             "Mostrar Meta Token Health en sidebar",
             value=default_token_health,
@@ -5068,7 +5229,13 @@ def render_admin_panel(
             selected_view_mode_norm = _normalize_view_mode_option(selected_view_mode)
             if selected_view_mode_norm not in enabled_view_modes_norm:
                 selected_view_mode_norm = enabled_view_modes_norm[0]
-            tenant_logo_norm = _normalize_logo_source(tenant_logo_input)
+            uploaded_logo_rel: str | None = None
+            if logo_upload is not None:
+                scope_for_file = "defaults" if target_scope == "__defaults__" else target_scope
+                uploaded_logo_rel, upload_err = _save_uploaded_logo_file(logo_upload, scope_for_file)
+                if upload_err:
+                    errors.append(upload_err)
+            tenant_logo_norm = _normalize_logo_source(uploaded_logo_rel or tenant_logo_input)
             if not overview_norm:
                 errors.append("Debes seleccionar al menos 1 KPI para Overview.")
             if not traffic_norm:
@@ -5125,7 +5292,10 @@ def render_admin_panel(
                             "tenant_logo": tenant_logo_norm,
                         },
                     )
-                    st.success("Variables de dashboard guardadas.")
+                    if uploaded_logo_rel:
+                        st.success(f"Variables de dashboard guardadas. Logo almacenado en: {uploaded_logo_rel}")
+                    else:
+                        st.success("Variables de dashboard guardadas.")
                     st.rerun()
 
         st.caption(f"Fuente: {DASHBOARD_SETTINGS_PATH.name} | Scope: {'defaults' if target_scope == '__defaults__' else target_scope}")
@@ -5192,7 +5362,9 @@ def main() -> None:
     tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
     desired_view_mode = _normalize_view_mode_option(tenant_dash_cfg.get("default_view_mode", "Overview"))
     last_view_tenant = str(st.session_state.get("sidebar_view_tenant_cfg", ""))
-    if last_view_tenant != tenant_id:
+    if not last_view_tenant:
+        st.session_state["sidebar_view_tenant_cfg"] = tenant_id
+    elif last_view_tenant != tenant_id:
         st.session_state["sidebar_view_tenant_cfg"] = tenant_id
         if str(st.session_state.get("sidebar_view_mode", "")) != desired_view_mode:
             st.session_state["sidebar_view_mode"] = desired_view_mode
