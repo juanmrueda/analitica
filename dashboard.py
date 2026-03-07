@@ -10,6 +10,7 @@ import secrets
 import shutil
 import textwrap
 from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
@@ -30,6 +32,9 @@ TENANT_LOGOS_DIR = BASE_DIR / "assets" / "logos"
 DEFAULT_TENANT_ID = "yap"
 LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
 LOGO_PLACEHOLDER = "https://via.placeholder.com/260x80/F8FAFC/0F172A?text=iPalmera+Logo"
+TENANT_LOGO_UPLOAD_WIDTH_PX = 520
+TENANT_LOGO_UPLOAD_HEIGHT_PX = 160
+SIDEBAR_LOGO_RENDER_WIDTH_PX = 228
 META_ACCOUNT_ID = "1808641036591815"
 GOOGLE_CUSTOMER_ID = "6495122409"
 GA4_GTC_SOLICITAR_CODIGO_EVENT = "form_gtc_otp_solicitar_codigo"
@@ -88,6 +93,11 @@ CAMPAIGN_FILTER_OPTIONS: dict[str, str] = {
     "bidding_strategy_type": "Google: Bidding Strategy",
 }
 ADMIN_SECTION_OPTIONS: dict[str, str] = {
+    "users": "Usuarios",
+    "dashboard": "Variables Dashboard",
+    "audit": "Auditoría",
+}
+ADMIN_SECTION_MENU_LABELS: dict[str, str] = {
     "users": "Usuarios",
     "dashboard": "Variables Dashboard",
     "audit": "Auditoría",
@@ -790,7 +800,22 @@ def apply_theme() -> None:
             backdrop-filter: blur(24px);
           }
           [data-testid="stSidebarContent"] {
-            padding: 1rem 0.8rem 0.85rem 0.8rem;
+            padding: 0.18rem 0.8rem 0.85rem 0.8rem;
+          }
+          [data-testid="stSidebar"] [data-testid="stImage"] {
+            display: flex;
+            justify-content: center;
+            margin: -0.22rem 0 0.62rem 0;
+          }
+          [data-testid="stSidebar"] [data-testid="stImage"] img {
+            width: 228px !important;
+            height: 70px !important;
+            object-fit: contain !important;
+            image-rendering: auto;
+          }
+          @keyframes sidebarAdminMenuIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
           }
           [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
           [data-testid="stSidebar"] label {
@@ -996,26 +1021,68 @@ def apply_theme() -> None:
           }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] {
             display: grid;
-            gap: 0.28rem;
-            margin-top: 0.2rem;
-            margin-bottom: 0.45rem;
+            gap: 0.08rem;
+            margin-top: 0.02rem;
+            margin-bottom: 0.52rem;
+            padding-left: 0.22rem;
+            animation: sidebarAdminMenuIn 0.24s ease;
           }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label {
-            border-radius: 12px;
-            border: 1px solid transparent;
-            padding: 0.58rem 0.62rem;
+            border-radius: 9px;
+            border: none !important;
+            background: transparent !important;
+            padding: 0.24rem 0.28rem !important;
             color: #4f617b !important;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             font-weight: 600;
+            display: flex !important;
+            align-items: center !important;
+            gap: 0.42rem;
           }
-          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
-            background: rgba(32,29,29,0.06);
-            color: #201D1D !important;
-            border-color: rgba(32,29,29,0.08);
-            font-weight: 700;
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label > div:first-child {
+            display: none !important;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label::before {
+            content: "";
+            width: 0.92rem;
+            height: 0.92rem;
+            border-radius: 0.26rem;
+            border: 1px solid rgba(77,98,127,0.46);
+            background: rgba(77,98,127,0.08);
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.62rem;
+            font-weight: 800;
+            color: #4d627f;
+            line-height: 1;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(1)::before { content: "U"; }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(2)::before { content: "D"; }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(3)::before { content: "A"; }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before {
+            color: #1F4D0A;
           }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label p {
             margin: 0 !important;
+            text-align: left !important;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label [data-testid="stMarkdownContainer"] {
+            width: 100%;
+            text-align: left !important;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
+            color: #1F4D0A !important;
+            font-weight: 800;
+            box-shadow: inset 2px 0 0 rgba(103,178,45,0.72);
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before {
+            border-color: rgba(103,178,45,0.78);
+            background: linear-gradient(180deg, rgba(123,204,53,0.33) 0%, rgba(123,204,53,0.24) 100%);
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:hover {
+            background: rgba(123,204,53,0.12) !important;
           }
           [data-testid="stSidebar"] [data-testid="stButton"] button {
             border-radius: 12px !important;
@@ -1027,6 +1094,21 @@ def apply_theme() -> None:
             justify-content: flex-start !important;
             padding-left: 0.78rem !important;
             padding-right: 0.78rem !important;
+          }
+          [data-testid="stSidebar"] [data-testid="stButton"] button > div {
+            width: 100%;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            gap: 0.48rem !important;
+          }
+          [data-testid="stSidebar"] [data-testid="stButton"] button p {
+            margin: 0 !important;
+            width: 100%;
+            text-align: left !important;
+          }
+          [data-testid="stSidebar"] [data-testid="stButton"] button svg {
+            flex: 0 0 auto;
           }
           [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
             background: linear-gradient(180deg, rgba(123,204,53,0.30) 0%, rgba(123,204,53,0.24) 100%) !important;
@@ -1817,6 +1899,22 @@ def _save_uploaded_logo_file(uploaded: Any, scope_key: str) -> tuple[str | None,
         raw = b""
     if not raw:
         return None, "El archivo de logo está vacío."
+
+    try:
+        img = Image.open(BytesIO(raw))
+        width_px, height_px = img.size
+        img.close()
+    except Exception:
+        return None, "No se pudo leer el archivo de logo. Usa un PNG/JPG/WebP válido."
+
+    if (width_px, height_px) != (TENANT_LOGO_UPLOAD_WIDTH_PX, TENANT_LOGO_UPLOAD_HEIGHT_PX):
+        return (
+            None,
+            (
+                f"El logo debe medir exactamente {TENANT_LOGO_UPLOAD_WIDTH_PX}x{TENANT_LOGO_UPLOAD_HEIGHT_PX}px. "
+                f"Recibido: {width_px}x{height_px}px."
+            ),
+        )
 
     ext = Path(str(getattr(uploaded, "name", ""))).suffix.lower()
     if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
@@ -3296,9 +3394,9 @@ def render_sidebar(
         )
     )
     try:
-        st.sidebar.image(current_tenant_logo, use_container_width=True)
+        st.sidebar.image(current_tenant_logo, width=SIDEBAR_LOGO_RENDER_WIDTH_PX)
     except Exception:
-        st.sidebar.image(_resolve_logo_image_source(""), use_container_width=True)
+        st.sidebar.image(_resolve_logo_image_source(""), width=SIDEBAR_LOGO_RENDER_WIDTH_PX)
     initial = user_name[:1].upper()
     st.sidebar.markdown(
         f"""
@@ -3330,6 +3428,12 @@ def render_sidebar(
     if "sidebar_view_mode" not in st.session_state:
         st.session_state["sidebar_view_mode"] = enabled_view_modes[0]
     view_mode = str(st.session_state.get("sidebar_view_mode", "Overview"))
+
+    def _set_view_mode(mode: str) -> None:
+        if str(st.session_state.get("sidebar_view_mode", "")) != mode:
+            st.session_state["sidebar_view_mode"] = mode
+            st.rerun()
+
     if view_mode == "Administración" and not is_admin_user:
         st.session_state["sidebar_view_mode"] = enabled_view_modes[0]
         view_mode = enabled_view_modes[0]
@@ -3343,8 +3447,7 @@ def render_sidebar(
         type="primary" if view_mode == "Overview" else "secondary",
         width="stretch",
     ):
-        st.session_state["sidebar_view_mode"] = "Overview"
-        view_mode = "Overview"
+        _set_view_mode("Overview")
     if "Tráfico y Adquisición" in enabled_view_modes and st.sidebar.button(
         "Tráfico y Adquisición",
         key="nav_traffic_btn",
@@ -3352,8 +3455,7 @@ def render_sidebar(
         type="primary" if view_mode == "Tráfico y Adquisición" else "secondary",
         width="stretch",
     ):
-        st.session_state["sidebar_view_mode"] = "Tráfico y Adquisición"
-        view_mode = "Tráfico y Adquisición"
+        _set_view_mode("Tráfico y Adquisición")
     if is_admin_user and st.sidebar.button(
         "Administración",
         key="nav_admin_btn",
@@ -3361,23 +3463,26 @@ def render_sidebar(
         type="primary" if view_mode == "Administración" else "secondary",
         width="stretch",
     ):
-        st.session_state["sidebar_view_mode"] = "Administración"
-        view_mode = "Administración"
+        _set_view_mode("Administración")
     admin_section = str(st.session_state.get("admin_panel_section", "users")).strip().lower() or "users"
     if admin_section not in ADMIN_SECTION_OPTIONS:
         admin_section = "users"
         st.session_state["admin_panel_section"] = admin_section
     if is_admin_user and view_mode == "Administración":
-        st.sidebar.markdown("<div class='sidebar-kicker'>Menú Admin</div>", unsafe_allow_html=True)
-        for section_key, section_label in ADMIN_SECTION_OPTIONS.items():
-            if st.sidebar.button(
-                section_label,
-                key=f"nav_admin_section_{section_key}",
-                type="primary" if admin_section == section_key else "secondary",
-                width="stretch",
-            ):
-                admin_section = section_key
-                st.session_state["admin_panel_section"] = section_key
+        admin_options = list(ADMIN_SECTION_OPTIONS.keys())
+        admin_selected = st.sidebar.radio(
+            "Admin Section",
+            options=admin_options,
+            index=admin_options.index(admin_section) if admin_section in admin_options else 0,
+            key="admin_panel_section",
+            format_func=lambda key: ADMIN_SECTION_MENU_LABELS.get(key, key),
+            label_visibility="collapsed",
+        )
+        admin_section = str(admin_selected).strip().lower() or "users"
+    return tenant_id, view_mode, admin_section
+
+
+def render_sidebar_logout_button() -> None:
     st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
     if st.sidebar.button("Logout", key="sidebar_logout_btn", width="stretch"):
         for k in (
@@ -3394,7 +3499,6 @@ def render_sidebar(
         ):
             st.session_state.pop(k, None)
         st.rerun()
-    return tenant_id, view_mode, admin_section
 
 
 def render_sidebar_meta_token_health(report: dict[str, Any]) -> None:
@@ -5294,17 +5398,26 @@ def render_admin_panel(
             "Logo tenant (ruta local o URL)",
             value=default_tenant_logo,
             key=f"adm_dash_logo_{target_scope}",
-            help="Ejemplo local: assets/logos/hyundai.png | Ejemplo URL: https://.../logo.png",
+            help=(
+                f"Ejemplo local: assets/logos/hyundai.png | URL: https://.../logo.png | "
+                f"Si subes archivo, usa {TENANT_LOGO_UPLOAD_WIDTH_PX}x{TENANT_LOGO_UPLOAD_HEIGHT_PX}px."
+            ),
         )
         logo_upload = st.file_uploader(
             "Subir logo desde tu computador",
             type=["png", "jpg", "jpeg", "webp"],
             key=f"adm_dash_logo_upload_{target_scope}",
-            help="Al guardar, se almacenará en assets/logos y se actualizará la ruta automáticamente.",
+            help=(
+                f"Tamaño obligatorio: {TENANT_LOGO_UPLOAD_WIDTH_PX}x{TENANT_LOGO_UPLOAD_HEIGHT_PX}px. "
+                "Al guardar, se almacenará en assets/logos y se actualizará la ruta automáticamente."
+            ),
         )
         if logo_upload is not None:
-            st.image(logo_upload, width=180)
-            st.caption(f"Archivo listo para guardar: {logo_upload.name}")
+            st.image(logo_upload, width=260)
+            st.caption(
+                f"Archivo listo para guardar: {logo_upload.name} | "
+                f"Formato esperado: {TENANT_LOGO_UPLOAD_WIDTH_PX}x{TENANT_LOGO_UPLOAD_HEIGHT_PX}px"
+            )
         show_sidebar_token = st.toggle(
             "Mostrar Meta Token Health en sidebar",
             value=default_token_health,
@@ -5528,6 +5641,15 @@ def main() -> None:
         if not _auth_user_is_admin(auth_user):
             st.error("Tu usuario no tiene permiso para Administración.")
             st.stop()
+        admin_report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
+        if _coerce_bool(tenant_dash_cfg.get("show_sidebar_meta_token_health", True), default=True):
+            try:
+                admin_report = load_report(admin_report_path)
+            except Exception:
+                admin_report = {}
+            if isinstance(admin_report, dict):
+                render_sidebar_meta_token_health(admin_report)
+        render_sidebar_logout_button()
         render_admin_panel(users, tenants, auth_user, dashboard_settings, admin_section)
         st.caption(
             f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | "
@@ -5658,6 +5780,7 @@ def main() -> None:
 
     if _coerce_bool(tenant_dash_cfg.get("show_sidebar_meta_token_health", True), default=True):
         render_sidebar_meta_token_health(report)
+    render_sidebar_logout_button()
 
     st.caption(
         f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | Plataforma: {platform} | "
