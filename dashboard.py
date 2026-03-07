@@ -4857,6 +4857,10 @@ def render_admin_panel(
             selected_defaults = _normalize_tenant_selection(list(existing_scope_map.keys()))
             if not selected_defaults:
                 selected_defaults = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+            tenant_options_set = set(tenant_options)
+            selected_defaults = [tenant_id for tenant_id in selected_defaults if tenant_id in tenant_options_set]
+            if not selected_defaults and existing_global_role == "admin":
+                selected_defaults = ["*"]
 
             col_left, col_right = st.columns(2)
             with col_left:
