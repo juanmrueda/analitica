@@ -1061,7 +1061,9 @@ def apply_theme() -> None:
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(1)::before { content: "U"; }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(2)::before { content: "D"; }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(3)::before { content: "A"; }
-          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before {
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"]::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked)::before {
             color: #1F4D0A;
           }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label p {
@@ -1072,12 +1074,27 @@ def apply_theme() -> None:
             width: 100%;
             text-align: left !important;
           }
-          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] {
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked) {
             color: #1F4D0A !important;
-            font-weight: 800;
+            font-weight: 800 !important;
+            background: rgba(123,204,53,0.16) !important;
+            border-radius: 8px !important;
             box-shadow: inset 2px 0 0 rgba(103,178,45,0.72);
           }
-          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before {
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"] [data-testid="stMarkdownContainer"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked) [data-testid="stMarkdownContainer"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] *,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"] [data-testid="stMarkdownContainer"] *,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked) [data-testid="stMarkdownContainer"] * {
+            font-weight: 800 !important;
+            color: #1F4D0A !important;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"]::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked)::before {
             border-color: rgba(103,178,45,0.78);
             background: linear-gradient(180deg, rgba(123,204,53,0.33) 0%, rgba(123,204,53,0.24) 100%);
           }
@@ -3479,12 +3496,51 @@ def render_sidebar(
             label_visibility="collapsed",
         )
         admin_section = str(admin_selected).strip().lower() or "users"
+        _inject_sidebar_admin_active_state_style(admin_section)
     return tenant_id, view_mode, admin_section
+
+
+def _inject_sidebar_admin_active_state_style(active_section: str) -> None:
+    admin_options = list(ADMIN_SECTION_OPTIONS.keys())
+    try:
+        active_idx = admin_options.index(active_section) + 1
+    except Exception:
+        active_idx = 1
+
+    css = textwrap.dedent(
+        """
+        <style>
+          /* Stable active state for admin submenu across Streamlit DOM versions. */
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__),
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label {
+            color: #1F4D0A !important;
+            font-weight: 800 !important;
+            background: rgba(123,204,53,0.18) !important;
+            border-radius: 8px !important;
+            box-shadow: inset 2px 0 0 rgba(103,178,45,0.76);
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__)::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label::before {
+            color: #1F4D0A !important;
+            border-color: rgba(103,178,45,0.82) !important;
+            background: linear-gradient(180deg, rgba(123,204,53,0.35) 0%, rgba(123,204,53,0.24) 100%) !important;
+          }
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__) [data-testid="stMarkdownContainer"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__) [data-testid="stMarkdownContainer"] *,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label [data-testid="stMarkdownContainer"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label [data-testid="stMarkdownContainer"] * {
+            color: #1F4D0A !important;
+            font-weight: 800 !important;
+          }
+        </style>
+        """
+    ).replace("__ACTIVE_IDX__", str(active_idx))
+    st.markdown(css, unsafe_allow_html=True)
 
 
 def render_sidebar_logout_button() -> None:
     st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
-    if st.sidebar.button("Logout", key="sidebar_logout_btn", width="stretch"):
+    if st.sidebar.button("Logout", key="sidebar_logout_btn", icon=":material/logout:", width="stretch"):
         for k in (
             "auth_user",
             "sidebar_view_mode",
@@ -4915,42 +4971,43 @@ def render_admin_panel(
     if not USERS_CONFIG_PATH.exists():
         st.warning("No existe config/users.json todavía. Puedes crearlo desde este panel.")
 
-    total_users = len(users)
-    active_users = sum(1 for u in users.values() if bool(u.get("enabled", True)))
-    enabled_admins = _enabled_admin_count(users)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Usuarios", f"{total_users}")
-    m2.metric("Activos", f"{active_users}")
-    m3.metric("Admins activos", f"{enabled_admins}")
+    if admin_section == "users":
+        total_users = len(users)
+        active_users = sum(1 for u in users.values() if bool(u.get("enabled", True)))
+        enabled_admins = _enabled_admin_count(users)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Usuarios", f"{total_users}")
+        m2.metric("Activos", f"{active_users}")
+        m3.metric("Admins activos", f"{enabled_admins}")
 
-    rows: list[dict[str, Any]] = []
-    for username in sorted(users.keys()):
-        user = users.get(username, {})
-        role = str(user.get("role", "viewer")).strip().lower() or "viewer"
-        global_role = str(user.get("global_role", "user")).strip().lower() or "user"
-        scope_map = _scope_map_for_user(user)
-        labels: list[str] = []
-        for tenant_id in sorted(scope_map.keys()):
-            tenant_role = scope_map.get(tenant_id, role)
-            if tenant_id == "*":
-                labels.append(f"Todos (*):{tenant_role}")
-            else:
-                tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
-                labels.append(f"{tenant_name}:{tenant_role}")
-        rows.append(
-            {
-                "Usuario": str(user.get("username", username)),
-                "Nombre": str(user.get("name", "")),
-                "Global Role": global_role,
-                "Role (legacy)": role,
-                "Activo": bool(user.get("enabled", True)),
-                "Scopes por tenant": " | ".join(labels) if labels else "Sin scope",
-            }
-        )
-    if rows:
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-    else:
-        st.info("No hay usuarios cargados en config/users.json.")
+        rows: list[dict[str, Any]] = []
+        for username in sorted(users.keys()):
+            user = users.get(username, {})
+            role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+            global_role = str(user.get("global_role", "user")).strip().lower() or "user"
+            scope_map = _scope_map_for_user(user)
+            labels: list[str] = []
+            for tenant_id in sorted(scope_map.keys()):
+                tenant_role = scope_map.get(tenant_id, role)
+                if tenant_id == "*":
+                    labels.append(f"Todos (*):{tenant_role}")
+                else:
+                    tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
+                    labels.append(f"{tenant_name}:{tenant_role}")
+            rows.append(
+                {
+                    "Usuario": str(user.get("username", username)),
+                    "Nombre": str(user.get("name", "")),
+                    "Global Role": global_role,
+                    "Role (legacy)": role,
+                    "Activo": bool(user.get("enabled", True)),
+                    "Scopes por tenant": " | ".join(labels) if labels else "Sin scope",
+                }
+            )
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        else:
+            st.info("No hay usuarios cargados en config/users.json.")
 
     tenant_options = ["*"] + sorted(tenants.keys())
     role_options = ["viewer", "editor", "admin"]
