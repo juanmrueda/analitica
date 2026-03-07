@@ -42,6 +42,16 @@ TENANTS_CONFIG_PATH = ROOT_DIR / "config" / "tenants.json"
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_historical.json"
 DEFAULT_ORGANIC_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_organic_historical.json"
 DEFAULT_ORGANIC_LOOKBACK_DAYS = 30
+META_LEAD_ACTION_PRIORITY = (
+    "onsite_conversion.lead_grouped",
+    "lead",
+    "onsite_conversion.lead",
+    "onsite_web_lead",
+    "offsite_complete_registration_add_meta_leads",
+    "offsite_conversion.fb_pixel_lead",
+    "offsite_search_add_meta_leads",
+    "offsite_content_view_add_meta_leads",
+)
 
 
 def _redact_sensitive_text(value: Any) -> str:
@@ -207,6 +217,23 @@ def _safe_float(value: Any) -> float:
     if isinstance(value, str):
         value = value.strip().replace(",", "")
     return float(value)
+
+
+def _clean_enum(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    up = text.upper()
+    if up in {"UNSPECIFIED", "UNKNOWN", "UNAVAILABLE"}:
+        return ""
+    return up
+
+
+def _chunk_list(values: List[str], size: int) -> Iterable[List[str]]:
+    if size <= 0:
+        size = 1
+    for idx in range(0, len(values), size):
+        yield values[idx : idx + size]
 
 
 def _safe_int(value: Any) -> int:
@@ -1149,7 +1176,64 @@ def _fetch_meta_campaign_range(
                     }
                 )
             next_url = data.get("paging", {}).get("next")
+    campaign_ids = [
+        str(row.get("campaign_id", "")).strip()
+        for row in out
+        if str(row.get("campaign_id", "")).strip()
+    ]
+    objective_by_campaign = _fetch_meta_campaign_objectives(meta_token, campaign_ids)
+    for row in out:
+        campaign_id = str(row.get("campaign_id", "")).strip()
+        objective = str(objective_by_campaign.get(campaign_id, "")).strip()
+        row["objective"] = objective
+        row["campaign_goal"] = objective
     return out
+
+
+def _fetch_meta_campaign_objectives(
+    meta_token: str,
+    campaign_ids: List[str],
+) -> Dict[str, str]:
+    uniq_ids: List[str] = []
+    seen: set[str] = set()
+    for raw_id in campaign_ids:
+        cid = str(raw_id or "").strip()
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        uniq_ids.append(cid)
+    if not uniq_ids:
+        return {}
+
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/"
+    objective_by_campaign: Dict[str, str] = {}
+    for batch_ids in _chunk_list(uniq_ids, 40):
+        params = {
+            "ids": ",".join(batch_ids),
+            "fields": "objective",
+            "access_token": meta_token,
+        }
+        batch_url = f"{endpoint}?{urlencode(params)}"
+        try:
+            data = _http_json("GET", batch_url)
+        except Exception as exc:
+            print(
+                f"[warn] Could not read Meta campaign objectives for batch "
+                f"{batch_ids[:3]}... ({len(batch_ids)} ids): {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        if not isinstance(data, dict):
+            continue
+        for campaign_id in batch_ids:
+            raw = data.get(campaign_id, {})
+            if not isinstance(raw, dict):
+                continue
+            objective = str(raw.get("objective", "")).strip()
+            if objective:
+                objective_by_campaign[campaign_id] = objective
+    return objective_by_campaign
 
 
 def _normalize_paid_device(raw: Any) -> str:
@@ -1166,6 +1250,173 @@ def _normalize_paid_device(raw: Any) -> str:
     ):
         return "Mobile"
     return "Other"
+
+
+def _meta_lead_value(row: Dict[str, Any]) -> float:
+    action_map = _meta_actions_to_map(row.get("actions"))
+    for key in META_LEAD_ACTION_PRIORITY:
+        val = _safe_float(action_map.get(key))
+        if val > 0:
+            return val
+    return 0.0
+
+
+def _normalize_age_range(raw: Any) -> str:
+    txt = str(raw or "").strip()
+    if not txt:
+        return "Unknown"
+    up = txt.upper().replace("AGE_RANGE_", "")
+    mapped = {
+        "18_24": "18-24",
+        "18-24": "18-24",
+        "25_34": "25-34",
+        "25-34": "25-34",
+        "35_44": "35-44",
+        "35-44": "35-44",
+        "45_54": "45-54",
+        "45-54": "45-54",
+        "55_64": "55-64",
+        "55-64": "55-64",
+        "65_UP": "65+",
+        "65+": "65+",
+        "UNKNOWN": "Unknown",
+        "UNDETERMINED": "Unknown",
+    }.get(up)
+    return mapped if mapped else txt
+
+
+def _normalize_gender(raw: Any) -> str:
+    txt = str(raw or "").strip().lower()
+    if txt in ("female", "f"):
+        return "Female"
+    if txt in ("male", "m"):
+        return "Male"
+    return "Unknown"
+
+
+def _fetch_meta_lead_demographics_range(
+    meta_token: str,
+    ad_account_id: str,
+    start_day: date,
+    end_day: date,
+) -> List[Dict[str, Any]]:
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ad_account_id}/insights"
+    acc: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 30):
+        params = {
+            "fields": "date_start,spend,impressions,clicks,actions",
+            "level": "account",
+            "breakdowns": "age,gender",
+            "time_increment": "1",
+            "time_range": json.dumps(
+                {"since": chunk_start.isoformat(), "until": chunk_end.isoformat()}
+            ),
+            "access_token": meta_token,
+        }
+        next_url = f"{endpoint}?{urlencode(params)}"
+        while next_url:
+            data = _http_json("GET", next_url)
+            rows = data.get("data", [])
+            for row in rows:
+                day = str(row.get("date_start", "")).strip()
+                if not day:
+                    continue
+                leads = _meta_lead_value(row)
+                age_range = _normalize_age_range(row.get("age"))
+                gender = _normalize_gender(row.get("gender"))
+                key = (day, "Meta", age_range, gender)
+                bucket = acc.setdefault(
+                    key,
+                    {
+                        "date": day,
+                        "platform": "Meta",
+                        "breakdown": "age_gender",
+                        "age_range": age_range,
+                        "gender": gender,
+                        "spend": 0.0,
+                        "impressions": 0.0,
+                        "clicks": 0.0,
+                        "leads": 0.0,
+                    },
+                )
+                bucket["spend"] += _safe_float(row.get("spend"))
+                bucket["impressions"] += _safe_float(row.get("impressions"))
+                bucket["clicks"] += _safe_float(row.get("clicks"))
+                bucket["leads"] += leads
+            next_url = data.get("paging", {}).get("next")
+    out = list(acc.values())
+    out.sort(
+        key=lambda r: (
+            str(r.get("date", "")),
+            str(r.get("platform", "")),
+            str(r.get("age_range", "")),
+            str(r.get("gender", "")),
+        )
+    )
+    return out
+
+
+def _fetch_meta_lead_geo_range(
+    meta_token: str,
+    ad_account_id: str,
+    start_day: date,
+    end_day: date,
+) -> List[Dict[str, Any]]:
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ad_account_id}/insights"
+    acc: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 30):
+        params = {
+            "fields": "date_start,spend,impressions,clicks,actions",
+            "level": "account",
+            "breakdowns": "country,region",
+            "time_increment": "1",
+            "time_range": json.dumps(
+                {"since": chunk_start.isoformat(), "until": chunk_end.isoformat()}
+            ),
+            "access_token": meta_token,
+        }
+        next_url = f"{endpoint}?{urlencode(params)}"
+        while next_url:
+            data = _http_json("GET", next_url)
+            rows = data.get("data", [])
+            for row in rows:
+                day = str(row.get("date_start", "")).strip()
+                if not day:
+                    continue
+                leads = _meta_lead_value(row)
+                country_code = str(row.get("country", "")).strip().upper()
+                region = str(row.get("region", "")).strip() or "Unknown"
+                key = (day, "Meta", country_code, region)
+                bucket = acc.setdefault(
+                    key,
+                    {
+                        "date": day,
+                        "platform": "Meta",
+                        "country_code": country_code,
+                        "region": region,
+                        "spend": 0.0,
+                        "impressions": 0.0,
+                        "clicks": 0.0,
+                        "leads": 0.0,
+                    },
+                )
+                bucket["spend"] += _safe_float(row.get("spend"))
+                bucket["impressions"] += _safe_float(row.get("impressions"))
+                bucket["clicks"] += _safe_float(row.get("clicks"))
+                bucket["leads"] += leads
+            next_url = data.get("paging", {}).get("next")
+    out = list(acc.values())
+    out.sort(
+        key=lambda r: (
+            str(r.get("date", "")),
+            str(r.get("platform", "")),
+            str(r.get("country_code", "")),
+            str(r.get("region", "")),
+        )
+    )
+    return out
 
 
 def _fetch_meta_device_range(
@@ -1355,7 +1606,9 @@ def _fetch_google_campaign_range(
         f"{customer_id}/googleAds:searchStream"
     )
     query = (
-        "SELECT segments.date, campaign.id, campaign.name, metrics.cost_micros, "
+        "SELECT segments.date, campaign.id, campaign.name, "
+        "campaign.advertising_channel_type, campaign.advertising_channel_sub_type, "
+        "campaign.bidding_strategy_type, metrics.cost_micros, "
         "metrics.impressions, metrics.clicks, metrics.ctr, metrics.average_cpc, "
         "metrics.conversions "
         "FROM campaign "
@@ -1384,11 +1637,23 @@ def _fetch_google_campaign_range(
                 continue
             cost_micros = _safe_float(metrics.get("costMicros"))
             avg_cpc_micros = _safe_float(metrics.get("averageCpc"))
+            advertising_channel_type = _clean_enum(campaign.get("advertisingChannelType"))
+            advertising_channel_sub_type = _clean_enum(campaign.get("advertisingChannelSubType"))
+            bidding_strategy_type = _clean_enum(campaign.get("biddingStrategyType"))
+            campaign_goal = (
+                advertising_channel_sub_type
+                or advertising_channel_type
+                or bidding_strategy_type
+            )
             out.append(
                 {
                     "date": day,
                     "campaign_id": str(campaign.get("id", "")),
                     "campaign_name": str(campaign.get("name", "")),
+                    "advertising_channel_type": advertising_channel_type,
+                    "advertising_channel_sub_type": advertising_channel_sub_type,
+                    "bidding_strategy_type": bidding_strategy_type,
+                    "campaign_goal": campaign_goal,
                     "cost_micros": cost_micros,
                     "cost": cost_micros / 1_000_000.0,
                     "impressions": _safe_float(metrics.get("impressions")),
@@ -1399,6 +1664,310 @@ def _fetch_google_campaign_range(
                     "conversions": _safe_float(metrics.get("conversions")),
                 }
             )
+    return out
+
+
+def _geo_target_constant_id(raw_value: Any) -> str:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("geoTargetConstants/"):
+        return raw.split("/", 1)[1].strip()
+    if raw.isdigit():
+        return raw
+    match = re.search(r"(\d+)$", raw)
+    return match.group(1) if match else ""
+
+
+def _fetch_google_geo_target_constant_map(
+    *,
+    access_token: str,
+    developer_token: str,
+    customer_id: str,
+    login_customer_id: str,
+    quota_project: str | None,
+    criterion_ids: List[str],
+) -> Dict[str, Dict[str, str]]:
+    uniq_ids: List[str] = []
+    seen: set[str] = set()
+    for raw_id in criterion_ids:
+        cid = _geo_target_constant_id(raw_id)
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        uniq_ids.append(cid)
+    if not uniq_ids:
+        return {}
+
+    endpoint = (
+        f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
+        f"{customer_id}/googleAds:searchStream"
+    )
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": login_customer_id,
+    }
+    if quota_project:
+        headers["x-goog-user-project"] = quota_project
+
+    out: Dict[str, Dict[str, str]] = {}
+    for batch in _chunk_list(uniq_ids, 200):
+        ids_sql = ", ".join(batch)
+        query = (
+            "SELECT geo_target_constant.id, geo_target_constant.name, "
+            "geo_target_constant.country_code, geo_target_constant.target_type "
+            "FROM geo_target_constant "
+            f"WHERE geo_target_constant.id IN ({ids_sql})"
+        )
+        data = _http_json("POST", endpoint, headers=headers, json_body={"query": query})
+        chunks = data if isinstance(data, list) else [data]
+        for chunk in chunks:
+            for row in chunk.get("results", []):
+                geo = row.get("geoTargetConstant", {})
+                cid = _geo_target_constant_id(geo.get("id"))
+                if not cid:
+                    continue
+                out[cid] = {
+                    "name": str(geo.get("name", "")).strip(),
+                    "country_code": str(geo.get("countryCode", "")).strip().upper(),
+                    "target_type": _clean_enum(geo.get("targetType")),
+                }
+    return out
+
+
+def _fetch_google_lead_demographics_range(
+    *,
+    access_token: str,
+    developer_token: str,
+    customer_id: str,
+    login_customer_id: str,
+    quota_project: str | None,
+    start_day: date,
+    end_day: date,
+) -> List[Dict[str, Any]]:
+    endpoint = (
+        f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
+        f"{customer_id}/googleAds:searchStream"
+    )
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": login_customer_id,
+    }
+    if quota_project:
+        headers["x-goog-user-project"] = quota_project
+
+    acc: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
+
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
+        age_query = (
+            "SELECT segments.date, ad_group_criterion.age_range.type, "
+            "metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions "
+            "FROM age_range_view "
+            f"WHERE segments.date BETWEEN '{chunk_start.isoformat()}' AND '{chunk_end.isoformat()}' "
+            "ORDER BY segments.date, ad_group_criterion.age_range.type"
+        )
+        age_data = _http_json("POST", endpoint, headers=headers, json_body={"query": age_query})
+        age_chunks = age_data if isinstance(age_data, list) else [age_data]
+        for chunk in age_chunks:
+            for row in chunk.get("results", []):
+                segments = row.get("segments", {})
+                metrics = row.get("metrics", {})
+                criterion = row.get("adGroupCriterion", {})
+                age_range = _normalize_age_range(
+                    criterion.get("ageRange", {}).get("type")
+                )
+                day = str(segments.get("date", "")).strip()
+                if not day:
+                    continue
+                key = (day, "Google", "age", age_range, "All")
+                bucket = acc.setdefault(
+                    key,
+                    {
+                        "date": day,
+                        "platform": "Google",
+                        "breakdown": "age",
+                        "age_range": age_range,
+                        "gender": "All",
+                        "spend": 0.0,
+                        "impressions": 0.0,
+                        "clicks": 0.0,
+                        "leads": 0.0,
+                    },
+                )
+                bucket["spend"] += _safe_float(metrics.get("costMicros")) / 1_000_000.0
+                bucket["impressions"] += _safe_float(metrics.get("impressions"))
+                bucket["clicks"] += _safe_float(metrics.get("clicks"))
+                bucket["leads"] += _safe_float(metrics.get("conversions"))
+
+        gender_query = (
+            "SELECT segments.date, ad_group_criterion.gender.type, "
+            "metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions "
+            "FROM gender_view "
+            f"WHERE segments.date BETWEEN '{chunk_start.isoformat()}' AND '{chunk_end.isoformat()}' "
+            "ORDER BY segments.date, ad_group_criterion.gender.type"
+        )
+        gender_data = _http_json("POST", endpoint, headers=headers, json_body={"query": gender_query})
+        gender_chunks = gender_data if isinstance(gender_data, list) else [gender_data]
+        for chunk in gender_chunks:
+            for row in chunk.get("results", []):
+                segments = row.get("segments", {})
+                metrics = row.get("metrics", {})
+                criterion = row.get("adGroupCriterion", {})
+                gender = _normalize_gender(
+                    criterion.get("gender", {}).get("type")
+                )
+                day = str(segments.get("date", "")).strip()
+                if not day:
+                    continue
+                key = (day, "Google", "gender", "All", gender)
+                bucket = acc.setdefault(
+                    key,
+                    {
+                        "date": day,
+                        "platform": "Google",
+                        "breakdown": "gender",
+                        "age_range": "All",
+                        "gender": gender,
+                        "spend": 0.0,
+                        "impressions": 0.0,
+                        "clicks": 0.0,
+                        "leads": 0.0,
+                    },
+                )
+                bucket["spend"] += _safe_float(metrics.get("costMicros")) / 1_000_000.0
+                bucket["impressions"] += _safe_float(metrics.get("impressions"))
+                bucket["clicks"] += _safe_float(metrics.get("clicks"))
+                bucket["leads"] += _safe_float(metrics.get("conversions"))
+
+    out = list(acc.values())
+    out.sort(
+        key=lambda r: (
+            str(r.get("date", "")),
+            str(r.get("platform", "")),
+            str(r.get("breakdown", "")),
+            str(r.get("age_range", "")),
+            str(r.get("gender", "")),
+        )
+    )
+    return out
+
+
+def _fetch_google_lead_geo_range(
+    *,
+    access_token: str,
+    developer_token: str,
+    customer_id: str,
+    login_customer_id: str,
+    quota_project: str | None,
+    start_day: date,
+    end_day: date,
+) -> List[Dict[str, Any]]:
+    endpoint = (
+        f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
+        f"{customer_id}/googleAds:searchStream"
+    )
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": login_customer_id,
+    }
+    if quota_project:
+        headers["x-goog-user-project"] = quota_project
+
+    raw_rows: List[Dict[str, Any]] = []
+    criterion_ids: set[str] = set()
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
+        query = (
+            "SELECT segments.date, geographic_view.country_criterion_id, "
+            "segments.geo_target_region, metrics.cost_micros, metrics.impressions, "
+            "metrics.clicks, metrics.conversions "
+            "FROM geographic_view "
+            f"WHERE segments.date BETWEEN '{chunk_start.isoformat()}' AND '{chunk_end.isoformat()}' "
+            "AND geographic_view.location_type = LOCATION_OF_PRESENCE "
+            "ORDER BY segments.date, geographic_view.country_criterion_id, segments.geo_target_region"
+        )
+        data = _http_json("POST", endpoint, headers=headers, json_body={"query": query})
+        chunks = data if isinstance(data, list) else [data]
+        for chunk in chunks:
+            for row in chunk.get("results", []):
+                segments = row.get("segments", {})
+                metrics = row.get("metrics", {})
+                geo_view = row.get("geographicView", {})
+                day = str(segments.get("date", "")).strip()
+                if not day:
+                    continue
+                country_id = _geo_target_constant_id(geo_view.get("countryCriterionId"))
+                region_id = _geo_target_constant_id(segments.get("geoTargetRegion"))
+                if country_id:
+                    criterion_ids.add(country_id)
+                if region_id:
+                    criterion_ids.add(region_id)
+                raw_rows.append(
+                    {
+                        "date": day,
+                        "country_id": country_id,
+                        "region_id": region_id,
+                        "spend": _safe_float(metrics.get("costMicros")) / 1_000_000.0,
+                        "impressions": _safe_float(metrics.get("impressions")),
+                        "clicks": _safe_float(metrics.get("clicks")),
+                        "leads": _safe_float(metrics.get("conversions")),
+                    }
+                )
+
+    geo_lookup = _fetch_google_geo_target_constant_map(
+        access_token=access_token,
+        developer_token=developer_token,
+        customer_id=customer_id,
+        login_customer_id=login_customer_id,
+        quota_project=quota_project,
+        criterion_ids=sorted(criterion_ids),
+    )
+
+    acc: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+    for row in raw_rows:
+        country_id = str(row.get("country_id", "")).strip()
+        region_id = str(row.get("region_id", "")).strip()
+        country_meta = geo_lookup.get(country_id, {})
+        region_meta = geo_lookup.get(region_id, {})
+
+        country_code = str(country_meta.get("country_code", "")).strip().upper()
+        if not country_code:
+            country_code = f"ID:{country_id}" if country_id else "Unknown"
+        country_name = str(country_meta.get("name", "")).strip()
+        region = str(region_meta.get("name", "")).strip() or "Unknown"
+
+        day = str(row.get("date", "")).strip()
+        key = (day, "Google", country_code, region)
+        bucket = acc.setdefault(
+            key,
+            {
+                "date": day,
+                "platform": "Google",
+                "country_code": country_code,
+                "country_name": country_name,
+                "region": region,
+                "spend": 0.0,
+                "impressions": 0.0,
+                "clicks": 0.0,
+                "leads": 0.0,
+            },
+        )
+        bucket["spend"] += _safe_float(row.get("spend"))
+        bucket["impressions"] += _safe_float(row.get("impressions"))
+        bucket["clicks"] += _safe_float(row.get("clicks"))
+        bucket["leads"] += _safe_float(row.get("leads"))
+
+    out = list(acc.values())
+    out.sort(
+        key=lambda r: (
+            str(r.get("date", "")),
+            str(r.get("platform", "")),
+            str(r.get("country_code", "")),
+            str(r.get("region", "")),
+        )
+    )
     return out
 
 
@@ -1853,7 +2422,7 @@ def _merge_breakdown_rows(
         dedup[key] = row
 
     out = list(dedup.values())
-    out.sort(key=lambda r: tuple(r.get(f) for f in key_fields))
+    out.sort(key=lambda r: tuple(str(r.get(f, "")) for f in key_fields))
     return out
 
 
@@ -2093,6 +2662,12 @@ def main() -> int:
     meta_device_daily = _fetch_meta_device_range(
         str(meta_token), meta_ad_account_id, start_day, end_day
     )
+    meta_lead_demographics_daily = _fetch_meta_lead_demographics_range(
+        str(meta_token), meta_ad_account_id, start_day, end_day
+    )
+    meta_lead_geo_daily = _fetch_meta_lead_geo_range(
+        str(meta_token), meta_ad_account_id, start_day, end_day
+    )
     meta_token_status = _fetch_meta_token_status(str(meta_token), meta_app_id, meta_app_secret)
 
     google_ads_access_token = _google_access_token(
@@ -2117,6 +2692,24 @@ def main() -> int:
         end_day=end_day,
     )
     google_device_daily = _fetch_google_device_range(
+        access_token=google_ads_access_token,
+        developer_token=str(ga_developer_token),
+        customer_id=tenant_google_ads_customer_id,
+        login_customer_id=str(ga_login_customer_id),
+        quota_project=str(ga_quota_project) if ga_quota_project else None,
+        start_day=start_day,
+        end_day=end_day,
+    )
+    google_lead_demographics_daily = _fetch_google_lead_demographics_range(
+        access_token=google_ads_access_token,
+        developer_token=str(ga_developer_token),
+        customer_id=tenant_google_ads_customer_id,
+        login_customer_id=str(ga_login_customer_id),
+        quota_project=str(ga_quota_project) if ga_quota_project else None,
+        start_day=start_day,
+        end_day=end_day,
+    )
+    google_lead_geo_daily = _fetch_google_lead_geo_range(
         access_token=google_ads_access_token,
         developer_token=str(ga_developer_token),
         customer_id=tenant_google_ads_customer_id,
@@ -2230,6 +2823,20 @@ def main() -> int:
         end_day=end_day,
         key_fields=("date", "platform", "device"),
     )
+    all_paid_lead_demographics_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("paid_lead_demographics_daily", []),
+        new_rows=meta_lead_demographics_daily + google_lead_demographics_daily,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "platform", "breakdown", "age_range", "gender"),
+    )
+    all_paid_lead_geo_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("paid_lead_geo_daily", []),
+        new_rows=meta_lead_geo_daily + google_lead_geo_daily,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "platform", "country_code", "region"),
+    )
 
     report = {
         "metadata": {
@@ -2257,6 +2864,8 @@ def main() -> int:
             "meta_campaign_daily": all_meta_campaign_daily,
             "google_campaign_daily": all_google_campaign_daily,
             "paid_device_daily": all_paid_device_daily,
+            "paid_lead_demographics_daily": all_paid_lead_demographics_daily,
+            "paid_lead_geo_daily": all_paid_lead_geo_daily,
         },
         "summary_all_time": _summarize(all_daily),
     }

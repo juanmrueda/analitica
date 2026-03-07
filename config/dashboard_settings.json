@@ -4,7 +4,9 @@
       "spend",
       "conv",
       "cpl",
-      "ctr"
+      "cvr",
+      "cpm",
+      "cpc"
     ],
     "traffic_kpis": [
       "sessions",
@@ -15,6 +17,9 @@
     "overview_sections": [
       "kpis",
       "trend_chart",
+      "media_mix",
+      "lead_demographics",
+      "lead_geo_map",
       "funnel",
       "ga4_conversion",
       "device_breakdown",
@@ -28,9 +33,15 @@
       "top_pages",
       "campaigns"
     ],
+    "campaign_filters": [],
+    "enabled_view_modes": [
+      "Overview",
+      "Tr\u00e1fico y Adquisici\u00f3n"
+    ],
     "default_platform": "All",
     "default_view_mode": "Overview",
-    "show_sidebar_meta_token_health": true
+    "show_sidebar_meta_token_health": true,
+    "tenant_logo": ""
   },
   "tenants": {
     "yap": {
@@ -49,6 +60,7 @@
       "overview_sections": [
         "kpis",
         "trend_chart",
+        "media_mix",
         "funnel",
         "ga4_conversion",
         "device_breakdown",
@@ -62,48 +74,22 @@
         "top_pages",
         "campaigns"
       ],
-      "default_platform": "All",
-      "default_view_mode": "Overview",
-      "show_sidebar_meta_token_health": true
-    },
-    "ipalmera_regional": {
-      "overview_kpis": [
-        "spend",
-        "conv",
-        "cpl",
-        "ctr"
-      ],
-      "traffic_kpis": [
-        "sessions",
-        "users",
-        "avg_sess",
-        "bounce"
-      ],
-      "overview_sections": [
-        "kpis",
-        "trend_chart",
-        "funnel",
-        "ga4_conversion",
-        "device_breakdown",
-        "audit_table",
-        "top_pieces",
-        "daily_fact"
-      ],
-      "traffic_sections": [
-        "kpis",
-        "channels",
-        "top_pages",
-        "campaigns"
+      "campaign_filters": [],
+      "enabled_view_modes": [
+        "Overview",
+        "Tr\u00e1fico y Adquisici\u00f3n"
       ],
       "default_platform": "All",
       "default_view_mode": "Overview",
-      "show_sidebar_meta_token_health": true
+      "show_sidebar_meta_token_health": true,
+      "tenant_logo": ""
     },
     "hyundai_hn": {
       "overview_kpis": [
         "spend",
-        "impr",
-        "clicks"
+        "conv",
+        "cpm",
+        "cpc"
       ],
       "traffic_kpis": [
         "sessions",
@@ -114,6 +100,9 @@
       "overview_sections": [
         "kpis",
         "trend_chart",
+        "media_mix",
+        "lead_demographics",
+        "lead_geo_map",
         "funnel",
         "device_breakdown",
         "audit_table",
@@ -121,14 +110,16 @@
         "daily_fact"
       ],
       "traffic_sections": [
-        "kpis",
-        "channels",
-        "top_pages",
         "campaigns"
+      ],
+      "campaign_filters": [],
+      "enabled_view_modes": [
+        "Overview"
       ],
       "default_platform": "All",
       "default_view_mode": "Overview",
-      "show_sidebar_meta_token_health": true
+      "show_sidebar_meta_token_health": false,
+      "tenant_logo": ""
     }
   }
 }

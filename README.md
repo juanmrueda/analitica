@@ -120,7 +120,8 @@ copy config\users.template.json config\users.json
 
 - Usuarios iniciales de ejemplo:
   - `admin` / `AdminYAP2026!` (rol `admin`, ve todos los tenants)
-  - `regional` / `RegionalYAP2026!` (rol `viewer`, solo `ipalmera_regional`)
+  - `hyundai` (rol `viewer`, solo `hyundai_hn`)
+  - `yap` (rol `viewer`, solo `yap`)
 - Ajustar `config/users.json` antes de usar en produccion.
 
 4. Panel administrativo (Fase 6 hardening):

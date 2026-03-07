@@ -14,17 +14,30 @@
       "password_hash": "41e076c40d4271eb4c9a1c95fa55dbb9b9e38ac586adb12bd26fc14e42143761"
     },
     {
-      "username": "regional",
-      "name": "Equipo Regional",
+      "username": "hyundai",
+      "name": "Equipo Hyundai",
       "global_role": "user",
       "role": "viewer",
       "enabled": true,
-      "allowed_tenants": ["ipalmera_regional"],
+      "allowed_tenants": ["hyundai_hn"],
       "tenant_scopes": [
-        {"tenant_id": "ipalmera_regional", "role": "viewer"}
+        {"tenant_id": "hyundai_hn", "role": "viewer"}
       ],
-      "password_salt": "b3RkP9wL6zTq1mXe",
-      "password_hash": "3253f9f640fc0c746f818bb08773764ff2742cc2f011f37db9f499bd861856c4"
+      "password_salt": "EYs-09fVAV31EVZ9",
+      "password_hash": "37ac9310d36b9cdc244fea7135bfee8982d44fa7337724f24b2066f5414d398a"
+    },
+    {
+      "username": "yap",
+      "name": "Equipo YAP",
+      "global_role": "user",
+      "role": "viewer",
+      "enabled": true,
+      "allowed_tenants": ["yap"],
+      "tenant_scopes": [
+        {"tenant_id": "yap", "role": "viewer"}
+      ],
+      "password_salt": "r7Nq2Xv9Lk3Pm8Ta",
+      "password_hash": "68f6e3400ef188244afadc206bfd979a25dae25c593cba51ce6542699bbb8a82"
     }
   ]
 }

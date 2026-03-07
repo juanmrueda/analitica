@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -42,11 +43,14 @@ C_GRID = "rgba(32,29,29,0.07)"
 
 VIEW_MODE_OPTIONS = ("Overview", "Tráfico y Adquisición")
 PLATFORM_OPTIONS = ("All", "Google", "Meta")
-DEFAULT_OVERVIEW_KPI_KEYS = ["spend", "conv", "cpl", "ctr"]
+DEFAULT_OVERVIEW_KPI_KEYS = ["spend", "conv", "cpl", "cvr", "cpm", "cpc"]
 DEFAULT_TRAFFIC_KPI_KEYS = ["sessions", "users", "avg_sess", "bounce"]
 DEFAULT_OVERVIEW_SECTION_KEYS = [
     "kpis",
     "trend_chart",
+    "media_mix",
+    "lead_demographics",
+    "lead_geo_map",
     "funnel",
     "ga4_conversion",
     "device_breakdown",
@@ -55,10 +59,14 @@ DEFAULT_OVERVIEW_SECTION_KEYS = [
     "daily_fact",
 ]
 DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "top_pages", "campaigns"]
+DEFAULT_CAMPAIGN_FILTER_KEYS: list[str] = []
 
 OVERVIEW_SECTION_OPTIONS: dict[str, str] = {
     "kpis": "Tarjetas KPI",
     "trend_chart": "Gráfica Performance",
+    "media_mix": "Mix y Eficiencia Paid",
+    "lead_demographics": "Distribución Leads Paid: Edad y Género",
+    "lead_geo_map": "Distribución Leads Paid: Mapa",
     "funnel": "Embudo de Conversión",
     "ga4_conversion": "Tarjeta Conversiones GA4",
     "device_breakdown": "Dispositivos de Pauta",
@@ -71,6 +79,30 @@ TRAFFIC_SECTION_OPTIONS: dict[str, str] = {
     "channels": "Canales / Adquisición",
     "top_pages": "Páginas Más Visitadas",
     "campaigns": "Rendimiento de Campañas",
+}
+CAMPAIGN_FILTER_OPTIONS: dict[str, str] = {
+    "advertising_channel_type": "Google: Channel Type",
+    "advertising_channel_sub_type": "Google: Channel SubType",
+    "bidding_strategy_type": "Google: Bidding Strategy",
+}
+ADMIN_SECTION_OPTIONS: dict[str, str] = {
+    "users": "Usuarios",
+    "dashboard": "Variables Dashboard",
+    "audit": "Auditoría",
+}
+AGE_BUCKET_ORDER = ["18-24", "25-34", "35-44", "45-54", "55-64", "65+", "Unknown"]
+GENDER_BUCKET_ORDER = ["Female", "Male", "Unknown"]
+COUNTRY_CODE_TO_NAME: dict[str, str] = {
+    "HN": "Honduras",
+    "NI": "Nicaragua",
+    "SV": "El Salvador",
+    "GT": "Guatemala",
+    "CR": "Costa Rica",
+    "PA": "Panama",
+    "CO": "Colombia",
+    "MX": "Mexico",
+    "US": "United States",
+    "ES": "Spain",
 }
 
 
@@ -180,6 +212,9 @@ KPI_CATALOG: dict[str, dict[str, str]] = {
     "conv": {"label": "Conversiones", "fmt": "int", "delta_mode": "daily", "delta_color": "normal"},
     "cpl": {"label": "CPL Promedio", "fmt": "money", "delta_mode": "direct", "delta_color": "inverse"},
     "ctr": {"label": "CTR", "fmt": "pct", "delta_mode": "direct", "delta_color": "normal"},
+    "cvr": {"label": "CVR", "fmt": "pct", "delta_mode": "direct", "delta_color": "normal"},
+    "cpc": {"label": "CPC", "fmt": "money", "delta_mode": "direct", "delta_color": "inverse"},
+    "cpm": {"label": "CPM", "fmt": "money", "delta_mode": "direct", "delta_color": "inverse"},
     "clicks": {"label": "Clics", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
     "impr": {"label": "Impresiones", "fmt": "compact", "delta_mode": "direct", "delta_color": "normal"},
     "sessions": {"label": "Sesiones", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
@@ -1451,6 +1486,7 @@ def default_tenants_config() -> dict[str, dict[str, Any]]:
             "meta_account_id": META_ACCOUNT_ID,
             "google_customer_id": GOOGLE_CUSTOMER_ID,
             "ga4_conversion_event_name": GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            "logo": str(LOGO_PATH) if LOGO_PATH.exists() else LOGO_PLACEHOLDER,
         }
     }
 
@@ -1495,6 +1531,9 @@ def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
             "ga4_conversion_event_name": str(
                 entry.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)
             ).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            "logo": _normalize_logo_source(
+                entry.get("logo", entry.get("logo_path", entry.get("logo_url", "")))
+            ),
         }
 
     return loaded if loaded else tenants
@@ -1883,6 +1922,30 @@ def _normalize_view_mode_option(raw_value: Any) -> str:
     return value if value in VIEW_MODE_OPTIONS else "Overview"
 
 
+def _normalize_view_mode_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
+    allowed = set(VIEW_MODE_OPTIONS)
+    values: list[str] = []
+    if isinstance(raw_keys, list):
+        values = [str(v).strip() for v in raw_keys if str(v).strip()]
+    elif isinstance(raw_keys, str):
+        values = [part.strip() for part in raw_keys.split(",") if part.strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for key in values:
+        if key not in allowed or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    if not normalized:
+        for key in fallback_keys:
+            if key in allowed and key not in seen:
+                seen.add(key)
+                normalized.append(key)
+    if not normalized:
+        normalized = list(VIEW_MODE_OPTIONS)
+    return normalized
+
+
 def _coerce_bool(raw_value: Any, default: bool = False) -> bool:
     if isinstance(raw_value, bool):
         return raw_value
@@ -1894,6 +1957,23 @@ def _coerce_bool(raw_value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _normalize_logo_source(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def _resolve_logo_image_source(raw_value: Any) -> str:
+    logo_value = _normalize_logo_source(raw_value)
+    if logo_value:
+        if logo_value.startswith(("http://", "https://", "data:image/")):
+            return logo_value
+        logo_path = _resolve_repo_path(logo_value)
+        if logo_path.exists():
+            return str(logo_path)
+    if LOGO_PATH.exists():
+        return str(LOGO_PATH)
+    return LOGO_PLACEHOLDER
 
 
 def _normalize_kpi_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
@@ -1918,6 +1998,33 @@ def _normalize_kpi_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
     if not normalized:
         normalized = [k for k in DEFAULT_OVERVIEW_KPI_KEYS if k in allowed]
     return normalized[:6]
+
+
+def _normalize_campaign_filter_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
+    allowed = set(CAMPAIGN_FILTER_OPTIONS.keys())
+    values: list[str] = []
+    explicit_empty = False
+    if isinstance(raw_keys, list):
+        values = [str(v).strip().lower() for v in raw_keys if str(v).strip()]
+        explicit_empty = len(values) == 0
+    elif isinstance(raw_keys, str):
+        values = [part.strip().lower() for part in raw_keys.split(",") if part.strip()]
+        explicit_empty = len(values) == 0 and raw_keys.strip() == ""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for key in values:
+        if key not in allowed or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    if not normalized and not explicit_empty:
+        for key in fallback_keys:
+            if key in allowed and key not in seen:
+                seen.add(key)
+                normalized.append(key)
+    if not normalized and not explicit_empty:
+        normalized = [k for k in DEFAULT_CAMPAIGN_FILTER_KEYS if k in allowed]
+    return normalized[:5]
 
 
 def _normalize_section_keys(raw_keys: Any, allowed_options: dict[str, str], fallback_keys: list[str]) -> list[str]:
@@ -1950,9 +2057,12 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
         "traffic_kpis": list(DEFAULT_TRAFFIC_KPI_KEYS),
         "overview_sections": list(DEFAULT_OVERVIEW_SECTION_KEYS),
         "traffic_sections": list(DEFAULT_TRAFFIC_SECTION_KEYS),
+        "campaign_filters": list(DEFAULT_CAMPAIGN_FILTER_KEYS),
+        "enabled_view_modes": list(VIEW_MODE_OPTIONS),
         "default_platform": "All",
         "default_view_mode": "Overview",
         "show_sidebar_meta_token_health": True,
+        "tenant_logo": "",
     }
     tenant_cfg: dict[str, dict[str, Any]] = {}
     for tenant_id in tenants.keys():
@@ -1961,9 +2071,12 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
             "traffic_kpis": list(DEFAULT_TRAFFIC_KPI_KEYS),
             "overview_sections": list(DEFAULT_OVERVIEW_SECTION_KEYS),
             "traffic_sections": list(DEFAULT_TRAFFIC_SECTION_KEYS),
+            "campaign_filters": list(DEFAULT_CAMPAIGN_FILTER_KEYS),
+            "enabled_view_modes": list(VIEW_MODE_OPTIONS),
             "default_platform": "All",
             "default_view_mode": "Overview",
             "show_sidebar_meta_token_health": True,
+            "tenant_logo": "",
         }
     return {"defaults": defaults, "tenants": tenant_cfg}
 
@@ -1996,6 +2109,14 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
             TRAFFIC_SECTION_OPTIONS,
             base["defaults"]["traffic_sections"],
         ),
+        "campaign_filters": _normalize_campaign_filter_keys(
+            raw_defaults.get("campaign_filters", base["defaults"]["campaign_filters"]),
+            base["defaults"]["campaign_filters"],
+        ),
+        "enabled_view_modes": _normalize_view_mode_keys(
+            raw_defaults.get("enabled_view_modes", base["defaults"].get("enabled_view_modes", list(VIEW_MODE_OPTIONS))),
+            base["defaults"].get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
+        ),
         "default_platform": _normalize_platform_option(
             raw_defaults.get("default_platform", base["defaults"]["default_platform"])
         ),
@@ -2008,6 +2129,9 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
                 base["defaults"].get("show_sidebar_meta_token_health", True),
             ),
             default=True,
+        ),
+        "tenant_logo": _normalize_logo_source(
+            raw_defaults.get("tenant_logo", base["defaults"].get("tenant_logo", ""))
         ),
     }
     raw_tenants = payload.get("tenants", {}) if isinstance(payload, dict) else {}
@@ -2037,6 +2161,14 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
                 TRAFFIC_SECTION_OPTIONS,
                 defaults["traffic_sections"],
             ),
+            "campaign_filters": _normalize_campaign_filter_keys(
+                raw_cfg.get("campaign_filters", defaults["campaign_filters"]),
+                defaults["campaign_filters"],
+            ),
+            "enabled_view_modes": _normalize_view_mode_keys(
+                raw_cfg.get("enabled_view_modes", defaults.get("enabled_view_modes", list(VIEW_MODE_OPTIONS))),
+                defaults.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
+            ),
             "default_platform": _normalize_platform_option(
                 raw_cfg.get("default_platform", defaults["default_platform"])
             ),
@@ -2047,6 +2179,7 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
                 raw_cfg.get("show_sidebar_meta_token_health", defaults["show_sidebar_meta_token_health"]),
                 default=defaults["show_sidebar_meta_token_health"],
             ),
+            "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo", defaults.get("tenant_logo", ""))),
         }
     return {"defaults": defaults, "tenants": tenant_cfg}
 
@@ -2074,6 +2207,14 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                 TRAFFIC_SECTION_OPTIONS,
                 DEFAULT_TRAFFIC_SECTION_KEYS,
             ),
+            "campaign_filters": _normalize_campaign_filter_keys(
+                incoming_defaults.get("campaign_filters", normalized["defaults"].get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS)),
+                DEFAULT_CAMPAIGN_FILTER_KEYS,
+            ),
+            "enabled_view_modes": _normalize_view_mode_keys(
+                incoming_defaults.get("enabled_view_modes", normalized["defaults"].get("enabled_view_modes", list(VIEW_MODE_OPTIONS))),
+                list(VIEW_MODE_OPTIONS),
+            ),
             "default_platform": _normalize_platform_option(
                 incoming_defaults.get("default_platform", normalized["defaults"]["default_platform"])
             ),
@@ -2087,7 +2228,12 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                 ),
                 default=True,
             ),
+            "tenant_logo": _normalize_logo_source(
+                incoming_defaults.get("tenant_logo", normalized["defaults"].get("tenant_logo", ""))
+            ),
         }
+        if normalized["defaults"]["default_view_mode"] not in normalized["defaults"]["enabled_view_modes"]:
+            normalized["defaults"]["default_view_mode"] = normalized["defaults"]["enabled_view_modes"][0]
         incoming_tenants = settings.get("tenants", {}) if isinstance(settings, dict) else {}
         if not isinstance(incoming_tenants, dict):
             incoming_tenants = {}
@@ -2115,6 +2261,14 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                     TRAFFIC_SECTION_OPTIONS,
                     normalized["defaults"]["traffic_sections"],
                 ),
+                "campaign_filters": _normalize_campaign_filter_keys(
+                    raw_cfg.get("campaign_filters", normalized["defaults"].get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS)),
+                    normalized["defaults"].get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
+                ),
+                "enabled_view_modes": _normalize_view_mode_keys(
+                    raw_cfg.get("enabled_view_modes", normalized["defaults"].get("enabled_view_modes", list(VIEW_MODE_OPTIONS))),
+                    normalized["defaults"].get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
+                ),
                 "default_platform": _normalize_platform_option(
                     raw_cfg.get("default_platform", normalized["defaults"]["default_platform"])
                 ),
@@ -2128,7 +2282,12 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                     ),
                     default=normalized["defaults"].get("show_sidebar_meta_token_health", True),
                 ),
+                "tenant_logo": _normalize_logo_source(
+                    raw_cfg.get("tenant_logo", normalized["defaults"].get("tenant_logo", ""))
+                ),
             }
+            if tenant_cfg[tenant_id]["default_view_mode"] not in tenant_cfg[tenant_id]["enabled_view_modes"]:
+                tenant_cfg[tenant_id]["default_view_mode"] = tenant_cfg[tenant_id]["enabled_view_modes"][0]
         payload = {"defaults": normalized["defaults"], "tenants": tenant_cfg}
         path.parent.mkdir(parents=True, exist_ok=True)
         ok_backup, backup_info = _backup_config_file(path)
@@ -2164,7 +2323,25 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         TRAFFIC_SECTION_OPTIONS,
         DEFAULT_TRAFFIC_SECTION_KEYS,
     )
+    defaults_campaign_filters = _normalize_campaign_filter_keys(
+        defaults.get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
+        DEFAULT_CAMPAIGN_FILTER_KEYS,
+    )
+    defaults_enabled_view_modes = _normalize_view_mode_keys(
+        defaults.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
+        list(VIEW_MODE_OPTIONS),
+    )
     defaults_token_health = _coerce_bool(defaults.get("show_sidebar_meta_token_health", True), default=True)
+    defaults_tenant_logo = _normalize_logo_source(defaults.get("tenant_logo", ""))
+    enabled_view_modes = _normalize_view_mode_keys(
+        raw_cfg.get("enabled_view_modes", defaults_enabled_view_modes),
+        defaults_enabled_view_modes,
+    )
+    default_view_mode = _normalize_view_mode_option(
+        raw_cfg.get("default_view_mode", defaults.get("default_view_mode", "Overview"))
+    )
+    if default_view_mode not in enabled_view_modes:
+        default_view_mode = enabled_view_modes[0] if enabled_view_modes else "Overview"
     return {
         "overview_kpis": _normalize_kpi_keys(
             raw_cfg.get("overview_kpis", defaults.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS)),
@@ -2184,14 +2361,18 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
             TRAFFIC_SECTION_OPTIONS,
             defaults_traffic_sections,
         ),
-        "default_platform": _normalize_platform_option(raw_cfg.get("default_platform", defaults.get("default_platform", "All"))),
-        "default_view_mode": _normalize_view_mode_option(
-            raw_cfg.get("default_view_mode", defaults.get("default_view_mode", "Overview"))
+        "campaign_filters": _normalize_campaign_filter_keys(
+            raw_cfg.get("campaign_filters", defaults_campaign_filters),
+            defaults_campaign_filters,
         ),
+        "enabled_view_modes": enabled_view_modes,
+        "default_platform": _normalize_platform_option(raw_cfg.get("default_platform", defaults.get("default_platform", "All"))),
+        "default_view_mode": default_view_mode,
         "show_sidebar_meta_token_health": _coerce_bool(
             raw_cfg.get("show_sidebar_meta_token_health", defaults_token_health),
             default=defaults_token_health,
         ),
+        "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo", defaults_tenant_logo)),
     }
 
 
@@ -2645,6 +2826,49 @@ def acq_df(report: dict[str, Any], key: str) -> pd.DataFrame:
     return df.dropna(subset=["date"]).reset_index(drop=True) if "date" in df.columns else df
 
 
+def _campaign_filter_values(
+    camp_df: pd.DataFrame,
+    *,
+    field: str,
+    platform: str,
+    start_day: date,
+    end_day: date,
+) -> list[str]:
+    if camp_df.empty or field not in camp_df.columns:
+        return []
+    cp = camp_df.copy()
+    if "date" in cp.columns:
+        cp = cp[(cp["date"] >= start_day) & (cp["date"] <= end_day)]
+    if platform in ("Google", "Meta") and "platform" in cp.columns:
+        cp = cp[cp["platform"] == platform]
+    if cp.empty:
+        return []
+    values = (
+        cp[field]
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+    out = sorted({v for v in values.tolist() if v})
+    return out
+
+
+def _apply_campaign_filters(camp_df: pd.DataFrame, campaign_filters: dict[str, str]) -> pd.DataFrame:
+    if camp_df.empty or not campaign_filters:
+        return camp_df
+    cp = camp_df.copy()
+    for field, selected_value in campaign_filters.items():
+        if field not in cp.columns:
+            continue
+        value = str(selected_value or "").strip()
+        if not value:
+            continue
+        cp = cp[cp[field].astype(str).str.strip() == value]
+        if cp.empty:
+            break
+    return cp
+
+
 def paid_device_df(report: dict[str, Any]) -> pd.DataFrame:
     df = acq_df(report, "paid_device_daily")
     if df.empty:
@@ -2661,6 +2885,94 @@ def paid_device_df(report: dict[str, Any]) -> pd.DataFrame:
         .str.strip()
         .replace({"desktop": "Desktop", "mobile": "Mobile", "other": "Other"})
     )
+    return df
+
+
+def _normalize_age_bucket(raw_value: Any) -> str:
+    txt = str(raw_value or "").strip()
+    if not txt:
+        return "Unknown"
+    up = txt.upper().replace("AGE_RANGE_", "")
+    mapped = {
+        "18_24": "18-24",
+        "18-24": "18-24",
+        "25_34": "25-34",
+        "25-34": "25-34",
+        "35_44": "35-44",
+        "35-44": "35-44",
+        "45_54": "45-54",
+        "45-54": "45-54",
+        "55_64": "55-64",
+        "55-64": "55-64",
+        "65_UP": "65+",
+        "65+": "65+",
+        "UNKNOWN": "Unknown",
+        "UNDETERMINED": "Unknown",
+    }.get(up)
+    return mapped if mapped else txt
+
+
+def _normalize_gender_bucket(raw_value: Any) -> str:
+    txt = str(raw_value or "").strip().lower()
+    if txt in {"female", "f"}:
+        return "Female"
+    if txt in {"male", "m"}:
+        return "Male"
+    return "Unknown"
+
+
+def _country_name_from_code(raw_value: Any) -> str:
+    code = str(raw_value or "").strip().upper()
+    return COUNTRY_CODE_TO_NAME.get(code, "")
+
+
+def paid_lead_demographics_df(report: dict[str, Any]) -> pd.DataFrame:
+    df = acq_df(report, "paid_lead_demographics_daily")
+    if df.empty:
+        return df
+    required = ["platform", "breakdown", "age_range", "gender", "leads", "spend", "impressions", "clicks"]
+    for col in required:
+        if col not in df.columns:
+            if col in ("platform", "breakdown", "age_range", "gender"):
+                df[col] = ""
+            else:
+                df[col] = 0.0
+    for col in ("leads", "spend", "impressions", "clicks"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df["platform"] = df["platform"].astype(str).str.strip().replace({"": "Meta"})
+    df["breakdown"] = (
+        df["breakdown"]
+        .astype(str)
+        .str.strip()
+        .replace({"": "age_gender"})
+        .str.lower()
+    )
+    valid_breakdowns = {"age_gender", "age", "gender"}
+    df.loc[~df["breakdown"].isin(valid_breakdowns), "breakdown"] = "age_gender"
+    df["age_range"] = df["age_range"].apply(_normalize_age_bucket)
+    df["gender"] = df["gender"].apply(_normalize_gender_bucket)
+    return df
+
+
+def paid_lead_geo_df(report: dict[str, Any]) -> pd.DataFrame:
+    df = acq_df(report, "paid_lead_geo_daily")
+    if df.empty:
+        return df
+    if "country_code" not in df.columns and "country" in df.columns:
+        df["country_code"] = df["country"]
+    required = ["platform", "country_code", "country_name", "region", "leads", "spend", "impressions", "clicks"]
+    for col in required:
+        if col not in df.columns:
+            if col in ("platform", "country_code", "country_name", "region"):
+                df[col] = ""
+            else:
+                df[col] = 0.0
+    for col in ("leads", "spend", "impressions", "clicks"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df["platform"] = df["platform"].astype(str).str.strip().replace({"": "Meta"})
+    df["country_code"] = df["country_code"].astype(str).str.strip().str.upper()
+    df["country_name"] = df["country_name"].astype(str).str.strip()
+    df["region"] = df["region"].astype(str).str.strip().replace({"": "Unknown"})
     return df
 
 
@@ -2691,6 +3003,9 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
         "impr": impr,
         "cpl": sdiv(spend, conv),
         "ctr": sdiv(clicks, impr),
+        "cvr": sdiv(conv, clicks),
+        "cpc": sdiv(spend, clicks),
+        "cpm": (spend * 1000.0 / impr) if impr > 0 else None,
         "sessions": sessions_total,
         "users": float(df["ga4_users"].sum()) if not df.empty else 0.0,
         # GA4-consistent: weighted by sessions across the selected period.
@@ -2698,7 +3013,10 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
         "bounce": float(df["ga4_bounce"].mean()) if not df.empty else 0.0,
     }
 
-def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
+def render_sidebar(
+    tenants: dict[str, dict[str, Any]],
+    dashboard_settings: dict[str, Any],
+) -> tuple[str, str, str]:
     auth_user = st.session_state.get("auth_user", {}) if isinstance(st.session_state.get("auth_user"), dict) else {}
     user_name = str(auth_user.get("name", "Admin User"))
     tenant_ids = _auth_user_tenant_ids(auth_user, tenants)
@@ -2736,13 +3054,21 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
         format_func=lambda t: str(tenants.get(t, {}).get("name", t)),
         label_visibility="collapsed",
     )
+    tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
+    enabled_view_modes = _normalize_view_mode_keys(
+        tenant_dash_cfg.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
+        list(VIEW_MODE_OPTIONS),
+    )
     if "sidebar_view_mode" not in st.session_state:
-        st.session_state["sidebar_view_mode"] = "Overview"
+        st.session_state["sidebar_view_mode"] = enabled_view_modes[0]
     view_mode = str(st.session_state.get("sidebar_view_mode", "Overview"))
     if view_mode == "Administración" and not is_admin_user:
-        st.session_state["sidebar_view_mode"] = "Overview"
-        view_mode = "Overview"
-    if st.sidebar.button(
+        st.session_state["sidebar_view_mode"] = enabled_view_modes[0]
+        view_mode = enabled_view_modes[0]
+    if view_mode not in enabled_view_modes and view_mode != "Administración":
+        st.session_state["sidebar_view_mode"] = enabled_view_modes[0]
+        view_mode = enabled_view_modes[0]
+    if "Overview" in enabled_view_modes and st.sidebar.button(
         "Overview",
         key="nav_overview_btn",
         icon=":material/dashboard:",
@@ -2751,7 +3077,7 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
     ):
         st.session_state["sidebar_view_mode"] = "Overview"
         view_mode = "Overview"
-    if st.sidebar.button(
+    if "Tráfico y Adquisición" in enabled_view_modes and st.sidebar.button(
         "Tráfico y Adquisición",
         key="nav_traffic_btn",
         icon=":material/analytics:",
@@ -2769,11 +3095,27 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
     ):
         st.session_state["sidebar_view_mode"] = "Administración"
         view_mode = "Administración"
+    admin_section = str(st.session_state.get("admin_panel_section", "users")).strip().lower() or "users"
+    if admin_section not in ADMIN_SECTION_OPTIONS:
+        admin_section = "users"
+        st.session_state["admin_panel_section"] = admin_section
+    if is_admin_user and view_mode == "Administración":
+        st.sidebar.markdown("<div class='sidebar-kicker'>Menú Admin</div>", unsafe_allow_html=True)
+        for section_key, section_label in ADMIN_SECTION_OPTIONS.items():
+            if st.sidebar.button(
+                section_label,
+                key=f"nav_admin_section_{section_key}",
+                type="primary" if admin_section == section_key else "secondary",
+                width="stretch",
+            ):
+                admin_section = section_key
+                st.session_state["admin_panel_section"] = section_key
     st.sidebar.markdown("<div class='sidebar-bottom'></div>", unsafe_allow_html=True)
     if st.sidebar.button("Logout", key="sidebar_logout_btn", width="stretch"):
         for k in (
             "auth_user",
             "sidebar_view_mode",
+            "admin_panel_section",
             "sidebar_view_tenant_cfg",
             "active_tenant_id",
             "platform_filter_radio_v2",
@@ -2784,7 +3126,7 @@ def render_sidebar(tenants: dict[str, dict[str, Any]]) -> tuple[str, str]:
         ):
             st.session_state.pop(k, None)
         st.rerun()
-    return tenant_id, view_mode
+    return tenant_id, view_mode, admin_section
 
 
 def render_sidebar_meta_token_health(report: dict[str, Any]) -> None:
@@ -2861,7 +3203,10 @@ def render_top_filters(
     tenant_name: str,
     tenant_id: str,
     default_platform: str,
-) -> tuple[date, date, str]:
+    tenant_logo_source: str,
+    camp_df: pd.DataFrame,
+    campaign_filter_keys: list[str],
+) -> tuple[date, date, str, dict[str, str]]:
     default_platform_value = _normalize_platform_option(default_platform)
     last_tenant = str(st.session_state.get("platform_filter_tenant_id", ""))
     if last_tenant != tenant_id or st.session_state.get("platform_filter_radio_v2") not in PLATFORM_OPTIONS:
@@ -2869,15 +3214,22 @@ def render_top_filters(
         st.session_state["platform_filter_tenant_id"] = tenant_id
     wrapper_left, wrapper_right = st.columns([2.2, 1.8], gap="large")
     with wrapper_left:
-        st.markdown(
-            f"""
-            <div class='hero'>
-              <div class='hero-kicker'>iPalmera IA Analítica</div>
-              <div class='hero-sub'>{html.escape(tenant_name)} Marketing Performance</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        logo_col, hero_col = st.columns([0.34, 1.66], gap="small")
+        with logo_col:
+            try:
+                st.image(tenant_logo_source, use_container_width=True)
+            except Exception:
+                st.image(_resolve_logo_image_source(""), use_container_width=True)
+        with hero_col:
+            st.markdown(
+                f"""
+                <div class='hero'>
+                  <div class='hero-kicker'>iPalmera IA Analítica</div>
+                  <div class='hero-sub'>{html.escape(tenant_name)} Marketing Performance</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
     with wrapper_right:
         pcol, dcol = st.columns([1.65, 0.95], gap="small")
         with pcol:
@@ -2901,8 +3253,38 @@ def render_top_filters(
                 label_visibility="collapsed",
             )
     s, e = _normalize_date_range(sel, min_d, max_d)
+    campaign_filters: dict[str, str] = {}
+    filter_keys = _normalize_campaign_filter_keys(campaign_filter_keys, [])
+    available_filters: list[tuple[str, list[str]]] = []
+    for filter_key in filter_keys:
+        values = _campaign_filter_values(
+            camp_df,
+            field=filter_key,
+            platform=platform,
+            start_day=s,
+            end_day=e,
+        )
+        if len(values) > 1:
+            available_filters.append((filter_key, values))
+    if available_filters:
+        st.markdown("<div class='app-filter-title'>Filtros de Campaña</div>", unsafe_allow_html=True)
+        filter_cols = st.columns(len(available_filters), gap="small")
+        for idx, (filter_key, values) in enumerate(available_filters):
+            options = ["Todos"] + values
+            session_key = f"campaign_filter_{tenant_id}_{filter_key}"
+            current = str(st.session_state.get(session_key, "Todos")).strip() or "Todos"
+            if current not in options:
+                current = "Todos"
+            selected = filter_cols[idx].selectbox(
+                str(CAMPAIGN_FILTER_OPTIONS.get(filter_key, filter_key)),
+                options=options,
+                index=options.index(current),
+                key=session_key,
+            )
+            if selected != "Todos":
+                campaign_filters[filter_key] = selected
 
-    return s, e, platform
+    return s, e, platform, campaign_filters
 
 
 def render_exec(
@@ -2912,11 +3294,14 @@ def render_exec(
     overview_kpi_keys: list[str],
     overview_section_keys: list[str],
     paid_dev_df: pd.DataFrame,
+    lead_demo_df: pd.DataFrame,
+    lead_geo_df: pd.DataFrame,
     camp_df: pd.DataFrame,
     ga4_event_df: pd.DataFrame,
     ga4_conversion_event_name: str,
     tenant_meta_account_id: str,
     tenant_google_customer_id: str,
+    campaign_filters: dict[str, str],
     s,
     e,
     prev_s,
@@ -3088,6 +3473,627 @@ def render_exec(
                 unsafe_allow_html=True,
             )
 
+    def _render_media_mix() -> None:
+        rows: list[dict[str, float | str | None]] = []
+        if platform in ("All", "Meta"):
+            meta_spend = float(df_sel["meta_spend"].sum()) if not df_sel.empty else 0.0
+            meta_clicks = float(df_sel["meta_clicks"].sum()) if not df_sel.empty else 0.0
+            meta_impr = float(df_sel["meta_impr"].sum()) if not df_sel.empty else 0.0
+            meta_conv = float(df_sel["meta_conv"].sum()) if not df_sel.empty else 0.0
+            if meta_spend > 0 or meta_clicks > 0 or meta_impr > 0:
+                rows.append(
+                    {
+                        "platform": "Meta",
+                        "spend": meta_spend,
+                        "clicks": meta_clicks,
+                        "impressions": meta_impr,
+                        "conversions": meta_conv,
+                        "cpc": sdiv(meta_spend, meta_clicks),
+                        "cpm": (meta_spend * 1000.0 / meta_impr) if meta_impr > 0 else None,
+                        "cvr": sdiv(meta_conv, meta_clicks),
+                    }
+                )
+        if platform in ("All", "Google"):
+            google_spend = float(df_sel["google_spend"].sum()) if not df_sel.empty else 0.0
+            google_clicks = float(df_sel["google_clicks"].sum()) if not df_sel.empty else 0.0
+            google_impr = float(df_sel["google_impr"].sum()) if not df_sel.empty else 0.0
+            google_conv = float(df_sel["google_conv"].sum()) if not df_sel.empty else 0.0
+            if google_spend > 0 or google_clicks > 0 or google_impr > 0:
+                rows.append(
+                    {
+                        "platform": "Google",
+                        "spend": google_spend,
+                        "clicks": google_clicks,
+                        "impressions": google_impr,
+                        "conversions": google_conv,
+                        "cpc": sdiv(google_spend, google_clicks),
+                        "cpm": (google_spend * 1000.0 / google_impr) if google_impr > 0 else None,
+                        "cvr": sdiv(google_conv, google_clicks),
+                    }
+                )
+        mix = pd.DataFrame(rows)
+        if mix.empty:
+            st.info("No hay datos suficientes para Mix y Eficiencia Paid.")
+            return
+        mix["spend"] = pd.to_numeric(mix["spend"], errors="coerce").fillna(0.0)
+        total_spend = float(mix["spend"].sum())
+        mix["spend_share"] = mix["spend"].apply(lambda v: (v / total_spend) if total_spend > 0 else 0.0)
+
+        st.markdown(
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
+            unsafe_allow_html=True,
+        )
+        pie_col, combo_col = st.columns([1.05, 1.95], gap="large")
+        color_map = {"Google": C_GOOGLE, "Meta": C_META}
+        with pie_col:
+            pie = go.Figure(
+                go.Pie(
+                    labels=mix["platform"],
+                    values=mix["spend"],
+                    hole=0.56,
+                    marker={"colors": [color_map.get(str(p), "#7A879D") for p in mix["platform"]]},
+                    texttemplate="%{label}<br>%{percent}",
+                    hovertemplate="%{label}<br>Spend: $%{value:,.2f}<extra></extra>",
+                )
+            )
+            pie.update_layout(
+                title={"text": "Mix de Inversión", "font": {"size": 14, "color": C_TEXT}},
+                margin={"l": 4, "r": 4, "t": 42, "b": 6},
+                height=290,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,
+            )
+            st.plotly_chart(pie, width="stretch")
+        with combo_col:
+            combo = go.Figure()
+            combo.add_trace(
+                go.Bar(
+                    x=mix["platform"],
+                    y=mix["cpc"],
+                    name="CPC",
+                    marker={"color": "#4ECDC4"},
+                    hovertemplate="%{x}<br>CPC: $%{y:,.2f}<extra></extra>",
+                )
+            )
+            combo.add_trace(
+                go.Bar(
+                    x=mix["platform"],
+                    y=mix["cpm"],
+                    name="CPM",
+                    marker={"color": "#7A879D"},
+                    hovertemplate="%{x}<br>CPM: $%{y:,.2f}<extra></extra>",
+                )
+            )
+            combo.add_trace(
+                go.Scatter(
+                    x=mix["platform"],
+                    y=(mix["cvr"] * 100.0),
+                    name="CVR",
+                    mode="lines+markers",
+                    marker={"color": "#FE492A", "size": 9},
+                    line={"color": "#FE492A", "width": 3},
+                    yaxis="y2",
+                    hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
+                )
+            )
+            combo.update_layout(
+                barmode="group",
+                title={"text": "Eficiencia por Plataforma", "font": {"size": 14, "color": C_TEXT}},
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                margin={"l": 10, "r": 10, "t": 42, "b": 10},
+                height=290,
+                legend={"orientation": "h", "x": 0.0, "y": 1.12},
+                xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
+                yaxis={"title": "Costo ($)", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
+                yaxis2={
+                    "title": "CVR (%)",
+                    "overlaying": "y",
+                    "side": "right",
+                    "showgrid": False,
+                    "tickfont": {"size": 11, "color": C_MUTE},
+                },
+            )
+            st.plotly_chart(combo, width="stretch")
+
+        mix_view = mix.rename(
+            columns={
+                "platform": "Plataforma",
+                "spend": "Inversión",
+                "spend_share": "Share Spend",
+                "cpc": "CPC",
+                "cpm": "CPM",
+                "cvr": "CVR",
+                "clicks": "Clics",
+                "impressions": "Impresiones",
+                "conversions": "Conversiones",
+            }
+        )[["Plataforma", "Inversión", "Share Spend", "CPC", "CPM", "CVR", "Clics", "Impresiones", "Conversiones"]]
+        st.dataframe(
+            mix_view.style.format(
+                {
+                    "Inversión": lambda v: fmt_money(float(v)),
+                    "Share Spend": lambda v: fmt_pct(float(v)),
+                    "CPC": lambda v: fmt_money(v if pd.notna(v) else None),
+                    "CPM": lambda v: fmt_money(v if pd.notna(v) else None),
+                    "CVR": lambda v: fmt_pct(v if pd.notna(v) else None),
+                    "Clics": "{:.0f}",
+                    "Impresiones": "{:.0f}",
+                    "Conversiones": "{:.2f}",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    def _render_lead_demographics() -> None:
+        st.markdown(
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Distribución de Leads Paid por Edad y Género</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Métrica de análisis (breakdown de plataformas). No es comparable 1:1 con el KPI global de Conversiones."
+        )
+        if lead_demo_df.empty:
+            st.info("No hay datos de leads por edad y género para el tenant.")
+            return
+
+        dcur = lead_demo_df[(lead_demo_df["date"] >= s) & (lead_demo_df["date"] <= e)].copy()
+        dprev = lead_demo_df[(lead_demo_df["date"] >= prev_s) & (lead_demo_df["date"] <= prev_e)].copy()
+        if platform in ("Google", "Meta"):
+            dcur = dcur[dcur["platform"] == platform]
+            dprev = dprev[dprev["platform"] == platform]
+        if dcur.empty:
+            st.info("Sin datos demográficos de leads para el rango/plataforma seleccionados.")
+            return
+
+        age_cur = dcur[dcur["breakdown"].isin(["age", "age_gender"])].copy()
+        age_prev = dprev[dprev["breakdown"].isin(["age", "age_gender"])].copy()
+        gender_cur = dcur[dcur["breakdown"].isin(["gender", "age_gender"])].copy()
+        gender_prev = dprev[dprev["breakdown"].isin(["gender", "age_gender"])].copy()
+        if age_cur.empty and gender_cur.empty:
+            st.info("Sin datos demográficos para el rango/plataforma seleccionados.")
+            return
+
+        age_totals = (
+            age_cur.groupby("age_range", as_index=False)
+            .agg(
+                leads=("leads", "sum"),
+                spend=("spend", "sum"),
+                clicks=("clicks", "sum"),
+                impressions=("impressions", "sum"),
+            )
+            if not age_cur.empty
+            else pd.DataFrame(columns=["age_range", "leads", "spend", "clicks", "impressions"])
+        )
+        age_prev_totals = (
+            age_prev.groupby("age_range", as_index=False).agg(leads_prev=("leads", "sum"))
+            if not age_prev.empty
+            else pd.DataFrame(columns=["age_range", "leads_prev"])
+        )
+        age_totals = age_totals.merge(age_prev_totals, on="age_range", how="left").fillna({"leads_prev": 0.0})
+        total_leads = float(age_totals["leads"].sum()) if not age_totals.empty else 0.0
+        total_prev_leads = float(age_totals["leads_prev"].sum()) if not age_totals.empty else 0.0
+
+        gender_totals = (
+            gender_cur.groupby("gender", as_index=False)
+            .agg(leads=("leads", "sum"))
+            .sort_values("leads", ascending=False, na_position="last")
+            if not gender_cur.empty
+            else pd.DataFrame(columns=["gender", "leads"])
+        )
+        gender_prev_totals = (
+            gender_prev.groupby("gender", as_index=False).agg(leads_prev=("leads", "sum"))
+            if not gender_prev.empty
+            else pd.DataFrame(columns=["gender", "leads_prev"])
+        )
+        gender_totals = gender_totals.merge(gender_prev_totals, on="gender", how="left").fillna(
+            {"leads_prev": 0.0}
+        )
+        if total_leads <= 0 and not gender_totals.empty:
+            total_leads = float(gender_totals["leads"].sum())
+            total_prev_leads = float(gender_totals["leads_prev"].sum())
+
+        if total_leads <= 0:
+            st.info("No se detectaron leads para construir el desglose de edad y género.")
+            return
+
+        if not age_totals.empty:
+            age_totals["share"] = age_totals["leads"].apply(lambda v: sdiv(float(v), total_leads) or 0.0)
+            age_totals["age_order"] = age_totals["age_range"].apply(
+                lambda v: AGE_BUCKET_ORDER.index(v) if v in AGE_BUCKET_ORDER else len(AGE_BUCKET_ORDER)
+            )
+            age_totals = age_totals.sort_values(["age_order", "leads"], ascending=[True, False]).drop(
+                columns=["age_order"]
+            )
+        top_age = str(age_totals.iloc[0]["age_range"]) if not age_totals.empty else "N/A"
+        top_age_share = float(age_totals.iloc[0]["share"]) if not age_totals.empty else 0.0
+        gender_totals["share"] = gender_totals["leads"].apply(lambda v: sdiv(float(v), total_leads) or 0.0)
+        top_gender = str(gender_totals.iloc[0]["gender"]) if not gender_totals.empty else "N/A"
+        top_gender_share = float(gender_totals.iloc[0]["share"]) if not gender_totals.empty else 0.0
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric(
+            "Leads (breakdown demográfico)",
+            f"{total_leads:,.0f}",
+            fmt_delta_compact(pct_delta(total_leads, total_prev_leads)),
+        )
+        m2.metric("Top Edad (share)", top_age, fmt_pct(top_age_share))
+        m3.metric("Top Género (share)", top_gender, fmt_pct(top_gender_share))
+
+        cross_roll = (
+            dcur[dcur["breakdown"] == "age_gender"]
+            .groupby(["age_range", "gender"], as_index=False)
+            .agg(
+                leads=("leads", "sum"),
+                spend=("spend", "sum"),
+                clicks=("clicks", "sum"),
+                impressions=("impressions", "sum"),
+            )
+            if "age_gender" in set(dcur["breakdown"].astype(str))
+            else pd.DataFrame(columns=["age_range", "gender", "leads", "spend", "clicks", "impressions"])
+        )
+        age_gender = (
+            cross_roll.pivot_table(index="age_range", columns="gender", values="leads", aggfunc="sum", fill_value=0.0)
+            if not cross_roll.empty
+            else pd.DataFrame()
+        )
+        has_cross = not age_gender.empty
+
+        viz_col_1, viz_col_2 = st.columns([1.9, 1.1], gap="large")
+        with viz_col_1:
+            if has_cross:
+                ordered_age = [a for a in AGE_BUCKET_ORDER if a in age_gender.index]
+                if not ordered_age:
+                    ordered_age = sorted([str(v) for v in age_gender.index.tolist()])
+                age_gender = age_gender.reindex(ordered_age, fill_value=0.0)
+
+                bar = go.Figure()
+                for gender, color in (("Female", C_META), ("Male", C_GOOGLE), ("Unknown", C_MUTE), ("All", "#4C78A8")):
+                    if gender not in age_gender.columns:
+                        continue
+                    bar.add_trace(
+                        go.Bar(
+                            x=age_gender.index.tolist(),
+                            y=age_gender[gender].tolist(),
+                            name=gender,
+                            marker={"color": color},
+                            hovertemplate="%{x}<br>" + gender + ": %{y:,.0f} leads<extra></extra>",
+                        )
+                    )
+                bar.update_layout(
+                    barmode="stack",
+                    height=290,
+                    margin={"l": 8, "r": 8, "t": 40, "b": 10},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    legend={"orientation": "h", "x": 0.0, "y": 1.15},
+                    xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
+                    yaxis={"title": "Leads", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
+                    title={"text": "Distribución de Leads por Edad", "font": {"size": 14, "color": C_TEXT}},
+                )
+                st.plotly_chart(bar, width="stretch")
+            elif not age_totals.empty:
+                bar = go.Figure(
+                    go.Bar(
+                        x=age_totals["age_range"],
+                        y=age_totals["leads"],
+                        marker={"color": C_GOOGLE},
+                        hovertemplate="%{x}<br>Leads: %{y:,.0f}<extra></extra>",
+                    )
+                )
+                bar.update_layout(
+                    height=290,
+                    margin={"l": 8, "r": 8, "t": 40, "b": 10},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
+                    yaxis={"title": "Leads", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
+                    title={"text": "Distribución de Leads por Edad", "font": {"size": 14, "color": C_TEXT}},
+                )
+                st.plotly_chart(bar, width="stretch")
+            else:
+                st.info("Sin datos por edad para el rango seleccionado.")
+        with viz_col_2:
+            if gender_totals.empty:
+                st.info("Sin datos por género para el rango seleccionado.")
+            else:
+                gender_color = {"Female": C_META, "Male": C_GOOGLE, "Unknown": C_MUTE, "All": "#4C78A8"}
+                pie = go.Figure(
+                    go.Pie(
+                        labels=gender_totals["gender"],
+                        values=gender_totals["leads"],
+                        hole=0.56,
+                        marker={"colors": [gender_color.get(str(g), C_MUTE) for g in gender_totals["gender"]]},
+                        texttemplate="%{label}<br>%{percent}",
+                        hovertemplate="%{label}: %{value:,.0f} leads<extra></extra>",
+                        sort=False,
+                    )
+                )
+                pie.update_layout(
+                    height=290,
+                    margin={"l": 4, "r": 4, "t": 40, "b": 8},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    showlegend=False,
+                    title={"text": "Mix de Género", "font": {"size": 14, "color": C_TEXT}},
+                )
+                st.plotly_chart(pie, width="stretch")
+
+        if not cross_roll.empty:
+            demo_table = cross_roll.copy()
+        elif not age_totals.empty:
+            demo_table = age_totals[["age_range", "leads", "spend", "impressions", "clicks"]].copy()
+            demo_table["gender"] = "All"
+        else:
+            demo_table = gender_totals[["gender", "leads"]].copy()
+            demo_table["age_range"] = "All"
+            demo_table["spend"] = 0.0
+            demo_table["impressions"] = 0.0
+            demo_table["clicks"] = 0.0
+        demo_table["share_leads"] = demo_table["leads"].apply(lambda v: sdiv(float(v), total_leads) or 0.0)
+        demo_table = demo_table.rename(
+            columns={
+                "age_range": "Edad",
+                "gender": "Género",
+                "leads": "Leads",
+                "share_leads": "Share Leads",
+                "spend": "Gasto",
+                "impressions": "Impresiones",
+                "clicks": "Clicks",
+            }
+        )[["Edad", "Género", "Leads", "Share Leads", "Gasto", "Impresiones", "Clicks"]]
+        demo_table = demo_table.sort_values(["Leads", "Share Leads"], ascending=[False, False], na_position="last")
+        st.dataframe(
+            demo_table.style.format(
+                {
+                    "Leads": "{:.0f}",
+                    "Share Leads": lambda v: fmt_pct(float(v)),
+                    "Gasto": lambda v: fmt_money(float(v)),
+                    "Impresiones": "{:.0f}",
+                    "Clicks": "{:.0f}",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    def _render_lead_geo_map() -> None:
+        st.markdown(
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>6) Mapa de Distribución de Leads Paid</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Métrica de análisis (breakdown de plataformas). No es comparable 1:1 con el KPI global de Conversiones."
+        )
+        if lead_geo_df.empty:
+            st.info("No hay datos de geografía de leads para el tenant.")
+            return
+
+        gcur = lead_geo_df[(lead_geo_df["date"] >= s) & (lead_geo_df["date"] <= e)].copy()
+        gprev = lead_geo_df[(lead_geo_df["date"] >= prev_s) & (lead_geo_df["date"] <= prev_e)].copy()
+        if platform in ("Google", "Meta"):
+            gcur = gcur[gcur["platform"] == platform]
+            gprev = gprev[gprev["platform"] == platform]
+        if gcur.empty:
+            st.info("Sin datos geográficos de leads para el rango/plataforma seleccionados.")
+            return
+
+        def _first_text(values: pd.Series) -> str:
+            for raw in values:
+                txt = str(raw or "").strip()
+                if txt:
+                    return txt
+            return ""
+
+        geo_roll = (
+            gcur.groupby(["country_code", "region"], as_index=False)
+            .agg(
+                country_name=("country_name", _first_text),
+                leads=("leads", "sum"),
+                spend=("spend", "sum"),
+                clicks=("clicks", "sum"),
+                impressions=("impressions", "sum"),
+            )
+        )
+        geo_roll["country_name"] = geo_roll.apply(
+            lambda r: str(r.get("country_name", "")).strip() or _country_name_from_code(r.get("country_code", "")),
+            axis=1,
+        )
+        total_geo_leads = float(geo_roll["leads"].sum())
+        if total_geo_leads <= 0:
+            st.info("No se detectaron leads para construir el mapa geográfico.")
+            return
+
+        prev_geo_total = float(gprev["leads"].sum()) if not gprev.empty else 0.0
+        country_roll = (
+            geo_roll.groupby("country_code", as_index=False)
+            .agg(
+                country_name=("country_name", _first_text),
+                leads=("leads", "sum"),
+                spend=("spend", "sum"),
+                clicks=("clicks", "sum"),
+                impressions=("impressions", "sum"),
+            )
+        )
+        country_roll["country_name"] = country_roll.apply(
+            lambda r: str(r.get("country_name", "")).strip() or _country_name_from_code(r.get("country_code", "")),
+            axis=1,
+        )
+        country_roll["share_leads"] = country_roll["leads"].apply(lambda v: sdiv(float(v), total_geo_leads) or 0.0)
+        top_country = country_roll.sort_values("leads", ascending=False, na_position="last").head(1)
+        top_country_name = str(top_country.iloc[0]["country_name"] or top_country.iloc[0]["country_code"]) if not top_country.empty else "N/A"
+        top_country_share = float(top_country.iloc[0]["share_leads"]) if not top_country.empty else 0.0
+        country_count = int((country_roll["leads"] > 0).sum())
+        prev_country_count = int((gprev.groupby("country_code", as_index=False)["leads"].sum()["leads"] > 0).sum()) if not gprev.empty else 0
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Leads (geo breakdown)", f"{total_geo_leads:,.0f}", fmt_delta_compact(pct_delta(total_geo_leads, prev_geo_total)))
+        m2.metric("País Top (share)", top_country_name, fmt_pct(top_country_share))
+        m3.metric("Cobertura Países", f"{country_count}", fmt_delta_compact(pct_delta(float(country_count), float(prev_country_count))))
+
+        map_df = country_roll[country_roll["country_name"].astype(str).str.strip() != ""].copy()
+        map_df["country_code"] = map_df["country_code"].astype(str).str.strip().str.upper()
+        map_df["country_label"] = map_df.apply(
+            lambda r: str(r.get("country_name", "")).strip() or str(r.get("country_code", "")).strip(),
+            axis=1,
+        )
+        map_df["cpl"] = map_df.apply(
+            lambda r: sdiv(float(r.get("spend", 0.0)), float(r.get("leads", 0.0))),
+            axis=1,
+        )
+        map_df = map_df[
+            map_df["country_code"].str.fullmatch(r"[A-Z]{2}", na=False)
+            & (pd.to_numeric(map_df["leads"], errors="coerce").fillna(0.0) > 0)
+        ].copy()
+        map_col, table_col = st.columns([1.7, 1.3], gap="large")
+        with map_col:
+            if map_df.empty:
+                st.info("No hay países mapeables para mostrar en el mapa.")
+            else:
+                if int(map_df["country_name"].nunique()) <= 2:
+                    ch = px.choropleth(
+                        map_df,
+                        locations="country_name",
+                        locationmode="country names",
+                        color="share_leads",
+                        hover_name="country_label",
+                        hover_data={
+                            "country_code": True,
+                            "leads": ":.0f",
+                            "spend": ":.2f",
+                            "cpl": ":.2f",
+                            "share_leads": ":.2%",
+                        },
+                        color_continuous_scale=[
+                            [0.0, "#EAF8D7"],
+                            [0.35, "#C8EFA0"],
+                            [0.7, "#93DB55"],
+                            [1.0, C_GOOGLE],
+                        ],
+                    )
+                    ch.update_layout(
+                        height=330,
+                        margin={"l": 0, "r": 0, "t": 6, "b": 0},
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        coloraxis_colorbar={"title": "Share Leads", "tickformat": ".0%"},
+                    )
+                    ch.update_geos(
+                        fitbounds="locations",
+                        visible=False,
+                        showcountries=True,
+                        countrycolor="rgba(255,255,255,0.9)",
+                        bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(ch, width="stretch")
+                else:
+                    bubble_df = map_df.copy()
+                    bubble_df["bubble_size"] = bubble_df["leads"].clip(lower=0.0)
+                    ch = px.scatter_geo(
+                        bubble_df,
+                        locations="country_name",
+                        locationmode="country names",
+                        size="bubble_size",
+                        color="share_leads",
+                        hover_name="country_label",
+                        hover_data={
+                            "country_code": True,
+                            "leads": ":.0f",
+                            "spend": ":.2f",
+                            "cpl": ":.2f",
+                            "clicks": ":.0f",
+                            "impressions": ":.0f",
+                            "share_leads": ":.2%",
+                        },
+                        color_continuous_scale=[
+                            [0.0, "#EAF8D7"],
+                            [0.35, "#C8EFA0"],
+                            [0.7, "#93DB55"],
+                            [1.0, C_GOOGLE],
+                        ],
+                        size_max=48,
+                        projection="natural earth",
+                    )
+                    ch.update_traces(
+                        marker={"line": {"width": 0.7, "color": "rgba(255,255,255,0.9)"}, "opacity": 0.82}
+                    )
+                    ch.update_layout(
+                        height=330,
+                        margin={"l": 0, "r": 0, "t": 6, "b": 0},
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        coloraxis_colorbar={"title": "Share Leads", "tickformat": ".0%"},
+                    )
+                    ch.update_geos(showframe=False, showcoastlines=False, bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(ch, width="stretch")
+        with table_col:
+            top_source = map_df if not map_df.empty else country_roll.copy()
+            top_source = top_source[pd.to_numeric(top_source["leads"], errors="coerce").fillna(0.0) > 0].copy()
+            top_country_view = (
+                top_source.sort_values(["leads", "share_leads"], ascending=[False, False], na_position="last")
+                .head(10)
+                .copy()
+            )
+            if not top_country_view.empty:
+                top_country_view["country_label"] = top_country_view.apply(
+                    lambda r: str(r.get("country_name", "")).strip() or str(r.get("country_code", "")).strip(),
+                    axis=1,
+                )
+                top_country_view = top_country_view.sort_values("leads", ascending=True, na_position="last")
+                top_bar = go.Figure(
+                    go.Bar(
+                        x=top_country_view["leads"],
+                        y=top_country_view["country_label"],
+                        orientation="h",
+                        marker={"color": C_GOOGLE},
+                        hovertemplate="%{y}<br>Leads: %{x:,.0f}<extra></extra>",
+                    )
+                )
+                top_bar.update_layout(
+                    height=210,
+                    margin={"l": 6, "r": 6, "t": 18, "b": 6},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis={"title": "Leads", "gridcolor": C_GRID, "tickfont": {"size": 10, "color": C_MUTE}},
+                    yaxis={"title": "", "tickfont": {"size": 10, "color": C_MUTE}},
+                    title={"text": "Top Países por Leads", "font": {"size": 13, "color": C_TEXT}},
+                )
+                st.plotly_chart(top_bar, width="stretch")
+
+            region_view = geo_roll.copy()
+            region_view["country_label"] = region_view.apply(
+                lambda r: str(r["country_name"]) if str(r["country_name"]).strip() else str(r["country_code"]),
+                axis=1,
+            )
+            region_view["share_leads"] = region_view["leads"].apply(lambda v: sdiv(float(v), total_geo_leads) or 0.0)
+            region_view = region_view.rename(
+                columns={
+                    "country_label": "País",
+                    "region": "Región",
+                    "leads": "Leads",
+                    "share_leads": "Share Leads",
+                    "spend": "Gasto",
+                    "clicks": "Clicks",
+                    "impressions": "Impresiones",
+                }
+            )[["País", "Región", "Leads", "Share Leads", "Gasto", "Clicks", "Impresiones"]]
+            region_view = region_view.sort_values(["Leads", "Share Leads"], ascending=[False, False], na_position="last").head(15)
+            st.dataframe(
+                region_view.style.format(
+                    {
+                        "Leads": "{:.0f}",
+                        "Share Leads": lambda v: fmt_pct(float(v)),
+                        "Gasto": lambda v: fmt_money(float(v)),
+                        "Clicks": "{:.0f}",
+                        "Impresiones": "{:.0f}",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
     show_trend = "trend_chart" in section_set
     show_right_stack = ("funnel" in section_set) or ("ga4_conversion" in section_set)
     if show_trend and show_right_stack:
@@ -3101,10 +4107,22 @@ def render_exec(
     elif show_right_stack:
         _render_funnel_and_ga4()
 
+    if "media_mix" in section_set:
+        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+        _render_media_mix()
+
+    if "lead_demographics" in section_set:
+        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+        _render_lead_demographics()
+
+    if "lead_geo_map" in section_set:
+        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+        _render_lead_geo_map()
+
     if "device_breakdown" in section_set:
         st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
         st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
             unsafe_allow_html=True,
         )
 
@@ -3162,23 +4180,32 @@ def render_exec(
                 )
 
             st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
-            bar = go.Figure(
-                go.Bar(
-                    x=roll["device"],
-                    y=roll["impressions"],
-                    marker={
-                        "color": ["#7BCC35", "#FE492A", "#7A879D"],
-                        "line": {"color": "rgba(32,29,29,0.08)", "width": 1},
-                    },
-                    text=[f"{v:,.0f}" for v in roll["impressions"]],
-                    textposition="outside",
-                    textfont={"color": "#334761", "size": 12},
-                    hovertemplate="%{x}: %{y:,.0f}<extra></extra>",
+            total_impressions = float(pd.to_numeric(roll["impressions"], errors="coerce").fillna(0.0).sum())
+            if total_impressions <= 0:
+                st.info("Sin impresiones para graficar distribución por dispositivo.")
+            else:
+                pie = go.Figure(
+                    go.Pie(
+                        labels=roll["device"],
+                        values=roll["impressions"],
+                        hole=0.56,
+                        marker={
+                            "colors": ["#7BCC35", "#FE492A", "#7A879D"],
+                            "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
+                        },
+                        texttemplate="%{label}<br>%{percent}",
+                        hovertemplate="%{label}: %{value:,.0f} impresiones<extra></extra>",
+                        sort=False,
+                    )
                 )
-            )
-            pbi_layout(bar, xaxis_title="", yaxis_title="Impresiones", legend_h=False)
-            bar.update_layout(height=280, margin={"l": 12, "r": 12, "t": 8, "b": 12})
-            st.plotly_chart(bar, width="stretch")
+                pie.update_layout(
+                    height=300,
+                    margin={"l": 10, "r": 10, "t": 8, "b": 8},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    showlegend=False,
+                )
+                st.plotly_chart(pie, width="stretch")
             st.markdown("</div>", unsafe_allow_html=True)
 
             table = roll.rename(
@@ -3211,7 +4238,7 @@ def render_exec(
     if "audit_table" in section_set:
         st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
         st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Tabla Maestra de Auditoria</div>",
+            "<div class='viz-title' style='margin-bottom:0.35rem;'>8) Tabla Maestra de Auditoria</div>",
             unsafe_allow_html=True,
         )
         t = df_sel[
@@ -3275,6 +4302,7 @@ def render_exec(
             e,
             tenant_meta_account_id=tenant_meta_account_id,
             tenant_google_customer_id=tenant_google_customer_id,
+            campaign_filters=campaign_filters,
         )
 
 def render_top_pieces_range(
@@ -3285,6 +4313,7 @@ def render_top_pieces_range(
     *,
     tenant_meta_account_id: str = "",
     tenant_google_customer_id: str = "",
+    campaign_filters: dict[str, str] | None = None,
 ):
     if camp_df.empty:
         st.info("No hay datos de piezas/campañas para construir el top 10.")
@@ -3301,6 +4330,7 @@ def render_top_pieces_range(
 
     if platform in ("Google", "Meta") and "platform" in cp.columns:
         cp = cp[cp["platform"] == platform]
+    cp = _apply_campaign_filters(cp, campaign_filters or {})
 
     required_defaults: dict[str, Any] = {
         "platform": "",
@@ -3357,6 +4387,14 @@ def render_top_pieces_range(
         """,
         unsafe_allow_html=True,
     )
+    if campaign_filters:
+        active_labels = [
+            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+            for k, v in campaign_filters.items()
+            if str(v).strip()
+        ]
+        if active_labels:
+            st.caption(" | ".join(active_labels))
     st.dataframe(
         top_view,
         width="stretch",
@@ -3381,6 +4419,7 @@ def render_traffic(
     platform,
     s,
     e,
+    campaign_filters: dict[str, str],
     traffic_kpi_keys: list[str],
     traffic_section_keys: list[str],
 ):
@@ -3456,6 +4495,7 @@ def render_traffic(
             cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
             if platform in ("Google", "Meta"):
                 cp = cp[cp["platform"] == platform]
+            cp = _apply_campaign_filters(cp, campaign_filters)
             required_defaults: dict[str, Any] = {
                 "platform": "",
                 "campaign_id": "",
@@ -3475,8 +4515,26 @@ def render_traffic(
             if cp.empty:
                 st.info("Sin datos de campanas para filtros actuales.")
             else:
-                roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(spend=("spend", "sum"), impressions=("impressions", "sum"), clicks=("clicks", "sum"), conversions=("conversions", "sum"), ctr=("ctr", "mean"), cpc=("cpc", "mean"), reach=("reach", "max"), frequency=("frequency", "mean")).sort_values("spend", ascending=False)
+                agg_map: dict[str, tuple[str, str]] = {
+                    "spend": ("spend", "sum"),
+                    "impressions": ("impressions", "sum"),
+                    "clicks": ("clicks", "sum"),
+                    "conversions": ("conversions", "sum"),
+                    "ctr": ("ctr", "mean"),
+                    "cpc": ("cpc", "mean"),
+                    "reach": ("reach", "max"),
+                    "frequency": ("frequency", "mean"),
+                }
+                roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(**agg_map).sort_values("spend", ascending=False)
                 roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
+                if campaign_filters:
+                    active_labels = [
+                        f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                        for k, v in campaign_filters.items()
+                        if str(v).strip()
+                    ]
+                    if active_labels:
+                        st.caption(" | ".join(active_labels))
                 st.dataframe(roll.head(20), width="stretch", hide_index=True)
 
 
@@ -3485,6 +4543,7 @@ def render_admin_panel(
     tenants: dict[str, dict[str, Any]],
     auth_user: dict[str, Any],
     dashboard_settings: dict[str, Any],
+    admin_section: str,
 ) -> None:
     section_title("04 > Administración por Tenant (Fase 4)")
 
@@ -3531,12 +4590,8 @@ def render_admin_panel(
     tenant_options = ["*"] + sorted(tenants.keys())
     role_options = ["viewer", "editor", "admin"]
     global_role_options = ["user", "admin"]
-
-    tab_edit, tab_create, tab_dashboard, tab_audit = st.tabs(
-        ["Editar Usuario", "Crear Usuario", "Variables Dashboard", "Auditoría"]
-    )
-
-    with tab_edit:
+    if admin_section == "users":
+        st.markdown("### Editar Usuario")
         if not users:
             st.info("No hay usuarios para editar.")
         else:
@@ -3735,7 +4790,8 @@ def render_admin_panel(
                         st.success(f"Usuario '{selected_username}' eliminado.")
                         st.rerun()
 
-    with tab_create:
+    if admin_section == "users":
+        st.markdown("### Crear Usuario")
         create_username_raw = st.text_input(
             "Username",
             value="",
@@ -3856,7 +4912,8 @@ def render_admin_panel(
                     st.success(f"Usuario '{create_username}' creado.")
                     st.rerun()
 
-    with tab_dashboard:
+    if admin_section == "dashboard":
+        st.markdown("### Variables Dashboard")
         scope_options = ["__defaults__"] + sorted(tenants.keys())
         target_scope = st.selectbox(
             "Configurar scope",
@@ -3881,12 +4938,24 @@ def render_admin_panel(
             TRAFFIC_SECTION_OPTIONS,
             DEFAULT_TRAFFIC_SECTION_KEYS,
         )
+        campaign_filters_defaults = _normalize_campaign_filter_keys(
+            base_cfg.get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
+            DEFAULT_CAMPAIGN_FILTER_KEYS,
+        )
+        enabled_view_modes_defaults = _normalize_view_mode_keys(
+            base_cfg.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
+            list(VIEW_MODE_OPTIONS),
+        )
         default_platform = _normalize_platform_option(base_cfg.get("default_platform", "All"))
         default_view_mode = _normalize_view_mode_option(base_cfg.get("default_view_mode", "Overview"))
+        if default_view_mode not in enabled_view_modes_defaults:
+            default_view_mode = enabled_view_modes_defaults[0]
         default_token_health = _coerce_bool(base_cfg.get("show_sidebar_meta_token_health", True), default=True)
+        default_tenant_logo = _normalize_logo_source(base_cfg.get("tenant_logo", ""))
         kpi_options = list(KPI_CATALOG.keys())
         overview_section_options = list(OVERVIEW_SECTION_OPTIONS.keys())
         traffic_section_options = list(TRAFFIC_SECTION_OPTIONS.keys())
+        campaign_filter_options = list(CAMPAIGN_FILTER_OPTIONS.keys())
 
         overview_selected = st.multiselect(
             "KPIs para Overview",
@@ -3918,6 +4987,27 @@ def render_admin_panel(
             format_func=lambda k: str(TRAFFIC_SECTION_OPTIONS.get(k, k)),
             key=f"adm_dash_traffic_sections_{target_scope}",
         )
+        campaign_filters_selected = st.multiselect(
+            "Filtros dinámicos de campañas",
+            options=campaign_filter_options,
+            default=campaign_filters_defaults,
+            format_func=lambda k: str(CAMPAIGN_FILTER_OPTIONS.get(k, k)),
+            key=f"adm_dash_campaign_filters_{target_scope}",
+            help="Se mostrarán automáticamente solo cuando exista data para ese filtro en el tenant.",
+        )
+        enabled_view_modes_selected = st.multiselect(
+            "Vistas habilitadas en menú lateral",
+            options=list(VIEW_MODE_OPTIONS),
+            default=enabled_view_modes_defaults,
+            key=f"adm_dash_enabled_views_{target_scope}",
+            help="Controla qué vistas aparecen en el sidebar para este scope.",
+        )
+        default_view_mode_options = _normalize_view_mode_keys(
+            enabled_view_modes_selected,
+            enabled_view_modes_defaults,
+        )
+        if default_view_mode not in default_view_mode_options:
+            default_view_mode = default_view_mode_options[0]
         cfg_col_1, cfg_col_2 = st.columns(2)
         with cfg_col_1:
             selected_platform = st.selectbox(
@@ -3929,10 +5019,18 @@ def render_admin_panel(
         with cfg_col_2:
             selected_view_mode = st.selectbox(
                 "Vista por defecto",
-                options=list(VIEW_MODE_OPTIONS),
-                index=list(VIEW_MODE_OPTIONS).index(default_view_mode) if default_view_mode in VIEW_MODE_OPTIONS else 0,
+                options=default_view_mode_options,
+                index=default_view_mode_options.index(default_view_mode)
+                if default_view_mode in default_view_mode_options
+                else 0,
                 key=f"adm_dash_view_{target_scope}",
             )
+        tenant_logo_input = st.text_input(
+            "Logo tenant (ruta local o URL)",
+            value=default_tenant_logo,
+            key=f"adm_dash_logo_{target_scope}",
+            help="Ejemplo local: assets/logos/hyundai.png | Ejemplo URL: https://.../logo.png",
+        )
         show_sidebar_token = st.toggle(
             "Mostrar Meta Token Health en sidebar",
             value=default_token_health,
@@ -3959,6 +5057,18 @@ def render_admin_panel(
                 TRAFFIC_SECTION_OPTIONS,
                 DEFAULT_TRAFFIC_SECTION_KEYS,
             )
+            campaign_filters_norm = _normalize_campaign_filter_keys(
+                campaign_filters_selected,
+                DEFAULT_CAMPAIGN_FILTER_KEYS,
+            )
+            enabled_view_modes_norm = _normalize_view_mode_keys(
+                enabled_view_modes_selected,
+                list(VIEW_MODE_OPTIONS),
+            )
+            selected_view_mode_norm = _normalize_view_mode_option(selected_view_mode)
+            if selected_view_mode_norm not in enabled_view_modes_norm:
+                selected_view_mode_norm = enabled_view_modes_norm[0]
+            tenant_logo_norm = _normalize_logo_source(tenant_logo_input)
             if not overview_norm:
                 errors.append("Debes seleccionar al menos 1 KPI para Overview.")
             if not traffic_norm:
@@ -3967,6 +5077,8 @@ def render_admin_panel(
                 errors.append("Debes seleccionar al menos 1 sección para Overview.")
             if not traffic_sections_norm:
                 errors.append("Debes seleccionar al menos 1 sección para Tráfico y Adquisición.")
+            if not enabled_view_modes_selected:
+                errors.append("Debes habilitar al menos 1 vista del menú lateral.")
             if errors:
                 for err in errors:
                     st.error(err)
@@ -3977,9 +5089,12 @@ def render_admin_panel(
                     "traffic_kpis": traffic_norm,
                     "overview_sections": overview_sections_norm,
                     "traffic_sections": traffic_sections_norm,
+                    "campaign_filters": campaign_filters_norm,
+                    "enabled_view_modes": enabled_view_modes_norm,
                     "default_platform": _normalize_platform_option(selected_platform),
-                    "default_view_mode": _normalize_view_mode_option(selected_view_mode),
+                    "default_view_mode": selected_view_mode_norm,
                     "show_sidebar_meta_token_health": bool(show_sidebar_token),
+                    "tenant_logo": tenant_logo_norm,
                 }
                 if target_scope == "__defaults__":
                     updated_settings["defaults"] = cfg_payload
@@ -4002,9 +5117,12 @@ def render_admin_panel(
                             "traffic_kpis": traffic_norm,
                             "overview_sections": overview_sections_norm,
                             "traffic_sections": traffic_sections_norm,
+                            "campaign_filters": campaign_filters_norm,
+                            "enabled_view_modes": enabled_view_modes_norm,
                             "default_platform": _normalize_platform_option(selected_platform),
-                            "default_view_mode": _normalize_view_mode_option(selected_view_mode),
+                            "default_view_mode": selected_view_mode_norm,
                             "show_sidebar_meta_token_health": bool(show_sidebar_token),
+                            "tenant_logo": tenant_logo_norm,
                         },
                     )
                     st.success("Variables de dashboard guardadas.")
@@ -4012,7 +5130,8 @@ def render_admin_panel(
 
         st.caption(f"Fuente: {DASHBOARD_SETTINGS_PATH.name} | Scope: {'defaults' if target_scope == '__defaults__' else target_scope}")
 
-    with tab_audit:
+    if admin_section == "audit":
+        st.markdown("### Auditoría")
         st.markdown("### Salud de Configuración")
         user_issues = validate_users_integrity(users, tenants)
         settings_snapshot = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
@@ -4068,7 +5187,7 @@ def main() -> None:
 
     tenants = load_tenants_config(TENANTS_CONFIG_PATH)
     dashboard_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
-    tenant_id, view_mode = render_sidebar(tenants)
+    tenant_id, view_mode, admin_section = render_sidebar(tenants, dashboard_settings)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
     tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
     desired_view_mode = _normalize_view_mode_option(tenant_dash_cfg.get("default_view_mode", "Overview"))
@@ -4094,7 +5213,7 @@ def main() -> None:
         if not _auth_user_is_admin(auth_user):
             st.error("Tu usuario no tiene permiso para Administración.")
             st.stop()
-        render_admin_panel(users, tenants, auth_user, dashboard_settings)
+        render_admin_panel(users, tenants, auth_user, dashboard_settings, admin_section)
         st.caption(
             f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | "
             f"Fuente usuarios: {USERS_CONFIG_PATH.name} | Variables: {DASHBOARD_SETTINGS_PATH.name}"
@@ -4124,6 +5243,8 @@ def main() -> None:
     ga4_event_daily = acq_df(report, "ga4_event_daily")
     pg = acq_df(report, "ga4_top_pages_daily")
     paid_dev = paid_device_df(report)
+    lead_demo = paid_lead_demographics_df(report)
+    lead_geo = paid_lead_geo_df(report)
     camp = acq_df(report, "meta_campaign_daily")
     if not camp.empty:
         camp["platform"] = "Meta"
@@ -4142,12 +5263,22 @@ def main() -> None:
         camp_all = pd.concat([camp, gcamp], ignore_index=True)
 
     min_d, max_d = df["date"].min(), df["date"].max()
-    s, e, platform = render_top_filters(
+    tenant_logo_source = _resolve_logo_image_source(
+        tenant_dash_cfg.get("tenant_logo", tenant_cfg.get("logo", ""))
+    )
+    campaign_filter_keys = _normalize_campaign_filter_keys(
+        tenant_dash_cfg.get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
+        DEFAULT_CAMPAIGN_FILTER_KEYS,
+    )
+    s, e, platform, campaign_filters = render_top_filters(
         min_d,
         max_d,
         tenant_name,
         tenant_id,
         str(tenant_dash_cfg.get("default_platform", "All")),
+        tenant_logo_source,
+        camp_all,
+        campaign_filter_keys,
     )
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
@@ -4176,6 +5307,7 @@ def main() -> None:
             platform,
             s,
             e,
+            campaign_filters,
             _normalize_kpi_keys(
                 tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
                 DEFAULT_TRAFFIC_KPI_KEYS,
@@ -4195,11 +5327,14 @@ def main() -> None:
             ),
             overview_sections,
             paid_dev,
+            lead_demo,
+            lead_geo,
             camp_all,
             ga4_event_daily,
             ga4_conversion_event_name,
             tenant_meta_account_id,
             tenant_google_customer_id,
+            campaign_filters,
             s,
             e,
             prev_s,
