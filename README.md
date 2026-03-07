@@ -1,157 +1,101 @@
 # MCP Juan (GA4 + Google Ads + Meta Ads)
 
-Repositorio operativo para analitica y performance de YAP:
+Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai HN):
 
 - `analytics-mcp` (GA4)
 - `google-ads-mcp` (Google Ads)
 - `meta-ads-mcp` (Meta Ads)
 - Dashboard en Streamlit (`dashboard.py`)
-- Pipeline horario (`scripts/yap_daily_cpl_report.py`)
+- Pipeline orquestado por tenant (`scripts/run_all_tenants.py`)
 
-## Estado actual (2026-03-01)
+## Estado actual (2026-03-06)
 
 - Produccion desplegada en DigitalOcean (Droplet Ubuntu).
-- Dominio objetivo: `analitica.ipalmera.com` (Cloudflare al frente).
-- Dashboard corriendo como servicio systemd: `yap-dashboard.service`.
-- Pipeline automatico corriendo cada hora con timer systemd: `yap-pipeline.timer`.
-- Actualizacion programada: cada hora (zona `America/Bogota`), con corte al dia actual.
-- Historico reconstruido incluyendo 2025.
-
-## Bitacora operativa (2026-03-05)
-
-- UI/login:
-  - Se elimino el background del login para que no herede el fondo del dashboard (`dashboard.py`).
-  - Se migraron componentes Streamlit de `use_container_width` a `width="stretch"` para compatibilidad post-2025.
-- Accesos:
-  - Se agrego usuario local `yap` (rol `viewer`) con acceso restringido a tenant `yap` en `config/users.json`.
-- Red local:
-  - Se valido publicacion LAN de Streamlit con `--server.address 0.0.0.0` y apertura de puerto `8501` en firewall de Windows.
-- Datos refrescados:
-  - Corrida multi-tenant con corte al dia actual (2026-03-05).
-  - Corrida puntual de YAP con corte al dia anterior (2026-03-04) para conciliacion MCP vs JSON.
-- Scheduler:
-  - `config/systemd/yap-pipeline.timer` actualizado a `OnCalendar=hourly`.
-  - Defaults de `--end-date` cambiados a hoy en `scripts/run_all_tenants.py` y `scripts/yap_daily_cpl_report.py`.
-- Validaciones de analitica:
-  - GTM: evento `sesion_encript` confirmado como `eventName` de un tag GA4 Event (no user property).
-  - GTM cross-domain/linker incluye `yap.com.gt` y `gtc.com.gt`.
-  - GA4 (propiedad YAP): para febrero 2026, `sesion_encript` reporto `eventCount=921` y `totalUsers=696`.
-- Validaciones de Meta:
-  - Se listaron audiencias en `act_352965073056857` y `act_1808641036591815`.
-  - En la cuenta operativa actual (`act_1808641036591815`) los ad sets activos usan intereses/Advantage; no se observaron `custom_audiences` activas.
-
-Comandos usados en esta sesion:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_all_tenants.py --mode auto --end-date 2026-03-05 --organic-lookback-days 30
-.\.venv\Scripts\python.exe scripts\yap_daily_cpl_report.py --tenant-id yap --mode daily --end-date 2026-03-04
-streamlit run dashboard.py --server.address 0.0.0.0 --server.port 8501
-```
+- Dominio: `analitica.ipalmera.com` (Cloudflare al frente).
+- Version desplegada: `Multitenant V2-adminpanel` (commit `9ca64ae`).
+- Dashboard activo como servicio systemd: `yap-dashboard.service`.
+- Pipeline automatico cada hora: `yap-pipeline.timer` -> `yap-pipeline.service`.
+- El servicio de pipeline ejecuta `scripts/run_all_tenants.py --mode auto`.
+- Tenants activos en `config/tenants.json`:
+  - `yap`
+  - `hyundai_hn`
+- El tenant `ipalmera_regional` fue retirado de la configuracion activa.
 
 ## Estructura principal
 
 - `dashboard.py` -> UI principal.
-- `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion.
-- `reports/yap/yap_historical.json` -> fuente principal del dashboard.
-- `reports/yap/yap_organic_historical.json` -> modulo organico (si hay acceso/permisos).
+- `scripts/run_all_tenants.py` -> ejecuta el pipeline para todos los tenants configurados.
+- `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion por tenant.
+- `reports/yap/yap_historical.json` -> fuente principal tenant YAP.
+- `reports/hyundai_hn/hyundai_hn_historical.json` -> fuente principal tenant Hyundai.
+- `reports/*/*_organic_historical.json` -> modulo organico por tenant.
+- `config/tenants.json` -> ids y rutas por tenant.
+- `config/users.json` -> usuarios y permisos.
 - `config/dashboard_settings.json` -> variables dinamicas del dashboard por tenant.
-- `config/admin_audit.jsonl` -> bitacora local de cambios administrativos (usuarios/settings).
-- `config/backups/` -> backups automaticos previos a cada guardado de configuracion.
-- `requirements.txt` -> dependencias de runtime.
-- `scripts/meta-token-guard.ps1` -> utilidad opcional de refresh de token Meta (flujo local Windows).
-
-## Dependencias (repo)
-
-Archivo `requirements.txt`:
-
-- `streamlit==1.54.0`
-- `pandas==2.3.3`
-- `plotly==6.5.2`
-- `matplotlib>=3.8,<4`
-
-## Configuracion sensible (NO versionar)
-
-No subir al repo:
-
-- `~/.codex/config.toml` real con tokens.
-- `ga4_user_oauth_analytics_ipalmera.json` real.
-- respaldos con tokens (`backups/`, `*.bak`, `*.private`, etc).
-
-En servidor se usan:
-
-- `/home/juanm/.codex/config.toml`
-- `/opt/yap/app/ga4_user_oauth_analytics_ipalmera.json`
+- `config/admin_audit.jsonl` -> bitacora de cambios administrativos.
+- `config/backups/` -> backups automaticos antes de guardar config.
 
 ## Operacion local (desarrollo)
 
-1. Ejecutar pipeline:
+1. Instalar dependencias:
 
 ```powershell
-python scripts\yap_daily_cpl_report.py --mode auto --output-path reports\yap\yap_historical.json --organic-output-path reports\yap\yap_organic_historical.json --organic-lookback-days 30
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
 ```
 
-Pipeline por tenant (multi-tenant, fase local):
+2. Ejecutar pipeline multi-tenant:
 
 ```powershell
-python scripts\yap_daily_cpl_report.py --tenant-id yap --mode auto
+.\.venv\Scripts\python scripts\run_all_tenants.py --mode auto --organic-lookback-days 30
 ```
 
-Pipeline para todos los tenants definidos en `config/tenants.json`:
+3. Ejecutar pipeline para un tenant puntual:
 
 ```powershell
-python scripts\run_all_tenants.py --mode auto
+.\.venv\Scripts\python scripts\yap_daily_cpl_report.py --tenant-id hyundai_hn --mode auto
 ```
 
-Nota multi-tenant:
-- Puedes definir por cliente `ga4_conversion_event_name` en `config/tenants.json`.
-- Ese evento alimenta el bloque GA4 del embudo (`Conversiones GA4` y `CPL (GA4)`), sin alterar conversiones nativas de Meta/Google.
-
-2. Levantar dashboard local:
+4. Levantar dashboard local:
 
 ```powershell
-streamlit run dashboard.py
+.\.venv\Scripts\streamlit run dashboard.py
 ```
 
-3. Login local (bloque multi-tenant):
+5. Login local:
 
 ```powershell
 copy config\users.template.json config\users.json
 ```
 
-- Usuarios iniciales de ejemplo:
-  - `admin` / `AdminYAP2026!` (rol `admin`, ve todos los tenants)
-  - `hyundai` (rol `viewer`, solo `hyundai_hn`)
-  - `yap` (rol `viewer`, solo `yap`)
-- Ajustar `config/users.json` antes de usar en produccion.
+Usuarios base del template:
+- `admin` (rol `admin`)
+- `hyundai` (rol `viewer`, tenant `hyundai_hn`)
+- `yap` (rol `viewer`, tenant `yap`)
 
-4. Panel administrativo (Fase 6 hardening):
+Definir o resetear passwords desde `config/users.json` o desde el panel de Administracion.
 
-- Vista `Administración`:
-  - Gestion de usuarios por tenant (crear/editar/eliminar, activar/desactivar, reset de password).
-  - Variables dinamicas por tenant para dashboard (`KPIs`, `secciones`, `vista/plataforma por defecto`).
-  - Toggle de `Meta Token Health` en sidebar por tenant.
-  - Tab `Auditoría` con:
-    - chequeo de integridad de configuracion;
-    - log de cambios administrativos (`config/admin_audit.jsonl`);
-    - descarga de auditoria en formato `jsonl`.
+## Panel de Administracion (dashboard)
 
-- Persistencia segura:
-  - Antes de guardar `users.json` o `dashboard_settings.json`, se crea backup en `config/backups/`.
+- Gestion de usuarios por tenant.
+- Activacion/desactivacion de vistas del menu lateral.
+- Configuracion dinamica de KPIs y secciones por tenant.
+- Vista/plataforma por defecto por tenant.
+- Upload de logo por tenant (se guarda en `assets/logos`).
+- Toggle de salud de token Meta en sidebar.
+- Auditoria de cambios y backups de configuracion.
 
 ## Operacion en produccion (DigitalOcean)
 
 ### Servicios systemd
 
-- Dashboard:
-  - `yap-dashboard.service`
-  - expone Streamlit en `127.0.0.1:8501`
-- Pipeline diario:
-  - `yap-pipeline.service` (oneshot)
-  - `yap-pipeline.timer` con `OnCalendar=hourly`
+- `yap-dashboard.service` -> Streamlit en `127.0.0.1:8501`
+- `yap-pipeline.service` -> pipeline multi-tenant (oneshot)
+- `yap-pipeline.timer` -> `OnCalendar=hourly`
 
-### Comandos utiles
+### Validaciones utiles
 
-Ver estado:
+Estado:
 
 ```bash
 sudo systemctl status yap-dashboard --no-pager
@@ -159,7 +103,13 @@ sudo systemctl status yap-pipeline.timer --no-pager
 sudo systemctl status yap-pipeline.service --no-pager
 ```
 
-Ver proxima corrida:
+Ver comando real del pipeline:
+
+```bash
+systemctl cat yap-pipeline.service
+```
+
+Proxima corrida:
 
 ```bash
 systemctl list-timers | grep yap-pipeline
@@ -180,53 +130,46 @@ journalctl -u yap-pipeline.service -n 120 --no-pager
 
 ## Flujo de datos horario
 
-1. Cada hora el timer dispara `yap-pipeline.service`.
-2. El script corre en `--mode auto` y toma `end-date = hoy`.
-3. Actualiza `reports/yap/yap_historical.json`.
-4. Streamlit lee ese JSON en cada recarga del dashboard.
+1. Cada hora `yap-pipeline.timer` dispara `yap-pipeline.service`.
+2. `run_all_tenants.py` recorre los tenants de `config/tenants.json`.
+3. Cada tenant corre `yap_daily_cpl_report.py --mode auto`.
+4. Se actualizan JSONs por tenant en `reports/<tenant_id>/`.
+5. Streamlit consume esos JSONs en cada recarga.
 
-No hay upload manual al dashboard: el dashboard consume el JSON local actualizado.
+Nota:
+- Si un tenant no tiene `ga4_property_id` (ejemplo actual `hyundai_hn`), GA4 se omite para ese tenant y el pipeline continua normalmente.
 
-## Bootstrap historico (ejemplo 2025+)
+## Deploy de cambios
 
-Reconstruccion completa:
-
-```bash
-/opt/yap/venv/bin/python /opt/yap/app/scripts/yap_daily_cpl_report.py --mode bootstrap --bootstrap-start 2025-01-01 --end-date $(date -d "yesterday" +%F) --output-path /opt/yap/app/reports/yap/yap_historical.json --organic-output-path /opt/yap/app/reports/yap/yap_organic_historical.json --organic-lookback-days 30
-```
-
-## Publicar cambios de UI/codigo
-
-1. Cambiar y validar en local.
-2. Commit/push:
-
-```bash
-git add .
-git commit -m "tu cambio"
-git push origin main
-```
-
-3. Deploy en servidor:
+1. Commit y push en local.
+2. En servidor:
 
 ```bash
 cd /opt/yap/app
-git pull origin main
+git pull --ff-only origin main
 /opt/yap/venv/bin/pip install -r requirements.txt
 sudo cp /opt/yap/app/config/systemd/yap-pipeline.timer /etc/systemd/system/yap-pipeline.timer
 sudo systemctl daemon-reload
 sudo systemctl restart yap-pipeline.timer
 sudo systemctl restart yap-dashboard
+sudo systemctl start yap-pipeline.service
 ```
+
+## Configuracion sensible (no versionar)
+
+- `~/.codex/config.toml` real con tokens.
+- `ga4_user_oauth_analytics_ipalmera.json` real.
+- Backups o archivos privados con credenciales (`*.bak`, `*.private`, etc.).
 
 ## Cloudflare recomendado
 
-- SSL/TLS: `Full` (evitar `Flexible` para este setup).
+- SSL/TLS: `Full` (evitar `Flexible`).
 - DNS de `analitica.ipalmera.com` apuntando al Droplet.
-- Durante troubleshooting de certificado, usar temporalmente `DNS only`.
+- Para troubleshooting de certificado, usar temporalmente `DNS only`.
 
 ## Seguridad minima recomendada
 
 - Usuario operativo no root (`juanm`).
-- `ufw` activo con `22`, `80`, `443`.
+- `ufw` activo para `22`, `80`, `443`.
 - SSH por llaves.
-- En `sshd_config`: `PermitRootLogin no` y `PasswordAuthentication no` (si ya validaste acceso por llave).
+- En `sshd_config`: `PermitRootLogin no` y `PasswordAuthentication no`.
