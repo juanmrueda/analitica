@@ -1989,14 +1989,112 @@ def validate_users_integrity(users: dict[str, dict[str, Any]], tenants: dict[str
         if not uname:
             issues.append("Existe un usuario con username vacío.")
             continue
+        role = str(user.get("role", "viewer")).strip().lower() or "viewer"
         if bool(user.get("enabled", True)):
             if not str(user.get("password_hash", "")).strip() or not str(user.get("password_salt", "")).strip():
                 issues.append(f"Usuario activo '{uname}' sin password_hash/password_salt.")
         allowed = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+        scopes = _normalize_tenant_scopes(user.get("tenant_scopes"), allowed, role)
         for tenant_id in allowed:
             if tenant_id != "*" and tenant_id not in tenant_ids:
                 issues.append(f"Usuario '{uname}' apunta a tenant inexistente '{tenant_id}'.")
+        for scope in scopes:
+            tenant_id = str(scope.get("tenant_id", "")).strip().lower()
+            if tenant_id and tenant_id != "*" and tenant_id not in tenant_ids:
+                issues.append(f"Usuario '{uname}' tiene scope huérfano en tenant '{tenant_id}'.")
     return issues
+
+
+def repair_users_tenant_integrity(
+    users: dict[str, dict[str, Any]],
+    tenants: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    tenant_ids = list(tenants.keys())
+    tenant_set = set(tenant_ids)
+    fallback_tenant = DEFAULT_TENANT_ID if DEFAULT_TENANT_ID in tenant_set else (tenant_ids[0] if tenant_ids else "")
+
+    repaired: dict[str, dict[str, Any]] = {}
+    notes: list[str] = []
+
+    for username, raw_user in users.items():
+        user = dict(raw_user) if isinstance(raw_user, dict) else {}
+        uname = str(user.get("username", username)).strip().lower() or str(username).strip().lower()
+        role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+        global_role = str(user.get("global_role", "")).strip().lower()
+        if not global_role:
+            global_role = "admin" if role == "admin" else "user"
+
+        allowed = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+        scopes = _normalize_tenant_scopes(user.get("tenant_scopes"), allowed, role)
+
+        invalid_allowed = sorted({tid for tid in allowed if tid != "*" and tid not in tenant_set})
+        invalid_scopes = sorted(
+            {
+                str(scope.get("tenant_id", "")).strip().lower()
+                for scope in scopes
+                if str(scope.get("tenant_id", "")).strip().lower() not in {"", "*"}
+                and str(scope.get("tenant_id", "")).strip().lower() not in tenant_set
+            }
+        )
+
+        allowed_clean = [tid for tid in allowed if tid == "*" or tid in tenant_set]
+        if "*" in allowed_clean:
+            allowed_clean = ["*"]
+
+        scope_map: dict[str, str] = {}
+        for scope in scopes:
+            tenant_id = str(scope.get("tenant_id", "")).strip().lower()
+            if not tenant_id:
+                continue
+            if tenant_id != "*" and tenant_id not in tenant_set:
+                continue
+            if tenant_id in scope_map:
+                continue
+            scope_map[tenant_id] = str(scope.get("role", role)).strip().lower() or role
+
+        if "*" in allowed_clean:
+            star_role = scope_map.get("*", "admin" if global_role == "admin" or role == "admin" else role)
+            scopes_clean = [{"tenant_id": "*", "role": star_role}]
+        else:
+            allowed_from_scopes = [tenant_id for tenant_id in scope_map.keys() if tenant_id != "*"]
+            if not allowed_clean and allowed_from_scopes:
+                allowed_clean = allowed_from_scopes
+            scopes_clean = []
+            for tenant_id in allowed_clean:
+                scopes_clean.append(
+                    {
+                        "tenant_id": tenant_id,
+                        "role": scope_map.get(tenant_id, role),
+                    }
+                )
+
+        enabled = bool(user.get("enabled", True))
+        if not allowed_clean:
+            if global_role == "admin" or role == "admin":
+                allowed_clean = ["*"]
+                scopes_clean = [{"tenant_id": "*", "role": "admin"}]
+                notes.append(f"Usuario '{uname}': sin tenants válidos, se restauró acceso global admin.")
+            elif fallback_tenant:
+                allowed_clean = [fallback_tenant]
+                scopes_clean = [{"tenant_id": fallback_tenant, "role": role}]
+                enabled = False
+                notes.append(
+                    f"Usuario '{uname}': se removieron tenants huérfanos y quedó deshabilitado con scope temporal '{fallback_tenant}'."
+                )
+
+        if invalid_allowed or invalid_scopes:
+            removed = sorted(set(invalid_allowed + invalid_scopes))
+            notes.append(f"Usuario '{uname}': se removieron referencias a tenants inexistentes {removed}.")
+
+        user["username"] = uname
+        user["role"] = role
+        user["global_role"] = global_role
+        user["enabled"] = enabled
+        user["allowed_tenants"] = allowed_clean
+        user["tenant_scopes"] = scopes_clean
+        repaired[uname] = user
+
+    return repaired, notes
 
 
 def validate_dashboard_settings_integrity(settings: dict[str, Any], tenants: dict[str, dict[str, Any]]) -> list[str]:
@@ -5311,6 +5409,35 @@ def render_admin_panel(
             st.error(f"Se detectaron {len(all_issues)} issue(s) de integridad.")
             for issue in all_issues:
                 st.write(f"- {issue}")
+            tenant_ref_issues = [
+                issue
+                for issue in user_issues
+                if "tenant inexistente" in issue or "scope huérfano" in issue
+            ]
+            if tenant_ref_issues and st.button(
+                "Reparar referencias huérfanas de tenants en usuarios",
+                key="repair_users_tenant_integrity_btn",
+                width="stretch",
+            ):
+                repaired_users, repair_notes = repair_users_tenant_integrity(users, tenants)
+                if repaired_users == users:
+                    st.info("No se detectaron cambios para aplicar en usuarios.")
+                else:
+                    ok, err_msg = save_users_config(USERS_CONFIG_PATH, repaired_users)
+                    if not ok:
+                        st.error(f"No se pudo guardar {USERS_CONFIG_PATH.name}: {err_msg}")
+                    else:
+                        append_admin_audit(
+                            "users_tenant_integrity_repaired",
+                            str(auth_user.get("username", "unknown")),
+                            target="users",
+                            details={"changes": repair_notes},
+                        )
+                        st.success("Se aplicó reparación de referencias huérfanas en usuarios.")
+                        if repair_notes:
+                            for note in repair_notes:
+                                st.write(f"- {note}")
+                        st.rerun()
         else:
             st.success("Integridad OK en usuarios y dashboard settings.")
 
