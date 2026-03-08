@@ -643,23 +643,6 @@ def apply_theme() -> None:
             color: #F8FAFC;
             line-height: 1.25;
           }
-          .desktop-powered-footer {
-            margin-top: 1.15rem;
-            text-align: center;
-            font-size: 0.78rem;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: #667085;
-            font-weight: 700;
-          }
-          .desktop-powered-footer a {
-            color: #0A84FF;
-            text-decoration: none;
-            font-weight: 800;
-          }
-          .desktop-powered-footer a:hover {
-            text-decoration: underline;
-          }
           @media (max-width: 960px) {
             .block-container {
               max-width: 100%;
@@ -760,9 +743,6 @@ def apply_theme() -> None:
             }
             .daily-fact .body {
               font-size: 0.86rem;
-            }
-            .desktop-powered-footer {
-              display: none;
             }
             [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
               flex-wrap: wrap !important;
@@ -2788,25 +2768,140 @@ def build_kpi_payload(
     return payload
 
 
-def render_kpi_cards(
+def _resolve_kpi_keys(
     selected_keys: list[str],
     payload: dict[str, dict[str, str]],
     fallback_keys: list[str],
-) -> None:
+) -> list[str]:
     valid = [k for k in selected_keys if k in payload]
     if not valid:
         valid = [k for k in fallback_keys if k in payload]
     if not valid:
         valid = [k for k in list(payload.keys())[:4]]
-    cols = st.columns(len(valid))
-    for col, key in zip(cols, valid):
-        item = payload.get(key, {})
-        col.metric(
-            str(item.get("label", key)),
-            str(item.get("value", "N/A")),
-            str(item.get("delta", "N/A")),
-            delta_color=str(item.get("delta_color", "normal")),
-        )
+    return valid
+
+
+def render_kpi_cards(
+    selected_keys: list[str],
+    payload: dict[str, dict[str, str]],
+    fallback_keys: list[str],
+    *,
+    interactive: bool = False,
+    state_key: str = "overview_chart_metric",
+    preferred_active_key: str = "spend",
+) -> str:
+    valid = _resolve_kpi_keys(selected_keys, payload, fallback_keys)
+    if not valid:
+        return ""
+    active_key = str(st.session_state.get(state_key, "")).strip()
+    if active_key not in valid:
+        active_key = preferred_active_key if preferred_active_key in valid else valid[0]
+        st.session_state[state_key] = active_key
+
+    if not interactive:
+        cols = st.columns(len(valid))
+        for col, key in zip(cols, valid):
+            item = payload.get(key, {})
+            col.metric(
+                str(item.get("label", key)),
+                str(item.get("value", "N/A")),
+                str(item.get("delta", "N/A")),
+                delta_color=str(item.get("delta_color", "normal")),
+            )
+        return active_key
+
+    st.markdown(
+        """
+        <style>
+          .st-key-overview-kpi-wrap { margin-bottom: 0.34rem; }
+          [class*="st-key-overview-kpi-card-active-"],
+          [class*="st-key-overview-kpi-card-idle-"] {
+            position: relative;
+          }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stElementContainer"],
+          [class*="st-key-overview-kpi-card-idle-"] [data-testid="stElementContainer"] {
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetric"],
+          [class*="st-key-overview-kpi-card-idle-"] [data-testid="stMetric"] {
+            margin: 0 !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            border-radius: 18px !important;
+            padding: 1rem !important;
+            min-height: 8.7rem !important;
+            box-shadow: 0 12px 28px rgba(15,23,42,0.04);
+            transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease, background 0.14s ease;
+          }
+          [class*="st-key-overview-kpi-card-idle-"]:hover [data-testid="stMetric"] {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 22px rgba(15,23,42,0.08);
+          }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetric"] {
+            border: 1px solid rgba(103,178,45,0.74) !important;
+            background: linear-gradient(180deg, rgba(123,204,53,0.16) 0%, rgba(255,255,255,0.90) 100%) !important;
+            box-shadow: 0 0 0 1px rgba(103,178,45,0.22), 0 12px 24px rgba(103,178,45,0.16) !important;
+          }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricLabel"] { color: #355914 !important; }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricValue"] { color: #1F4D0A !important; }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stButton"],
+          [class*="st-key-overview-kpi-card-idle-"] [data-testid="stButton"] {
+            position: relative !important;
+            margin-top: -8.7rem !important;
+            margin-bottom: 0 !important;
+            height: 8.7rem !important;
+            z-index: 5 !important;
+          }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stButton"] button,
+          [class*="st-key-overview-kpi-card-idle-"] [data-testid="stButton"] button {
+            width: 100% !important;
+            height: 8.7rem !important;
+            min-height: 8.7rem !important;
+            opacity: 0 !important;
+            border: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            cursor: pointer;
+          }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stButton"] button:focus-visible,
+          [class*="st-key-overview-kpi-card-idle-"] [data-testid="stButton"] button:focus-visible {
+            opacity: 0.08 !important;
+            background: rgba(123,204,53,0.35) !important;
+            outline: 2px solid rgba(103,178,45,0.72) !important;
+            outline-offset: -2px !important;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="overview-kpi-wrap"):
+        cols = st.columns(len(valid))
+        for col, key in zip(cols, valid):
+            item = payload.get(key, {})
+            state_tag = "active" if key == active_key else "idle"
+            with col:
+                with st.container(key=f"overview-kpi-card-{state_tag}-{key}"):
+                    st.metric(
+                        str(item.get("label", key)),
+                        str(item.get("value", "N/A")),
+                        str(item.get("delta", "N/A")),
+                        delta_color=str(item.get("delta_color", "normal")),
+                    )
+                    st.button(
+                        f"Seleccionar {item.get('label', key)}",
+                        key=f"{state_key}_pick_{key}",
+                        on_click=lambda target=key: st.session_state.__setitem__(state_key, target),
+                        use_container_width=True,
+                    )
+
+    active_key = str(st.session_state.get(state_key, active_key)).strip()
+    if active_key not in valid:
+        active_key = preferred_active_key if preferred_active_key in valid else valid[0]
+        st.session_state[state_key] = active_key
+    return active_key
 
 
 def _password_matches(username: str, password: str, salt: str, expected_hash: str) -> bool:
@@ -3443,6 +3538,89 @@ def summary(df: pd.DataFrame, platform: str) -> dict[str, float | None]:
         "bounce": float(df["ga4_bounce"].mean()) if not df.empty else 0.0,
     }
 
+
+PAID_TREND_KPI_KEYS = {"spend", "conv", "clicks", "impr", "cpl", "ctr", "cvr", "cpc", "cpm"}
+
+
+def _series_num(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(0.0, index=df.index, dtype="float64")
+    return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+
+
+def _series_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    den = pd.to_numeric(denominator, errors="coerce")
+    return pd.to_numeric(numerator, errors="coerce").div(den.where(den != 0)).fillna(0.0)
+
+
+def _platform_kpi_series(df: pd.DataFrame, prefix: str, kpi_key: str) -> pd.Series | None:
+    spend = _series_num(df, f"{prefix}_spend")
+    clicks = _series_num(df, f"{prefix}_clicks")
+    conv = _series_num(df, f"{prefix}_conv")
+    impr = _series_num(df, f"{prefix}_impr")
+    if kpi_key == "spend":
+        return spend
+    if kpi_key == "conv":
+        return conv
+    if kpi_key == "clicks":
+        return clicks
+    if kpi_key == "impr":
+        return impr
+    if kpi_key == "cpl":
+        return _series_divide(spend, conv)
+    if kpi_key == "ctr":
+        return _series_divide(clicks, impr)
+    if kpi_key == "cvr":
+        return _series_divide(conv, clicks)
+    if kpi_key == "cpc":
+        return _series_divide(spend, clicks)
+    if kpi_key == "cpm":
+        return _series_divide(spend * 1000.0, impr)
+    return None
+
+
+def _ga4_kpi_series(df: pd.DataFrame, kpi_key: str) -> pd.Series | None:
+    if kpi_key == "sessions":
+        return _series_num(df, "ga4_sessions")
+    if kpi_key == "users":
+        return _series_num(df, "ga4_users")
+    if kpi_key == "avg_sess":
+        return _series_num(df, "ga4_avg_sess")
+    if kpi_key == "bounce":
+        return _series_num(df, "ga4_bounce")
+    return None
+
+
+def _kpi_axis_title(kpi_key: str) -> str:
+    label = str(KPI_CATALOG.get(kpi_key, {}).get("label", kpi_key))
+    fmt = str(KPI_CATALOG.get(kpi_key, {}).get("fmt", "int"))
+    if fmt == "money":
+        return f"{label} ($)"
+    if fmt == "pct":
+        return f"{label} (%)"
+    if fmt == "duration":
+        return f"{label} (s)"
+    return label
+
+
+def _kpi_hover_value_template(kpi_key: str) -> str:
+    fmt = str(KPI_CATALOG.get(kpi_key, {}).get("fmt", "int"))
+    if fmt == "money":
+        return "$%{y:,.2f}"
+    if fmt == "pct":
+        return "%{y:.2%}"
+    if fmt == "duration":
+        return "%{y:.0f} s"
+    return "%{y:,.0f}"
+
+
+def _kpi_trend_subtitle(kpi_key: str) -> str:
+    if kpi_key == "spend":
+        return "Daily investment over time"
+    label = str(KPI_CATALOG.get(kpi_key, {}).get("label", kpi_key))
+    return f"Tendencia diaria de {label.lower()}"
+
+
 def render_sidebar(
     tenants: dict[str, dict[str, Any]],
     dashboard_settings: dict[str, Any],
@@ -3791,6 +3969,7 @@ def render_exec(
     e,
     prev_s,
     prev_e,
+    overview_chart_state_key: str,
 ):
     selected_sections = _normalize_section_keys(
         overview_section_keys,
@@ -3801,17 +3980,32 @@ def render_exec(
     cur, prev = summary(df_sel, platform), summary(df_prev, platform)
     cur_days, prev_days = max(len(df_sel), 1), len(df_prev)
     kpi_payload = build_kpi_payload(cur, prev, cur_days, prev_days)
+    valid_overview_kpis = _resolve_kpi_keys(overview_kpi_keys, kpi_payload, DEFAULT_OVERVIEW_KPI_KEYS)
+    active_overview_kpi = str(st.session_state.get(overview_chart_state_key, "")).strip()
+    if active_overview_kpi not in valid_overview_kpis:
+        active_overview_kpi = "spend" if "spend" in valid_overview_kpis else (valid_overview_kpis[0] if valid_overview_kpis else "spend")
+        st.session_state[overview_chart_state_key] = active_overview_kpi
     if "kpis" in section_set:
-        render_kpi_cards(overview_kpi_keys, kpi_payload, DEFAULT_OVERVIEW_KPI_KEYS)
+        active_overview_kpi = render_kpi_cards(
+            overview_kpi_keys,
+            kpi_payload,
+            DEFAULT_OVERVIEW_KPI_KEYS,
+            interactive=True,
+            state_key=overview_chart_state_key,
+            preferred_active_key=active_overview_kpi,
+        )
 
     c = metric_cols(platform)
 
     def _render_trend_chart() -> None:
+        trend_label = str(KPI_CATALOG.get(active_overview_kpi, {}).get("label", active_overview_kpi))
+        trend_subtitle = _kpi_trend_subtitle(active_overview_kpi)
+        hover_value_template = _kpi_hover_value_template(active_overview_kpi)
         st.markdown(
-            """
+            f"""
             <div class="viz-card">
               <p class="viz-title">Performance Across Platforms</p>
-              <div class="viz-sub">Daily investment over time</div>
+              <div class="viz-sub">{html.escape(trend_subtitle)}</div>
             """,
             unsafe_allow_html=True,
         )
@@ -3819,36 +4013,66 @@ def render_exec(
         if ld.empty:
             st.info("Sin datos para el periodo seleccionado.")
         else:
-            ld["google_trend"] = pd.to_numeric(ld["google_spend"], errors="coerce").fillna(0.0)
-            ld["meta_trend"] = pd.to_numeric(ld["meta_spend"], errors="coerce").fillna(0.0)
             fig = go.Figure()
-            if platform in ("All", "Google"):
-                fig.add_trace(
-                    go.Scatter(
-                        x=ld["date"],
-                        y=ld["google_trend"],
-                        mode="lines",
-                        name="Google Ads",
-                        line={"color": C_GOOGLE, "width": 4, "shape": "spline"},
-                        hovertemplate="%{x|%d %b %Y}<br>Google: $%{y:,.2f}<extra></extra>",
+            traces_added = 0
+            if active_overview_kpi in PAID_TREND_KPI_KEYS:
+                if platform in ("All", "Google"):
+                    google_series = _platform_kpi_series(ld, "google", active_overview_kpi)
+                    if google_series is not None:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=ld["date"],
+                                y=google_series,
+                                mode="lines",
+                                name="Google Ads",
+                                line={"color": C_GOOGLE, "width": 4, "shape": "spline"},
+                                hovertemplate=f"%{{x|%d %b %Y}}<br>Google: {hover_value_template}<extra></extra>",
+                            )
+                        )
+                        traces_added += 1
+                if platform in ("All", "Meta"):
+                    meta_series = _platform_kpi_series(ld, "meta", active_overview_kpi)
+                    if meta_series is not None:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=ld["date"],
+                                y=meta_series,
+                                mode="lines",
+                                name="Meta Ads",
+                                line={"color": C_META, "width": 4, "shape": "spline"},
+                                hovertemplate=f"%{{x|%d %b %Y}}<br>Meta: {hover_value_template}<extra></extra>",
+                            )
+                        )
+                        traces_added += 1
+            else:
+                ga4_series = _ga4_kpi_series(ld, active_overview_kpi)
+                if ga4_series is not None:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=ld["date"],
+                            y=ga4_series,
+                            mode="lines",
+                            name="GA4",
+                            line={"color": C_ACCENT, "width": 4, "shape": "spline"},
+                            hovertemplate=f"%{{x|%d %b %Y}}<br>{html.escape(trend_label)}: {hover_value_template}<extra></extra>",
+                        )
                     )
-                )
-            if platform in ("All", "Meta"):
-                fig.add_trace(
-                    go.Scatter(
-                        x=ld["date"],
-                        y=ld["meta_trend"],
-                        mode="lines",
-                        name="Meta Ads",
-                        line={"color": C_META, "width": 4, "shape": "spline"},
-                        hovertemplate="%{x|%d %b %Y}<br>Meta: $%{y:,.2f}<extra></extra>",
-                    )
-                )
-            pbi_layout(fig, yaxis_title="Inversión diaria ($)", xaxis_title="")
-            fig.update_layout(height=355, hovermode="x unified", showlegend=True)
-            fig.update_xaxes(tickformat="%d %b", tickfont={"size": 10, "color": "#7A879D"})
-            fig.update_yaxes(tickfont={"size": 10, "color": "#7A879D"})
-            st.plotly_chart(fig, width="stretch")
+                    traces_added += 1
+            if traces_added == 0:
+                st.info("No hay datos de tendencia para la métrica seleccionada.")
+            else:
+                pbi_layout(fig, yaxis_title=_kpi_axis_title(active_overview_kpi), xaxis_title="")
+                fig.update_layout(height=355, hovermode="x unified", showlegend=True)
+                fig.update_xaxes(tickformat="%d %b", tickfont={"size": 10, "color": "#7A879D"})
+                fig.update_yaxes(tickfont={"size": 10, "color": "#7A879D"})
+                fmt = str(KPI_CATALOG.get(active_overview_kpi, {}).get("fmt", "int"))
+                if fmt == "pct":
+                    fig.update_yaxes(tickformat=".1%")
+                elif fmt == "money":
+                    fig.update_yaxes(tickprefix="$", separatethousands=True)
+                else:
+                    fig.update_yaxes(tickformat=",.0f")
+                st.plotly_chart(fig, width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
 
     def _render_funnel_and_ga4() -> None:
@@ -5145,7 +5369,7 @@ def _render_admin_user_create_panel(
                 )
                 st.session_state["adm_users_mode"] = "edit"
                 st.session_state["adm_users_selected"] = create_username
-                st.success(f"Usuario '{create_username}' creado.")
+                _set_admin_users_flash("success", f"Usuario '{create_username}' creado correctamente.")
                 st.rerun()
 
     st.button(
@@ -5154,6 +5378,67 @@ def _render_admin_user_create_panel(
         width="stretch",
         disabled=True,
     )
+
+
+def _set_admin_users_flash(kind: str, message: str) -> None:
+    st.session_state["adm_users_flash"] = {
+        "kind": str(kind).strip().lower() or "info",
+        "message": str(message).strip(),
+    }
+
+
+@st.dialog("Confirmar eliminación", width="small", icon=":material/warning:")
+def _render_delete_user_confirm_dialog(
+    users: dict[str, dict[str, Any]],
+    auth_user: dict[str, Any],
+    selected_username: str,
+) -> None:
+    st.markdown(
+        f"Vas a eliminar al usuario **{html.escape(selected_username)}**. Esta acción es permanente.",
+        unsafe_allow_html=True,
+    )
+    col_cancel, col_confirm = st.columns(2)
+    with col_cancel:
+        if st.button("Cancelar", key=f"adm_delete_cancel_{selected_username}", width="stretch"):
+            st.session_state.pop("adm_delete_target", None)
+            st.rerun()
+    with col_confirm:
+        if st.button(
+            "Eliminar",
+            key=f"adm_delete_confirm_{selected_username}",
+            type="primary",
+            width="stretch",
+        ):
+            user = users.get(selected_username, {})
+            errors: list[str] = []
+            current_username = str(auth_user.get("username", "")).strip().lower()
+            if selected_username.strip().lower() == current_username:
+                errors.append("No puedes eliminar tu propio usuario en sesión.")
+            if bool(user.get("enabled", True)) and _user_record_is_admin(user) and _enabled_admin_count(users) <= 1:
+                errors.append("No puedes eliminar el último admin activo.")
+            if errors:
+                for err in errors:
+                    st.error(err)
+                return
+
+            users_next = dict(users)
+            users_next.pop(selected_username, None)
+            ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+            if not ok:
+                st.error(f"No se pudo guardar config/users.json: {err_msg}")
+                return
+
+            append_admin_audit(
+                "user_deleted",
+                str(auth_user.get("username", "unknown")),
+                target=selected_username,
+                details={},
+            )
+            st.session_state["adm_users_selected"] = sorted(users_next.keys())[0] if users_next else ""
+            st.session_state["adm_users_panel_open"] = False
+            st.session_state.pop("adm_delete_target", None)
+            _set_admin_users_flash("success", f"Usuario '{selected_username}' eliminado correctamente.")
+            st.rerun()
 
 
 def _render_admin_user_edit_panel(
@@ -5320,7 +5605,7 @@ def _render_admin_user_edit_panel(
                         "allowed_tenants": updated["allowed_tenants"],
                         "tenant_scopes": updated["tenant_scopes"],
                     }
-                st.success("Usuario actualizado.")
+                _set_admin_users_flash("success", f"Usuario '{selected_username}' actualizado correctamente.")
                 st.rerun()
 
     st.caption("Esta acción elimina el usuario de forma permanente.")
@@ -5329,31 +5614,11 @@ def _render_admin_user_edit_panel(
         key=f"adm_edit_delete_wire_{selected_username}",
         width="stretch",
     ):
-        errors: list[str] = []
-        current_username = str(auth_user.get("username", "")).strip().lower()
-        if selected_username.strip().lower() == current_username:
-            errors.append("No puedes eliminar tu propio usuario en sesión.")
-        if bool(user.get("enabled", True)) and _user_record_is_admin(user) and _enabled_admin_count(users) <= 1:
-            errors.append("No puedes eliminar el último admin activo.")
-        if errors:
-            for err in errors:
-                st.error(err)
-        else:
-            users_next = dict(users)
-            users_next.pop(selected_username, None)
-            ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
-            if not ok:
-                st.error(f"No se pudo guardar config/users.json: {err_msg}")
-            else:
-                append_admin_audit(
-                    "user_deleted",
-                    str(auth_user.get("username", "unknown")),
-                    target=selected_username,
-                    details={},
-                )
-                st.session_state["adm_users_selected"] = sorted(users_next.keys())[0] if users_next else ""
-                st.success(f"Usuario '{selected_username}' eliminado.")
-                st.rerun()
+        st.session_state["adm_delete_target"] = selected_username
+
+    pending_delete = str(st.session_state.get("adm_delete_target", "")).strip().lower()
+    if pending_delete and pending_delete == selected_username.strip().lower():
+        _render_delete_user_confirm_dialog(users, auth_user, selected_username)
 
 
 def _render_admin_users_wireframe(
@@ -5443,9 +5708,8 @@ def _render_admin_users_wireframe(
             position: fixed;
             inset: 0;
             background: rgba(245,245,247,0.74);
-            backdrop-filter: blur(1.5px);
-            -webkit-backdrop-filter: blur(1.5px);
             z-index: 1350;
+            animation: admScrimIn 35ms linear;
           }
           .st-key-adm-user-drawer {
             position: fixed;
@@ -5457,6 +5721,8 @@ def _render_admin_users_wireframe(
             border-radius: 14px;
             overflow: hidden;
             opacity: 1 !important;
+            transform-origin: right bottom;
+            animation: admDrawerIn 45ms linear;
           }
           .st-key-adm-user-drawer [data-testid="stVerticalBlock"] {
             background: #F8F9FB !important;
@@ -5500,12 +5766,27 @@ def _render_admin_users_wireframe(
           .st-key-adm-new-user-btn [data-testid="stButton"] button:hover {
             background: rgba(123,204,53,0.22) !important;
           }
+          @keyframes admScrimIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          @keyframes admDrawerIn {
+            from {
+              opacity: 0;
+              transform: translateY(4px) scale(0.998);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+            }
+          }
           @media (max-width: 960px) {
             .st-key-adm-user-drawer {
               left: 0.7rem;
               right: 0.7rem;
               width: auto;
               bottom: 0.65rem;
+              transform-origin: center bottom;
             }
           }
         </style>
@@ -5521,6 +5802,16 @@ def _render_admin_users_wireframe(
     global_role_options = ["user", "admin"]
     sorted_usernames = sorted(users.keys())
 
+    users_view_context = (
+        f"{str(st.session_state.get('sidebar_view_mode', ''))}|"
+        f"{str(st.session_state.get('admin_panel_section', ''))}|"
+        f"{str(st.session_state.get('active_tenant_id', ''))}"
+    )
+    if st.session_state.get("adm_users_view_context") != users_view_context:
+        st.session_state["adm_users_view_context"] = users_view_context
+        st.session_state["adm_users_panel_open"] = False
+        st.session_state["adm_users_mode"] = "edit"
+
     if "adm_users_mode" not in st.session_state:
         st.session_state["adm_users_mode"] = "edit"
     if "adm_users_panel_open" not in st.session_state:
@@ -5531,6 +5822,14 @@ def _render_admin_users_wireframe(
         st.session_state["adm_users_selected"] = sorted_usernames[0] if sorted_usernames else ""
     if not sorted_usernames:
         st.session_state["adm_users_mode"] = "create"
+
+    flash_payload = st.session_state.pop("adm_users_flash", None)
+    if isinstance(flash_payload, dict):
+        flash_kind = str(flash_payload.get("kind", "info")).strip().lower() or "info"
+        flash_message = str(flash_payload.get("message", "")).strip()
+        if flash_message:
+            toast_icon = "✅" if flash_kind == "success" else "ℹ️"
+            st.toast(flash_message, icon=toast_icon)
 
     kpi_col_1, kpi_col_2, kpi_col_3 = st.columns(3)
     with kpi_col_1:
@@ -5564,7 +5863,6 @@ def _render_admin_users_wireframe(
                     st.session_state["adm_users_mode"] = "create"
                     st.session_state["adm_users_selected"] = ""
                     st.session_state["adm_users_panel_open"] = True
-                    st.rerun()
 
     table_box = st.container(border=True)
     with table_box:
@@ -5634,7 +5932,6 @@ def _render_admin_users_wireframe(
                         st.session_state["adm_users_mode"] = "edit"
                         st.session_state["adm_users_selected"] = username
                         st.session_state["adm_users_panel_open"] = True
-                        st.rerun()
         else:
             st.info("No hay usuarios cargados en config/users.json.")
 
@@ -6428,18 +6725,6 @@ def main() -> None:
             render_sidebar_meta_token_health(admin_report)
         render_sidebar_logout_button()
         render_admin_panel(users, tenants, auth_user, dashboard_settings, admin_section)
-        st.caption(
-            f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | "
-            f"Fuente usuarios: {USERS_CONFIG_PATH.name} | Variables: {DASHBOARD_SETTINGS_PATH.name}"
-        )
-        st.markdown(
-            """
-            <div class="desktop-powered-footer">
-              POWERED BY <a href="https://www.ipalmera.com" target="_blank">iPalmera</a> 2026
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         return
 
     report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
@@ -6553,6 +6838,7 @@ def main() -> None:
             e,
             prev_s,
             prev_e,
+            f"overview_chart_metric_{tenant_id}",
         )
 
     render_sidebar_logout_button()
@@ -6561,16 +6847,6 @@ def main() -> None:
         f"Cliente: {tenant_name} ({tenant_id}) | Vista: {view_mode} | Plataforma: {platform} | "
         f"Fuente: {report_path.name} | Datos: {min_d.isoformat()} a {max_d.isoformat()}"
     )
-    st.markdown(
-        """
-        <div class="desktop-powered-footer">
-          POWERED BY <a href="https://www.ipalmera.com" target="_blank">iPalmera</a> 2026
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 if __name__ == "__main__":
     main()
 
