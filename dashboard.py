@@ -2863,7 +2863,7 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
           }
           .stApp,
           [data-testid="stAppViewContainer"] {
-            background: #fe492a !important;
+            background: rgba(122, 135, 157, 0.30) !important;
             background-image: none !important;
           }
           [data-testid="stSidebar"],
@@ -2901,7 +2901,7 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
             box-sizing: border-box !important;
             position: fixed !important;
             left: 50% !important;
-            top: 54% !important;
+            top: 50.5% !important;
             transform: translate(-50%, -50%) !important;
             margin: 0 !important;
             z-index: 20 !important;
@@ -5023,6 +5023,668 @@ def render_traffic(
                 st.dataframe(roll.head(20), width="stretch", hide_index=True)
 
 
+def _render_admin_user_create_panel(
+    users: dict[str, dict[str, Any]],
+    tenants: dict[str, dict[str, Any]],
+    auth_user: dict[str, Any],
+    tenant_options: list[str],
+    role_options: list[str],
+    global_role_options: list[str],
+) -> None:
+    create_username_raw = st.text_input(
+        "Username",
+        value="",
+        key="adm_create_username_wire",
+        help="Solo minúsculas, números, punto, guión o guión bajo.",
+    )
+    create_name = st.text_input("Nombre", value="", key="adm_create_name_wire")
+    col_create_1, col_create_2 = st.columns(2)
+    with col_create_1:
+        create_global_role = st.selectbox(
+            "Rol global",
+            options=global_role_options,
+            index=0,
+            key="adm_create_global_role_wire",
+        )
+    with col_create_2:
+        create_role = st.selectbox(
+            "Rol base",
+            options=role_options,
+            index=0,
+            key="adm_create_role_wire",
+        )
+    create_enabled = st.toggle("Usuario activo", value=True, key="adm_create_enabled_wire")
+    create_tenants = st.multiselect(
+        "Tenants",
+        options=tenant_options,
+        default=["*"] if create_global_role == "admin" else [],
+        format_func=lambda t: "Todos (*)" if t == "*" else str(tenants.get(t, {}).get("name", t)),
+        key="adm_create_tenants_wire",
+    )
+    create_selected = _normalize_tenant_selection(create_tenants)
+    if create_global_role == "admin" and not create_selected:
+        create_selected = ["*"]
+    create_scope_roles: dict[str, str] = {}
+    if create_selected:
+        st.caption("Roles por tenant")
+        for tenant_id in create_selected:
+            safe_tenant = _widget_safe_key(tenant_id)
+            create_scope_roles[tenant_id] = st.selectbox(
+                f"Rol para {'Todos (*)' if tenant_id == '*' else tenants.get(tenant_id, {}).get('name', tenant_id)}",
+                options=role_options,
+                index=role_options.index(create_role) if create_role in role_options else 0,
+                key=f"adm_create_scope_role_wire_{safe_tenant}",
+            )
+
+    create_password = st.text_input(
+        "Password",
+        type="password",
+        key="adm_create_password_wire",
+    )
+    create_password_confirm = st.text_input(
+        "Confirmar password",
+        type="password",
+        key="adm_create_password_confirm_wire",
+    )
+
+    if st.button("Guardar Cambios", key="adm_create_submit_wire", type="primary", width="stretch"):
+        errors: list[str] = []
+        create_username = str(create_username_raw).strip().lower()
+        valid_chars = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+        if not create_username:
+            errors.append("El username es obligatorio.")
+        elif any(ch not in valid_chars for ch in create_username):
+            errors.append("El username contiene caracteres no permitidos.")
+        elif create_username in users:
+            errors.append("Ese username ya existe.")
+
+        clean_name = str(create_name).strip() or create_username
+        if len(create_password) < 8:
+            errors.append("La contraseña debe tener al menos 8 caracteres.")
+        if create_password != create_password_confirm:
+            errors.append("La contraseña y su confirmación no coinciden.")
+        if create_global_role != "admin" and not create_selected:
+            errors.append("Debes asignar al menos un tenant.")
+
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            allowed_tenants, tenant_scopes = _build_tenant_access(
+                create_selected,
+                create_scope_roles,
+                create_role,
+            )
+            salt = _new_password_salt()
+            users_next = dict(users)
+            users_next[create_username] = {
+                "username": create_username,
+                "name": clean_name,
+                "global_role": create_global_role,
+                "role": create_role,
+                "enabled": bool(create_enabled),
+                "allowed_tenants": allowed_tenants,
+                "tenant_scopes": tenant_scopes,
+                "password_salt": salt,
+                "password_hash": _hash_password_with_salt(create_password, salt),
+            }
+            ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+            if not ok:
+                st.error(f"No se pudo guardar config/users.json: {err_msg}")
+            else:
+                append_admin_audit(
+                    "user_created",
+                    str(auth_user.get("username", "unknown")),
+                    target=create_username,
+                    details={
+                        "enabled": bool(create_enabled),
+                        "global_role": create_global_role,
+                        "role": create_role,
+                        "allowed_tenants": allowed_tenants,
+                    },
+                )
+                st.session_state["adm_users_mode"] = "edit"
+                st.session_state["adm_users_selected"] = create_username
+                st.success(f"Usuario '{create_username}' creado.")
+                st.rerun()
+
+    st.button(
+        "Eliminar usuario",
+        key="adm_create_delete_disabled_wire",
+        width="stretch",
+        disabled=True,
+    )
+
+
+def _render_admin_user_edit_panel(
+    users: dict[str, dict[str, Any]],
+    tenants: dict[str, dict[str, Any]],
+    auth_user: dict[str, Any],
+    tenant_options: list[str],
+    role_options: list[str],
+    global_role_options: list[str],
+    selected_username: str,
+) -> None:
+    user = users.get(selected_username, {})
+    existing_role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+    existing_global_role = str(user.get("global_role", "user")).strip().lower() or "user"
+    existing_scope_map = _scope_map_for_user(user)
+    selected_defaults = _normalize_tenant_selection(list(existing_scope_map.keys()))
+    if not selected_defaults:
+        selected_defaults = _normalize_allowed_tenants(user.get("allowed_tenants", ["*"]))
+    tenant_options_set = set(tenant_options)
+    selected_defaults = [tenant_id for tenant_id in selected_defaults if tenant_id in tenant_options_set]
+    if not selected_defaults and existing_global_role == "admin":
+        selected_defaults = ["*"]
+
+    st.text_input(
+        "Username",
+        value=selected_username,
+        key=f"adm_edit_username_wire_{selected_username}",
+        disabled=True,
+    )
+    edit_name = st.text_input(
+        "Nombre",
+        value=str(user.get("name", selected_username)),
+        key=f"adm_edit_name_wire_{selected_username}",
+    )
+    role_col_1, role_col_2 = st.columns(2)
+    with role_col_1:
+        edit_global_role = st.selectbox(
+            "Rol global",
+            options=global_role_options,
+            index=global_role_options.index(existing_global_role)
+            if existing_global_role in global_role_options
+            else 0,
+            key=f"adm_edit_global_role_wire_{selected_username}",
+        )
+    with role_col_2:
+        edit_role = st.selectbox(
+            "Rol base",
+            options=role_options,
+            index=role_options.index(existing_role) if existing_role in role_options else 0,
+            key=f"adm_edit_role_wire_{selected_username}",
+        )
+    edit_enabled = st.toggle(
+        "Usuario activo",
+        value=bool(user.get("enabled", True)),
+        key=f"adm_edit_enabled_wire_{selected_username}",
+    )
+
+    selected_tenants = st.multiselect(
+        "Tenants",
+        options=tenant_options,
+        default=selected_defaults,
+        format_func=lambda t: "Todos (*)" if t == "*" else str(tenants.get(t, {}).get("name", t)),
+        key=f"adm_edit_tenants_wire_{selected_username}",
+    )
+    normalized_selected = _normalize_tenant_selection(selected_tenants)
+    if "*" in normalized_selected and len(selected_tenants) > 1:
+        st.info("Al incluir '*', se aplicará acceso total y se ignorarán otros tenants.")
+    if edit_global_role == "admin" and not normalized_selected:
+        normalized_selected = ["*"]
+
+    scope_roles: dict[str, str] = {}
+    if normalized_selected:
+        st.caption("Roles por tenant")
+        for tenant_id in normalized_selected:
+            default_scope_role = existing_scope_map.get(tenant_id, edit_role)
+            safe_tenant = _widget_safe_key(tenant_id)
+            scope_roles[tenant_id] = st.selectbox(
+                f"Rol para {'Todos (*)' if tenant_id == '*' else tenants.get(tenant_id, {}).get('name', tenant_id)}",
+                options=role_options,
+                index=role_options.index(default_scope_role) if default_scope_role in role_options else 0,
+                key=f"adm_edit_scope_role_wire_{selected_username}_{safe_tenant}",
+            )
+
+    edit_new_password = st.text_input(
+        "Password nueva (opcional)",
+        type="password",
+        key=f"adm_edit_password_wire_{selected_username}",
+    )
+    edit_confirm_password = st.text_input(
+        "Confirmar password",
+        type="password",
+        key=f"adm_edit_password_confirm_wire_{selected_username}",
+    )
+
+    if st.button(
+        "Guardar Cambios",
+        key=f"adm_edit_save_wire_{selected_username}",
+        type="primary",
+        width="stretch",
+    ):
+        errors: list[str] = []
+        clean_name = str(edit_name).strip()
+        if not clean_name:
+            errors.append("El nombre no puede ir vacío.")
+        if edit_global_role != "admin" and not normalized_selected:
+            errors.append("Debes asignar al menos un tenant.")
+        if edit_new_password or edit_confirm_password:
+            if edit_new_password != edit_confirm_password:
+                errors.append("La contraseña y su confirmación no coinciden.")
+            if len(edit_new_password) < 8:
+                errors.append("La nueva contraseña debe tener al menos 8 caracteres.")
+
+        was_enabled_admin = bool(user.get("enabled", True)) and _user_record_is_admin(user)
+        will_be_admin = edit_global_role == "admin" or edit_role == "admin"
+        if was_enabled_admin and not (edit_enabled and will_be_admin) and _enabled_admin_count(users) <= 1:
+            errors.append("No puedes dejar el sistema sin al menos un admin activo.")
+
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            allowed_tenants, tenant_scopes = _build_tenant_access(
+                normalized_selected,
+                scope_roles,
+                edit_role,
+            )
+            updated = dict(user)
+            updated["username"] = selected_username
+            updated["name"] = clean_name
+            updated["global_role"] = edit_global_role
+            updated["role"] = edit_role
+            updated["enabled"] = bool(edit_enabled)
+            updated["allowed_tenants"] = allowed_tenants
+            updated["tenant_scopes"] = tenant_scopes
+            if edit_new_password:
+                new_salt = _new_password_salt()
+                updated["password_salt"] = new_salt
+                updated["password_hash"] = _hash_password_with_salt(edit_new_password, new_salt)
+
+            users_next = dict(users)
+            users_next[selected_username] = updated
+            ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+            if not ok:
+                st.error(f"No se pudo guardar config/users.json: {err_msg}")
+            else:
+                append_admin_audit(
+                    "user_updated",
+                    str(auth_user.get("username", "unknown")),
+                    target=selected_username,
+                    details={
+                        "enabled": bool(edit_enabled),
+                        "global_role": edit_global_role,
+                        "role": edit_role,
+                        "allowed_tenants": allowed_tenants,
+                        "password_reset": bool(edit_new_password),
+                    },
+                )
+                if str(auth_user.get("username", "")).strip().lower() == selected_username:
+                    st.session_state["auth_user"] = {
+                        "username": updated["username"],
+                        "name": updated["name"],
+                        "role": updated["role"],
+                        "global_role": updated["global_role"],
+                        "allowed_tenants": updated["allowed_tenants"],
+                        "tenant_scopes": updated["tenant_scopes"],
+                    }
+                st.success("Usuario actualizado.")
+                st.rerun()
+
+    st.caption("Esta acción elimina el usuario de forma permanente.")
+    if st.button(
+        "Eliminar usuario",
+        key=f"adm_edit_delete_wire_{selected_username}",
+        width="stretch",
+    ):
+        errors: list[str] = []
+        current_username = str(auth_user.get("username", "")).strip().lower()
+        if selected_username.strip().lower() == current_username:
+            errors.append("No puedes eliminar tu propio usuario en sesión.")
+        if bool(user.get("enabled", True)) and _user_record_is_admin(user) and _enabled_admin_count(users) <= 1:
+            errors.append("No puedes eliminar el último admin activo.")
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            users_next = dict(users)
+            users_next.pop(selected_username, None)
+            ok, err_msg = save_users_config(USERS_CONFIG_PATH, users_next)
+            if not ok:
+                st.error(f"No se pudo guardar config/users.json: {err_msg}")
+            else:
+                append_admin_audit(
+                    "user_deleted",
+                    str(auth_user.get("username", "unknown")),
+                    target=selected_username,
+                    details={},
+                )
+                st.session_state["adm_users_selected"] = sorted(users_next.keys())[0] if users_next else ""
+                st.success(f"Usuario '{selected_username}' eliminado.")
+                st.rerun()
+
+
+def _render_admin_users_wireframe(
+    users: dict[str, dict[str, Any]],
+    tenants: dict[str, dict[str, Any]],
+    auth_user: dict[str, Any],
+) -> None:
+    st.markdown(
+        """
+        <style>
+          .adm-kpi-card {
+            border: 1px solid rgba(32,29,29,0.12);
+            background: rgba(255,255,255,0.76);
+            border-radius: 10px;
+            padding: 0.6rem 0.85rem 0.5rem 0.85rem;
+            min-height: 4.2rem;
+            box-shadow: 0 8px 20px rgba(15,23,42,0.04);
+          }
+          .adm-kpi-label {
+            color: #5A6170;
+            font-size: 0.76rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+          }
+          .adm-kpi-value {
+            color: #201D1D;
+            font-size: 1.85rem;
+            line-height: 1.05;
+            font-weight: 800;
+            margin-top: 0.22rem;
+          }
+          .adm-card-title {
+            color: #2D333E;
+            font-size: 0.92rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            text-transform: uppercase;
+            margin-top: 0.12rem;
+          }
+          .adm-table-head {
+            color: #5A6170;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+          }
+          .adm-table-cell {
+            color: #2D333E;
+            font-size: 0.9rem;
+            font-weight: 600;
+            line-height: 1.2;
+          }
+          .adm-table-cell-muted {
+            color: #7A879D;
+            font-size: 0.84rem;
+            font-weight: 600;
+            line-height: 1.2;
+          }
+          .adm-status-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            padding: 0.14rem 0.48rem;
+            border: 1px solid rgba(103,178,45,0.38);
+            color: #4E8B22;
+            background: rgba(123,204,53,0.16);
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+          }
+          .adm-status-pill.off {
+            border-color: rgba(122,135,157,0.36);
+            color: #6C778A;
+            background: rgba(122,135,157,0.12);
+          }
+          .adm-user-detail-title {
+            color: #201D1D;
+            font-size: 1.18rem;
+            line-height: 1.1;
+            font-weight: 800;
+            margin-top: 0.2rem;
+          }
+          .adm-users-scrim {
+            position: fixed;
+            inset: 0;
+            background: rgba(245,245,247,0.74);
+            backdrop-filter: blur(1.5px);
+            -webkit-backdrop-filter: blur(1.5px);
+            z-index: 1350;
+          }
+          .st-key-adm-user-drawer {
+            position: fixed;
+            right: 1.05rem;
+            bottom: 0.9rem;
+            width: min(420px, calc(100vw - 1.2rem));
+            z-index: 1400;
+            background: #F8F9FB;
+            border-radius: 14px;
+            overflow: hidden;
+            opacity: 1 !important;
+          }
+          .st-key-adm-user-drawer [data-testid="stVerticalBlock"] {
+            background: #F8F9FB !important;
+          }
+          .st-key-adm-user-drawer [data-testid="stVerticalBlockBorderWrapper"] {
+            background: #FFFFFF !important;
+            border: 1px solid rgba(32,29,29,0.14);
+            box-shadow: 0 24px 52px rgba(15,23,42,0.18);
+            opacity: 1 !important;
+          }
+          .st-key-adm-user-drawer [data-testid="stVerticalBlockBorderWrapper"] > div {
+            max-height: min(78vh, 820px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            background: #FFFFFF !important;
+          }
+          .st-key-adm-user-drawer [data-testid="stMultiSelect"] {
+            max-width: 100%;
+          }
+          .st-key-adm-user-drawer [data-baseweb="tag"] {
+            max-width: 100%;
+          }
+          .st-key-adm-user-drawer [data-testid="stTextInput"] > div > div,
+          .st-key-adm-user-drawer [data-testid="stSelectbox"] > div > div,
+          .st-key-adm-user-drawer [data-testid="stMultiSelect"] > div > div {
+            background: #FFFFFF !important;
+            border-color: rgba(32,29,29,0.14) !important;
+          }
+          .st-key-adm-users-toolbar {
+            margin-top: 0.95rem;
+            margin-bottom: 0.35rem;
+          }
+          .st-key-adm-new-user-btn [data-testid="stButton"] button {
+            border-radius: 999px !important;
+            border: 1px solid rgba(103,178,45,0.66) !important;
+            background: linear-gradient(180deg, rgba(123,204,53,0.30) 0%, rgba(123,204,53,0.24) 100%) !important;
+            color: #2D333E !important;
+            font-weight: 800 !important;
+            box-shadow: 0 8px 16px rgba(103,178,45,0.20) !important;
+          }
+          .st-key-adm-new-user-btn [data-testid="stButton"] button:hover {
+            background: rgba(123,204,53,0.22) !important;
+          }
+          @media (max-width: 960px) {
+            .st-key-adm-user-drawer {
+              left: 0.7rem;
+              right: 0.7rem;
+              width: auto;
+              bottom: 0.65rem;
+            }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    total_users = len(users)
+    active_users = sum(1 for u in users.values() if bool(u.get("enabled", True)))
+    enabled_admins = _enabled_admin_count(users)
+    tenant_options = ["*"] + sorted(tenants.keys())
+    role_options = ["viewer", "editor", "admin"]
+    global_role_options = ["user", "admin"]
+    sorted_usernames = sorted(users.keys())
+
+    if "adm_users_mode" not in st.session_state:
+        st.session_state["adm_users_mode"] = "edit"
+    if "adm_users_panel_open" not in st.session_state:
+        st.session_state["adm_users_panel_open"] = False
+    if "adm_users_selected" not in st.session_state:
+        st.session_state["adm_users_selected"] = sorted_usernames[0] if sorted_usernames else ""
+    if st.session_state.get("adm_users_selected") not in users:
+        st.session_state["adm_users_selected"] = sorted_usernames[0] if sorted_usernames else ""
+    if not sorted_usernames:
+        st.session_state["adm_users_mode"] = "create"
+
+    kpi_col_1, kpi_col_2, kpi_col_3 = st.columns(3)
+    with kpi_col_1:
+        st.markdown(
+            f"<div class='adm-kpi-card'><div class='adm-kpi-label'>Usuarios</div><div class='adm-kpi-value'>{total_users}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with kpi_col_2:
+        st.markdown(
+            f"<div class='adm-kpi-card'><div class='adm-kpi-label'>Activos</div><div class='adm-kpi-value'>{active_users}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with kpi_col_3:
+        st.markdown(
+            f"<div class='adm-kpi-card'><div class='adm-kpi-label'>Admins activos</div><div class='adm-kpi-value'>{enabled_admins}</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    with st.container(key="adm-users-toolbar"):
+        table_top_left, table_top_right = st.columns([1.0, 0.24], gap="small")
+        with table_top_left:
+            st.markdown("<div class='adm-card-title'>Usuarios</div>", unsafe_allow_html=True)
+        with table_top_right:
+            with st.container(key="adm-new-user-btn"):
+                if st.button(
+                    "Nuevo usuario",
+                    key="adm_users_new_btn",
+                    icon=":material/person_add:",
+                    width="stretch",
+                ):
+                    st.session_state["adm_users_mode"] = "create"
+                    st.session_state["adm_users_selected"] = ""
+                    st.session_state["adm_users_panel_open"] = True
+                    st.rerun()
+
+    table_box = st.container(border=True)
+    with table_box:
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([1.05, 1.08, 0.86, 0.92, 0.72, 1.68, 0.32], gap="small")
+        with h1:
+            st.markdown("<div class='adm-table-head'>Usuario</div>", unsafe_allow_html=True)
+        with h2:
+            st.markdown("<div class='adm-table-head'>Nombre</div>", unsafe_allow_html=True)
+        with h3:
+            st.markdown("<div class='adm-table-head'>Global Role</div>", unsafe_allow_html=True)
+        with h4:
+            st.markdown("<div class='adm-table-head'>Role (legacy)</div>", unsafe_allow_html=True)
+        with h5:
+            st.markdown("<div class='adm-table-head'>Activo</div>", unsafe_allow_html=True)
+        with h6:
+            st.markdown("<div class='adm-table-head'>Scopes por tenant</div>", unsafe_allow_html=True)
+        with h7:
+            st.markdown("<div class='adm-table-head'>&nbsp;</div>", unsafe_allow_html=True)
+        st.divider()
+
+        if sorted_usernames:
+            for username in sorted_usernames:
+                user = users.get(username, {})
+                role = str(user.get("role", "viewer")).strip().lower() or "viewer"
+                global_role = str(user.get("global_role", "user")).strip().lower() or "user"
+                enabled = bool(user.get("enabled", True))
+                scope_map = _scope_map_for_user(user)
+                labels: list[str] = []
+                for tenant_id in sorted(scope_map.keys()):
+                    tenant_role = scope_map.get(tenant_id, role)
+                    if tenant_id == "*":
+                        labels.append(f"Todos (*):{tenant_role}")
+                    else:
+                        tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
+                        labels.append(f"{tenant_name}:{tenant_role}")
+                scope_text = " | ".join(labels) if labels else "Sin scope"
+                if len(scope_text) > 48:
+                    scope_text = f"{scope_text[:45]}..."
+
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.05, 1.08, 0.86, 0.92, 0.72, 1.68, 0.32], gap="small")
+                with c1:
+                    st.markdown(
+                        f"<div class='adm-table-cell'>{html.escape(str(user.get('username', username)))}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    name_value = str(user.get("name", "")).strip() or "—"
+                    st.markdown(
+                        f"<div class='adm-table-cell-muted'>{html.escape(name_value)}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c3:
+                    st.markdown(f"<div class='adm-table-cell'>{html.escape(global_role)}</div>", unsafe_allow_html=True)
+                with c4:
+                    st.markdown(f"<div class='adm-table-cell'>{html.escape(role)}</div>", unsafe_allow_html=True)
+                with c5:
+                    status_class = "adm-status-pill" if enabled else "adm-status-pill off"
+                    status_text = "Activo" if enabled else "Inactivo"
+                    st.markdown(f"<span class='{status_class}'>{status_text}</span>", unsafe_allow_html=True)
+                with c6:
+                    st.markdown(
+                        f"<div class='adm-table-cell-muted'>{html.escape(scope_text)}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c7:
+                    if st.button("⋯", key=f"adm_users_pick_{username}", width="stretch"):
+                        st.session_state["adm_users_mode"] = "edit"
+                        st.session_state["adm_users_selected"] = username
+                        st.session_state["adm_users_panel_open"] = True
+                        st.rerun()
+        else:
+            st.info("No hay usuarios cargados en config/users.json.")
+
+    if bool(st.session_state.get("adm_users_panel_open", False)):
+        st.markdown("<div class='adm-users-scrim'></div>", unsafe_allow_html=True)
+        with st.container(key="adm-user-drawer"):
+            detail_box = st.container(border=True)
+            with detail_box:
+                mode = str(st.session_state.get("adm_users_mode", "edit")).strip().lower() or "edit"
+                is_create_mode = mode == "create"
+                selected_username = str(st.session_state.get("adm_users_selected", "")).strip()
+                if not selected_username and sorted_usernames:
+                    selected_username = sorted_usernames[0]
+                    st.session_state["adm_users_selected"] = selected_username
+
+                head_left, head_right = st.columns([0.7, 0.3], gap="small")
+                with head_left:
+                    detail_title = "Nuevo Usuario" if is_create_mode else "Detalles del Usuario"
+                    st.markdown(f"<div class='adm-user-detail-title'>{detail_title}</div>", unsafe_allow_html=True)
+                with head_right:
+                    if st.button("Close ×", key="adm_user_detail_close", width="stretch"):
+                        st.session_state["adm_users_panel_open"] = False
+                        st.rerun()
+
+                if is_create_mode:
+                    _render_admin_user_create_panel(
+                        users,
+                        tenants,
+                        auth_user,
+                        tenant_options,
+                        role_options,
+                        global_role_options,
+                    )
+                else:
+                    if not sorted_usernames:
+                        st.info("No hay usuarios para editar.")
+                    elif selected_username not in users:
+                        st.info("Selecciona un usuario de la tabla.")
+                    else:
+                        _render_admin_user_edit_panel(
+                            users,
+                            tenants,
+                            auth_user,
+                            tenant_options,
+                            role_options,
+                            global_role_options,
+                            selected_username,
+                        )
+
+
 def render_admin_panel(
     users: dict[str, dict[str, Any]],
     tenants: dict[str, dict[str, Any]],
@@ -5034,6 +5696,10 @@ def render_admin_panel(
 
     if not USERS_CONFIG_PATH.exists():
         st.warning("No existe config/users.json todavía. Puedes crearlo desde este panel.")
+
+    if admin_section == "users":
+        _render_admin_users_wireframe(users, tenants, auth_user)
+        return
 
     if admin_section == "users":
         total_users = len(users)
