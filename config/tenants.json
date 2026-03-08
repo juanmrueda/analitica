@@ -10,6 +10,7 @@
       "google_ads_customer_id": "6495122409",
       "google_ads_login_customer_id": "6495122409",
       "google_customer_id": "6495122409",
+      "historical_start_date": "2025-01-01",
       "ga4_property_id": "299663070",
       "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
     },
@@ -23,6 +24,7 @@
       "google_ads_customer_id": "1425513168",
       "google_ads_login_customer_id": "1425513168",
       "google_customer_id": "1425513168",
+      "historical_start_date": "2025-01-01",
       "ga4_property_id": "",
       "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
     }

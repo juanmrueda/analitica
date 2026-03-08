@@ -15,7 +15,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Version desplegada: `Multitenant V2-adminpanel` (commit `9ca64ae`).
 - Dashboard activo como servicio systemd: `yap-dashboard.service`.
 - Pipeline automatico cada hora: `yap-pipeline.timer` -> `yap-pipeline.service`.
-- El servicio de pipeline ejecuta `scripts/run_all_tenants.py --mode auto`.
+- El servicio de pipeline ejecuta `scripts/run_all_tenants.py --mode auto --bootstrap-start 2025-01-01`.
 - Tenants activos en `config/tenants.json`:
   - `yap`
   - `hyundai_hn`
@@ -29,7 +29,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - `reports/yap/yap_historical.json` -> fuente principal tenant YAP.
 - `reports/hyundai_hn/hyundai_hn_historical.json` -> fuente principal tenant Hyundai.
 - `reports/*/*_organic_historical.json` -> modulo organico por tenant.
-- `config/tenants.json` -> ids y rutas por tenant.
+- `config/tenants.json` -> ids, rutas y piso historico (`historical_start_date`) por tenant.
 - `config/users.json` -> usuarios y permisos.
 - `config/dashboard_settings.template.json` -> plantilla versionada de variables de dashboard.
 - `config/dashboard_settings.json` -> runtime local/no versionado (se crea desde template si no existe).
@@ -48,7 +48,7 @@ python -m venv .venv
 2. Ejecutar pipeline multi-tenant:
 
 ```powershell
-.\.venv\Scripts\python scripts\run_all_tenants.py --mode auto --organic-lookback-days 30
+.\.venv\Scripts\python scripts\run_all_tenants.py --mode auto --bootstrap-start 2025-01-01 --organic-lookback-days 30
 ```
 
 3. Ejecutar pipeline para un tenant puntual:
@@ -151,6 +151,7 @@ Nota:
 cd /opt/yap/app
 git pull --ff-only origin main
 /opt/yap/venv/bin/pip install -r requirements.txt
+sudo cp /opt/yap/app/config/systemd/yap-pipeline.service /etc/systemd/system/yap-pipeline.service
 sudo cp /opt/yap/app/config/systemd/yap-pipeline.timer /etc/systemd/system/yap-pipeline.timer
 sudo systemctl daemon-reload
 sudo systemctl restart yap-pipeline.timer
@@ -160,6 +161,7 @@ sudo systemctl start yap-pipeline.service
 
 Nota deploy:
 - `config/users.json` y `config/dashboard_settings.json` no se versionan, por lo que `git pull` no los reemplaza.
+- Guardrail de historico: el pipeline protege contra bootstrap-start mayor al piso historico del tenant (por defecto `2025-01-01`) salvo que se use `--allow-historical-truncation`.
 
 ## Configuracion sensible (no versionar)
 

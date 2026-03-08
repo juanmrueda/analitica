@@ -13,6 +13,7 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_TENANTS_CONFIG_PATH = ROOT_DIR / "config" / "tenants.json"
 PIPELINE_SCRIPT_PATH = ROOT_DIR / "scripts" / "yap_daily_cpl_report.py"
+DEFAULT_BOOTSTRAP_START = "2025-01-01"
 
 
 def _resolve_repo_path(raw_path: str) -> Path:
@@ -21,7 +22,7 @@ def _resolve_repo_path(raw_path: str) -> Path:
 
 
 def _default_tenants() -> dict[str, dict[str, Any]]:
-    return {"yap": {"id": "yap", "name": "YAP"}}
+    return {"yap": {"id": "yap", "name": "YAP", "historical_start_date": DEFAULT_BOOTSTRAP_START}}
 
 
 def _load_tenants(path: Path) -> dict[str, dict[str, Any]]:
@@ -46,6 +47,8 @@ def _load_tenants(path: Path) -> dict[str, dict[str, Any]]:
         out[tenant_id] = {
             "id": tenant_id,
             "name": str(entry.get("name", tenant_id.upper())),
+            "historical_start_date": str(entry.get("historical_start_date", DEFAULT_BOOTSTRAP_START)).strip()
+            or DEFAULT_BOOTSTRAP_START,
         }
     return out if out else _default_tenants()
 
@@ -62,7 +65,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bootstrap-start",
-        default=date.today().replace(month=1, day=1).isoformat(),
+        default=DEFAULT_BOOTSTRAP_START,
         help="Start date for bootstrap mode (YYYY-MM-DD).",
     )
     parser.add_argument(
@@ -102,6 +105,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Continue with next tenant if one tenant fails.",
     )
+    parser.add_argument(
+        "--allow-historical-truncation",
+        action="store_true",
+        help="Pass through to tenant pipeline to bypass historical floor guardrail.",
+    )
     return parser.parse_args()
 
 
@@ -128,6 +136,12 @@ def main() -> int:
                 return 1
             continue
 
+        tenant_bootstrap_start = str(args.bootstrap_start)
+        if str(args.bootstrap_start).strip() == DEFAULT_BOOTSTRAP_START:
+            tenant_bootstrap_start = str(
+                tenants.get(tenant_id, {}).get("historical_start_date", DEFAULT_BOOTSTRAP_START)
+            ).strip() or DEFAULT_BOOTSTRAP_START
+
         cmd = [
             str(args.python_executable),
             str(PIPELINE_SCRIPT_PATH),
@@ -138,7 +152,7 @@ def main() -> int:
             "--mode",
             str(args.mode),
             "--bootstrap-start",
-            str(args.bootstrap_start),
+            tenant_bootstrap_start,
             "--end-date",
             str(args.end_date),
             "--organic-lookback-days",
@@ -146,6 +160,8 @@ def main() -> int:
             "--refresh-lookback-days",
             str(args.refresh_lookback_days),
         ]
+        if args.allow_historical_truncation:
+            cmd.append("--allow-historical-truncation")
         print(f"[{tenant_id}] Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, cwd=str(ROOT_DIR))
         if result.returncode != 0:

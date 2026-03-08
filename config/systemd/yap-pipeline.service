@@ -1,0 +1,15 @@
+[Unit]
+Description=YAP Multi-tenant Data Pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=juanm
+Group=juanm
+WorkingDirectory=/opt/yap/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/yap/venv/bin/python /opt/yap/app/scripts/run_all_tenants.py --mode auto --bootstrap-start 2025-01-01 --organic-lookback-days 30
+
+[Install]
+WantedBy=multi-user.target

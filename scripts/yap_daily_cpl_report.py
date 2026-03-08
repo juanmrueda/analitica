@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -42,6 +43,7 @@ TENANTS_CONFIG_PATH = ROOT_DIR / "config" / "tenants.json"
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_historical.json"
 DEFAULT_ORGANIC_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_organic_historical.json"
 DEFAULT_ORGANIC_LOOKBACK_DAYS = 30
+DEFAULT_BOOTSTRAP_START = "2025-01-01"
 META_LEAD_ACTION_PRIORITY = (
     "onsite_conversion.lead_grouped",
     "lead",
@@ -122,6 +124,7 @@ def _default_tenants_config() -> Dict[str, Dict[str, Any]]:
             "meta_ad_account_id": META_AD_ACCOUNT_ID,
             "google_ads_customer_id": GOOGLE_ADS_CUSTOMER_ID,
             "google_ads_login_customer_id": GOOGLE_ADS_CUSTOMER_ID,
+            "historical_start_date": DEFAULT_BOOTSTRAP_START,
             "ga4_property_id": GA4_PROPERTY_ID,
             "ga4_conversion_event_name": GA4_DEFAULT_CONVERSION_EVENT,
         }
@@ -182,6 +185,10 @@ def _load_tenants_config(path: Path) -> Dict[str, Dict[str, Any]]:
                     ),
                 )
             ),
+            "historical_start_date": str(
+                entry.get("historical_start_date", DEFAULT_BOOTSTRAP_START)
+            ).strip()
+            or DEFAULT_BOOTSTRAP_START,
             "ga4_property_id": str(entry.get("ga4_property_id", GA4_PROPERTY_ID)),
             "ga4_conversion_event_name": str(
                 entry.get("ga4_conversion_event_name", GA4_DEFAULT_CONVERSION_EVENT)
@@ -2453,6 +2460,95 @@ def _load_existing(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _parse_iso_date(raw: Any) -> date | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _daily_date_bounds(rows: List[Dict[str, Any]]) -> Tuple[date | None, date | None]:
+    dates: List[date] = []
+    for row in rows:
+        d = _parse_iso_date(row.get("date"))
+        if d is not None:
+            dates.append(d)
+    if not dates:
+        return None, None
+    return min(dates), max(dates)
+
+
+def _seed_output_from_legacy_report(output_path: Path, tenant_id: str) -> bool:
+    if output_path.exists():
+        return False
+    parent = output_path.parent
+    if not parent.exists():
+        return False
+    tenant_key = str(tenant_id or "").strip().lower()
+    target_name = output_path.name.lower()
+    candidates: List[Tuple[int, date, Path]] = []
+    for candidate in sorted(parent.glob("*historical.json")):
+        if candidate.name.lower() == target_name:
+            continue
+        if "organic" in candidate.name.lower():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        daily = payload.get("daily", [])
+        if not isinstance(daily, list) or not daily:
+            continue
+        meta_tenant = str(payload.get("metadata", {}).get("tenant", {}).get("id", "")).strip().lower()
+        if meta_tenant and meta_tenant != tenant_key:
+            continue
+        min_day, _ = _daily_date_bounds(daily)
+        if min_day is None:
+            continue
+        candidates.append((len(daily), min_day, candidate))
+    if not candidates:
+        return False
+    candidates.sort(key=lambda item: (-item[0], item[1].isoformat()))
+    source = candidates[0][2]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, output_path)
+    print(f"History seed applied for {tenant_id}: {source} -> {output_path}")
+    return True
+
+
+def _history_floor_for_tenant(tenant_cfg: Dict[str, Any]) -> date:
+    floor_raw = str(tenant_cfg.get("historical_start_date", DEFAULT_BOOTSTRAP_START)).strip()
+    floor_day = _parse_iso_date(floor_raw)
+    if floor_day is None:
+        floor_day = _parse_iso_date(DEFAULT_BOOTSTRAP_START)
+    if floor_day is None:
+        floor_day = date(2025, 1, 1)
+    return floor_day
+
+
+def _enforce_history_guardrail(
+    *,
+    mode: str,
+    bootstrap_start: date,
+    history_floor: date,
+    allow_historical_truncation: bool,
+) -> None:
+    if mode not in {"auto", "bootstrap"}:
+        return
+    if bootstrap_start <= history_floor:
+        return
+    if allow_historical_truncation:
+        return
+    raise RuntimeError(
+        "Guardrail: bootstrap-start es posterior al piso histórico del tenant. "
+        f"bootstrap_start={bootstrap_start.isoformat()} floor={history_floor.isoformat()}. "
+        "Para continuar explícitamente, usa --allow-historical-truncation."
+    )
+
+
 def _resolve_range(
     mode: str,
     output_path: Path,
@@ -2488,7 +2584,6 @@ def _resolve_range(
 
 
 def _parse_args() -> argparse.Namespace:
-    current_year_start = date.today().replace(month=1, day=1).isoformat()
     default_end = date.today().isoformat()
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -2509,7 +2604,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bootstrap-start",
-        default=current_year_start,
+        default=DEFAULT_BOOTSTRAP_START,
         help="Start date for bootstrap mode (YYYY-MM-DD).",
     )
     parser.add_argument(
@@ -2558,6 +2653,11 @@ def _parse_args() -> argparse.Namespace:
         "--ga4-property-id",
         default=None,
         help="Override GA4 property id for Data API reports.",
+    )
+    parser.add_argument(
+        "--allow-historical-truncation",
+        action="store_true",
+        help="Override guardrail and allow bootstrap-start after tenant historical floor.",
     )
     return parser.parse_args()
 
@@ -2617,8 +2717,18 @@ def main() -> int:
         or GA4_DEFAULT_CONVERSION_EVENT
     )
     ga4_oauth_path = _resolve_repo_path(tenant_cfg.get("ga4_oauth_path", GA4_OAUTH_PATH))
+    history_floor = _history_floor_for_tenant(tenant_cfg)
     bootstrap_start = datetime.strptime(args.bootstrap_start, "%Y-%m-%d").date()
+    if str(args.bootstrap_start).strip() == DEFAULT_BOOTSTRAP_START:
+        bootstrap_start = history_floor
+    _enforce_history_guardrail(
+        mode=str(args.mode).strip().lower(),
+        bootstrap_start=bootstrap_start,
+        history_floor=history_floor,
+        allow_historical_truncation=bool(args.allow_historical_truncation),
+    )
     anchor_end = datetime.strptime(args.end_date, "%Y-%m-%d").date()
+    _seed_output_from_legacy_report(output_path, tenant_id)
     organic_lookback_days = max(int(args.organic_lookback_days), 1)
     organic_start_day = anchor_end - timedelta(days=organic_lookback_days - 1)
     organic_end_day = anchor_end
