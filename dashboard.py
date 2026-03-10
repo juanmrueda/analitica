@@ -3446,8 +3446,27 @@ def _normalize_gender_bucket(raw_value: Any) -> str:
     return "Unknown"
 
 
+_EMPTY_TEXT_TOKENS = {"nan", "none", "null", "nat", "<na>", "n/a", "na"}
+
+
+def _clean_text_value(raw_value: Any, default: str = "") -> str:
+    if raw_value is None:
+        return default
+    try:
+        if bool(pd.isna(raw_value)):
+            return default
+    except Exception:
+        pass
+    txt = str(raw_value).strip()
+    if not txt:
+        return default
+    if txt.casefold() in _EMPTY_TEXT_TOKENS:
+        return default
+    return txt
+
+
 def _country_name_from_code(raw_value: Any) -> str:
-    code = str(raw_value or "").strip().upper()
+    code = _clean_text_value(raw_value).upper()
     return COUNTRY_CODE_TO_NAME.get(code, "")
 
 
@@ -3494,10 +3513,14 @@ def paid_lead_geo_df(report: dict[str, Any]) -> pd.DataFrame:
                 df[col] = 0.0
     for col in ("leads", "spend", "impressions", "clicks"):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-    df["platform"] = df["platform"].astype(str).str.strip().replace({"": "Meta"})
-    df["country_code"] = df["country_code"].astype(str).str.strip().str.upper()
-    df["country_name"] = df["country_name"].astype(str).str.strip()
-    df["region"] = df["region"].astype(str).str.strip().replace({"": "Unknown"})
+    df["platform"] = df["platform"].apply(lambda v: _clean_text_value(v, "Meta") or "Meta")
+    df["country_code"] = df["country_code"].apply(_clean_text_value).str.upper()
+    df["country_name"] = df["country_name"].apply(_clean_text_value)
+    df["country_name"] = df.apply(
+        lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code")),
+        axis=1,
+    )
+    df["region"] = df["region"].apply(lambda v: _clean_text_value(v, "Unknown") or "Unknown")
     return df
 
 
