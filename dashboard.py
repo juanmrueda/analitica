@@ -6,14 +6,20 @@ import json
 import html
 import hashlib
 import math
+import os
+import re
 import secrets
 import shutil
 import base64
 import textwrap
+import time
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+import urllib.error
+import urllib.request
 
 import pandas as pd
 import plotly.express as px
@@ -29,6 +35,7 @@ DASHBOARD_SETTINGS_PATH = BASE_DIR / "config" / "dashboard_settings.json"
 DASHBOARD_SETTINGS_TEMPLATE_PATH = BASE_DIR / "config" / "dashboard_settings.template.json"
 CONFIG_BACKUP_DIR = BASE_DIR / "config" / "backups"
 ADMIN_AUDIT_LOG_PATH = BASE_DIR / "config" / "admin_audit.jsonl"
+AI_USAGE_LOG_PATH = BASE_DIR / "config" / "ai_usage.jsonl"
 TENANT_LOGOS_DIR = BASE_DIR / "assets" / "logos"
 DEFAULT_TENANT_ID = "yap"
 LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
@@ -95,11 +102,13 @@ CAMPAIGN_FILTER_OPTIONS: dict[str, str] = {
 }
 ADMIN_SECTION_OPTIONS: dict[str, str] = {
     "users": "Usuarios",
+    "coco_ia": "COCO IA",
     "dashboard": "Variables Dashboard",
     "audit": "Auditoría",
 }
 ADMIN_SECTION_MENU_LABELS: dict[str, str] = {
     "users": "Usuarios",
+    "coco_ia": "COCO IA",
     "dashboard": "Variables Dashboard",
     "audit": "Auditoría",
 }
@@ -116,6 +125,40 @@ COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "MX": "Mexico",
     "US": "United States",
     "ES": "Spain",
+}
+
+COCO_DEFAULT_MODEL = "gpt-4o-mini"
+COCO_DEFAULT_PROVIDER = "openai"
+COCO_DEFAULT_MAX_DAILY_QUERIES = 20
+# Editable from Admin > COCO IA. Kept as defaults in case config is missing.
+COCO_DEFAULT_INPUT_COST_PER_1M = 0.15
+COCO_DEFAULT_OUTPUT_COST_PER_1M = 0.60
+COCO_DEFAULT_DAILY_BUDGET_USD = 0.0
+COCO_DAILY_BUDGET_ALERT_RATIO = 0.80
+COCO_DAILY_QUERY_ALERT_RATIO = 0.80
+SPANISH_MONTHS: dict[str, int] = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+WEEKDAY_NAMES_ES: dict[int, str] = {
+    0: "lunes",
+    1: "martes",
+    2: "miercoles",
+    3: "jueves",
+    4: "viernes",
+    5: "sabado",
+    6: "domingo",
 }
 
 
@@ -2072,6 +2115,166 @@ def read_admin_audit(limit: int = 200) -> list[dict[str, Any]]:
     return rows
 
 
+def append_coco_usage_event(
+    *,
+    actor: str,
+    tenant_id: str,
+    query: str,
+    response: str,
+    provider: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+    status: str,
+    error: str = "",
+) -> None:
+    try:
+        AI_USAGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp_utc": _utc_now_iso(),
+            "event_date": date.today().isoformat(),
+            "actor": str(actor).strip().lower() or "unknown",
+            "tenant_id": str(tenant_id).strip().lower() or "unknown",
+            "provider": str(provider).strip().lower() or "local",
+            "model": str(model).strip() or "local",
+            "query": str(query).strip(),
+            "response_preview": str(response).strip()[:240],
+            "input_tokens": _normalize_non_negative_int(input_tokens, 0, minimum=0, maximum=5_000_000),
+            "output_tokens": _normalize_non_negative_int(output_tokens, 0, minimum=0, maximum=5_000_000),
+            "total_tokens": _normalize_non_negative_int(input_tokens, 0, minimum=0, maximum=5_000_000)
+            + _normalize_non_negative_int(output_tokens, 0, minimum=0, maximum=5_000_000),
+            "cost_usd": _normalize_non_negative_float(cost_usd, 0.0, minimum=0.0, maximum=1_000_000.0),
+            "status": str(status).strip().lower() or "ok",
+            "error": str(error).strip()[:500],
+        }
+        with AI_USAGE_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+def read_coco_usage(limit: int = 5_000) -> list[dict[str, Any]]:
+    if not AI_USAGE_LOG_PATH.exists():
+        return []
+    try:
+        lines = AI_USAGE_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in lines[-max(limit, 1):]:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            rows.append(parsed)
+    rows.reverse()
+    return rows
+
+
+def clear_coco_usage_log() -> tuple[bool, str]:
+    try:
+        backup_path = ""
+        if AI_USAGE_LOG_PATH.exists():
+            ok_backup, backup_info = _backup_config_file(AI_USAGE_LOG_PATH)
+            if not ok_backup:
+                return False, f"No se pudo crear backup del log: {backup_info}"
+            backup_path = str(backup_info or "")
+        AI_USAGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        AI_USAGE_LOG_PATH.write_text("", encoding="utf-8")
+        return True, backup_path
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _estimate_token_count(text: str) -> int:
+    clean = str(text or "").strip()
+    if not clean:
+        return 0
+    # Fast approximation for dashboards where exact tokenizer dependency is not available.
+    return max(1, int(math.ceil(len(clean) / 4.0)))
+
+
+def _estimate_coco_cost_usd(
+    input_tokens: int,
+    output_tokens: int,
+    coco_cfg: dict[str, Any],
+) -> float:
+    input_rate = _normalize_non_negative_float(
+        coco_cfg.get("input_cost_per_1m", COCO_DEFAULT_INPUT_COST_PER_1M),
+        COCO_DEFAULT_INPUT_COST_PER_1M,
+        minimum=0.0,
+        maximum=1000.0,
+    )
+    output_rate = _normalize_non_negative_float(
+        coco_cfg.get("output_cost_per_1m", COCO_DEFAULT_OUTPUT_COST_PER_1M),
+        COCO_DEFAULT_OUTPUT_COST_PER_1M,
+        minimum=0.0,
+        maximum=1000.0,
+    )
+    return ((float(input_tokens) * input_rate) + (float(output_tokens) * output_rate)) / 1_000_000.0
+
+
+def _count_coco_queries_today(rows: list[dict[str, Any]], username: str, tenant_id: str) -> int:
+    today_iso = date.today().isoformat()
+    uname = str(username).strip().lower()
+    tid = str(tenant_id).strip().lower()
+    total = 0
+    for row in rows:
+        if str(row.get("event_date", "")).strip() != today_iso:
+            continue
+        if str(row.get("status", "")).strip().lower() != "ok":
+            continue
+        if str(row.get("actor", "")).strip().lower() != uname:
+            continue
+        if str(row.get("tenant_id", "")).strip().lower() != tid:
+            continue
+        total += 1
+    return total
+
+
+def _coco_tenant_cost_today_usd(rows: list[dict[str, Any]], tenant_id: str) -> float:
+    today_iso = date.today().isoformat()
+    tid = str(tenant_id).strip().lower()
+    total_cost = 0.0
+    for row in rows:
+        if str(row.get("event_date", "")).strip() != today_iso:
+            continue
+        if str(row.get("status", "")).strip().lower() != "ok":
+            continue
+        if str(row.get("tenant_id", "")).strip().lower() != tid:
+            continue
+        total_cost += _normalize_non_negative_float(row.get("cost_usd"), 0.0, minimum=0.0, maximum=1_000_000.0)
+    return total_cost
+
+
+def _parse_coco_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
 def validate_users_integrity(users: dict[str, dict[str, Any]], tenants: dict[str, dict[str, Any]]) -> list[str]:
     issues: list[str] = []
     if not users:
@@ -2419,6 +2622,217 @@ def _normalize_section_keys(raw_keys: Any, allowed_options: dict[str, str], fall
     return normalized
 
 
+def _normalize_non_negative_int(value: Any, fallback: int, *, minimum: int = 0, maximum: int = 100_000) -> int:
+    try:
+        parsed = int(float(value))
+    except Exception:
+        parsed = fallback
+    if parsed < minimum:
+        return minimum
+    if parsed > maximum:
+        return maximum
+    return parsed
+
+
+def _normalize_non_negative_float(value: Any, fallback: float, *, minimum: float = 0.0, maximum: float = 1_000_000.0) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(fallback)
+    if parsed < minimum:
+        return minimum
+    if parsed > maximum:
+        return maximum
+    return parsed
+
+
+def _normalize_coco_limit_map(raw_map: Any, *, key_mode: str = "generic") -> dict[str, int]:
+    normalized: dict[str, int] = {}
+    if not isinstance(raw_map, dict):
+        return normalized
+    for raw_key, raw_value in raw_map.items():
+        key = str(raw_key).strip().lower()
+        if not key:
+            continue
+        if key_mode == "user_tenant":
+            if "@" not in key:
+                continue
+            user_part, tenant_part = key.split("@", 1)
+            user_part = user_part.strip().lower()
+            tenant_part = tenant_part.strip().lower()
+            if not user_part or not tenant_part:
+                continue
+            key = f"{user_part}@{tenant_part}"
+        elif key_mode in {"tenant", "user"}:
+            key = key.strip().lower()
+        normalized[key] = _normalize_non_negative_int(raw_value, COCO_DEFAULT_MAX_DAILY_QUERIES, minimum=0, maximum=10_000)
+    return normalized
+
+
+def _normalize_coco_enabled_tenant_map(
+    raw_map: Any,
+    tenants: dict[str, dict[str, Any]],
+    fallback_enabled: bool,
+) -> dict[str, bool]:
+    normalized: dict[str, bool] = {}
+    if isinstance(raw_map, dict):
+        for raw_key, raw_value in raw_map.items():
+            key = str(raw_key).strip().lower()
+            if not key:
+                continue
+            normalized[key] = bool(raw_value)
+    for tenant_id in tenants.keys():
+        tenant_key = str(tenant_id).strip().lower()
+        if tenant_key not in normalized:
+            normalized[tenant_key] = bool(fallback_enabled)
+    return normalized
+
+
+def _normalize_coco_budget_map(
+    raw_map: Any,
+    tenants: dict[str, dict[str, Any]],
+    fallback_budget: float,
+) -> dict[str, float]:
+    normalized: dict[str, float] = {}
+    if isinstance(raw_map, dict):
+        for raw_key, raw_value in raw_map.items():
+            key = str(raw_key).strip().lower()
+            if not key:
+                continue
+            normalized[key] = _normalize_non_negative_float(raw_value, fallback_budget, minimum=0.0, maximum=1_000_000.0)
+    for tenant_id in tenants.keys():
+        tenant_key = str(tenant_id).strip().lower()
+        if tenant_key not in normalized:
+            normalized[tenant_key] = _normalize_non_negative_float(fallback_budget, COCO_DEFAULT_DAILY_BUDGET_USD, minimum=0.0, maximum=1_000_000.0)
+    return normalized
+
+
+def _default_coco_ia_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    tenant_limits = {str(tid).strip().lower(): COCO_DEFAULT_MAX_DAILY_QUERIES for tid in tenants.keys()}
+    tenant_enabled = {str(tid).strip().lower(): True for tid in tenants.keys()}
+    tenant_budgets = {str(tid).strip().lower(): COCO_DEFAULT_DAILY_BUDGET_USD for tid in tenants.keys()}
+    return {
+        "enabled": False,
+        "enabled_tenants": tenant_enabled,
+        "provider": COCO_DEFAULT_PROVIDER,
+        "model": COCO_DEFAULT_MODEL,
+        "max_daily_queries_default": COCO_DEFAULT_MAX_DAILY_QUERIES,
+        "max_daily_queries_tenant": tenant_limits,
+        "max_daily_queries_user": {},
+        "max_daily_queries_user_tenant": {},
+        "daily_budget_usd_default": COCO_DEFAULT_DAILY_BUDGET_USD,
+        "daily_budget_usd_tenant": tenant_budgets,
+        "input_cost_per_1m": COCO_DEFAULT_INPUT_COST_PER_1M,
+        "output_cost_per_1m": COCO_DEFAULT_OUTPUT_COST_PER_1M,
+    }
+
+
+def _normalize_coco_ia_settings(raw_cfg: Any, tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    defaults = _default_coco_ia_settings(tenants)
+    source = raw_cfg if isinstance(raw_cfg, dict) else {}
+    enabled = bool(source.get("enabled", defaults["enabled"]))
+    enabled_tenants = _normalize_coco_enabled_tenant_map(
+        source.get("enabled_tenants"),
+        tenants,
+        fallback_enabled=enabled,
+    )
+    daily_budget_default = _normalize_non_negative_float(
+        source.get("daily_budget_usd_default", defaults.get("daily_budget_usd_default", COCO_DEFAULT_DAILY_BUDGET_USD)),
+        defaults.get("daily_budget_usd_default", COCO_DEFAULT_DAILY_BUDGET_USD),
+        minimum=0.0,
+        maximum=1_000_000.0,
+    )
+    daily_budget_tenant = _normalize_coco_budget_map(
+        source.get("daily_budget_usd_tenant"),
+        tenants,
+        daily_budget_default,
+    )
+    tenant_limits = _normalize_coco_limit_map(source.get("max_daily_queries_tenant"), key_mode="tenant")
+    for tenant_id in tenants.keys():
+        tenant_key = str(tenant_id).strip().lower()
+        if tenant_key not in tenant_limits:
+            tenant_limits[tenant_key] = defaults["max_daily_queries_default"]
+    return {
+        "enabled": enabled,
+        "enabled_tenants": enabled_tenants,
+        "provider": str(source.get("provider", defaults["provider"])).strip().lower() or defaults["provider"],
+        "model": str(source.get("model", defaults["model"])).strip() or defaults["model"],
+        "max_daily_queries_default": _normalize_non_negative_int(
+            source.get("max_daily_queries_default", defaults["max_daily_queries_default"]),
+            defaults["max_daily_queries_default"],
+            minimum=0,
+            maximum=10_000,
+        ),
+        "max_daily_queries_tenant": tenant_limits,
+        "max_daily_queries_user": _normalize_coco_limit_map(source.get("max_daily_queries_user"), key_mode="user"),
+        "max_daily_queries_user_tenant": _normalize_coco_limit_map(
+            source.get("max_daily_queries_user_tenant"),
+            key_mode="user_tenant",
+        ),
+        "daily_budget_usd_default": daily_budget_default,
+        "daily_budget_usd_tenant": daily_budget_tenant,
+        "input_cost_per_1m": _normalize_non_negative_float(
+            source.get("input_cost_per_1m", defaults["input_cost_per_1m"]),
+            defaults["input_cost_per_1m"],
+            minimum=0.0,
+            maximum=1000.0,
+        ),
+        "output_cost_per_1m": _normalize_non_negative_float(
+            source.get("output_cost_per_1m", defaults["output_cost_per_1m"]),
+            defaults["output_cost_per_1m"],
+            minimum=0.0,
+            maximum=1000.0,
+        ),
+    }
+
+
+def _is_coco_enabled_for_tenant(coco_cfg: dict[str, Any], tenant_id: str) -> bool:
+    if not bool(coco_cfg.get("enabled", False)):
+        return False
+    tenant_key = str(tenant_id).strip().lower()
+    enabled_map = coco_cfg.get("enabled_tenants", {})
+    if isinstance(enabled_map, dict):
+        if tenant_key in enabled_map:
+            return bool(enabled_map.get(tenant_key))
+        if "*" in enabled_map:
+            return bool(enabled_map.get("*"))
+    return True
+
+
+def _resolve_coco_daily_limit(coco_cfg: dict[str, Any], username: str, tenant_id: str) -> int:
+    uname = str(username).strip().lower()
+    tid = str(tenant_id).strip().lower()
+    user_tenant_key = f"{uname}@{tid}"
+    user_tenant_limits = coco_cfg.get("max_daily_queries_user_tenant", {})
+    if isinstance(user_tenant_limits, dict) and user_tenant_key in user_tenant_limits:
+        return _normalize_non_negative_int(user_tenant_limits.get(user_tenant_key), COCO_DEFAULT_MAX_DAILY_QUERIES, minimum=0, maximum=10_000)
+    user_limits = coco_cfg.get("max_daily_queries_user", {})
+    if isinstance(user_limits, dict) and uname in user_limits:
+        return _normalize_non_negative_int(user_limits.get(uname), COCO_DEFAULT_MAX_DAILY_QUERIES, minimum=0, maximum=10_000)
+    tenant_limits = coco_cfg.get("max_daily_queries_tenant", {})
+    if isinstance(tenant_limits, dict) and tid in tenant_limits:
+        return _normalize_non_negative_int(tenant_limits.get(tid), COCO_DEFAULT_MAX_DAILY_QUERIES, minimum=0, maximum=10_000)
+    return _normalize_non_negative_int(
+        coco_cfg.get("max_daily_queries_default", COCO_DEFAULT_MAX_DAILY_QUERIES),
+        COCO_DEFAULT_MAX_DAILY_QUERIES,
+        minimum=0,
+        maximum=10_000,
+    )
+
+
+def _resolve_coco_daily_budget_usd(coco_cfg: dict[str, Any], tenant_id: str) -> float:
+    tid = str(tenant_id).strip().lower()
+    tenant_budget_map = coco_cfg.get("daily_budget_usd_tenant", {})
+    if isinstance(tenant_budget_map, dict) and tid in tenant_budget_map:
+        return _normalize_non_negative_float(tenant_budget_map.get(tid), COCO_DEFAULT_DAILY_BUDGET_USD, minimum=0.0, maximum=1_000_000.0)
+    return _normalize_non_negative_float(
+        coco_cfg.get("daily_budget_usd_default", COCO_DEFAULT_DAILY_BUDGET_USD),
+        COCO_DEFAULT_DAILY_BUDGET_USD,
+        minimum=0.0,
+        maximum=1_000_000.0,
+    )
+
+
 def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
     defaults = {
         "overview_kpis": list(DEFAULT_OVERVIEW_KPI_KEYS),
@@ -2444,7 +2858,11 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
             "default_view_mode": "Overview",
             "tenant_logo": "",
         }
-    return {"defaults": defaults, "tenants": tenant_cfg}
+    return {
+        "defaults": defaults,
+        "tenants": tenant_cfg,
+        "coco_ia": _default_coco_ia_settings(tenants),
+    }
 
 
 def ensure_dashboard_settings_runtime_file(runtime_path: Path, template_path: Path) -> None:
@@ -2546,7 +2964,9 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
             ),
             "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo", defaults.get("tenant_logo", ""))),
         }
-    return {"defaults": defaults, "tenants": tenant_cfg}
+    raw_coco = payload.get("coco_ia", {}) if isinstance(payload, dict) else {}
+    coco_ia = _normalize_coco_ia_settings(raw_coco, tenants)
+    return {"defaults": defaults, "tenants": tenant_cfg, "coco_ia": coco_ia}
 
 
 def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[str, dict[str, Any]]) -> tuple[bool, str]:
@@ -2639,7 +3059,16 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
             }
             if tenant_cfg[tenant_id]["default_view_mode"] not in tenant_cfg[tenant_id]["enabled_view_modes"]:
                 tenant_cfg[tenant_id]["default_view_mode"] = tenant_cfg[tenant_id]["enabled_view_modes"][0]
-        payload = {"defaults": normalized["defaults"], "tenants": tenant_cfg}
+        incoming_coco = settings.get("coco_ia", {}) if isinstance(settings, dict) else {}
+        normalized_coco = _normalize_coco_ia_settings(
+            incoming_coco if isinstance(incoming_coco, dict) and incoming_coco else normalized.get("coco_ia", {}),
+            tenants,
+        )
+        payload = {
+            "defaults": normalized["defaults"],
+            "tenants": tenant_cfg,
+            "coco_ia": normalized_coco,
+        }
         path.parent.mkdir(parents=True, exist_ok=True)
         ok_backup, backup_info = _backup_config_file(path)
         if not ok_backup:
@@ -4614,7 +5043,7 @@ def render_exec(
 
         def _first_text(values: pd.Series) -> str:
             for raw in values:
-                txt = str(raw or "").strip()
+                txt = _clean_text_value(raw)
                 if txt:
                     return txt
             return ""
@@ -4630,7 +5059,7 @@ def render_exec(
             )
         )
         geo_roll["country_name"] = geo_roll.apply(
-            lambda r: str(r.get("country_name", "")).strip() or _country_name_from_code(r.get("country_code", "")),
+            lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code", "")),
             axis=1,
         )
         total_geo_leads = float(geo_roll["leads"].sum())
@@ -4650,12 +5079,16 @@ def render_exec(
             )
         )
         country_roll["country_name"] = country_roll.apply(
-            lambda r: str(r.get("country_name", "")).strip() or _country_name_from_code(r.get("country_code", "")),
+            lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code", "")),
             axis=1,
         )
         country_roll["share_leads"] = country_roll["leads"].apply(lambda v: sdiv(float(v), total_geo_leads) or 0.0)
         top_country = country_roll.sort_values("leads", ascending=False, na_position="last").head(1)
-        top_country_name = str(top_country.iloc[0]["country_name"] or top_country.iloc[0]["country_code"]) if not top_country.empty else "N/A"
+        top_country_name = (
+            _clean_text_value(top_country.iloc[0]["country_name"])
+            or _clean_text_value(top_country.iloc[0]["country_code"])
+            or "N/A"
+        ) if not top_country.empty else "N/A"
         top_country_share = float(top_country.iloc[0]["share_leads"]) if not top_country.empty else 0.0
         country_count = int((country_roll["leads"] > 0).sum())
         prev_country_count = int((gprev.groupby("country_code", as_index=False)["leads"].sum()["leads"] > 0).sum()) if not gprev.empty else 0
@@ -4665,10 +5098,14 @@ def render_exec(
         m2.metric("País Top (share)", top_country_name, fmt_pct(top_country_share))
         m3.metric("Cobertura Países", f"{country_count}", fmt_delta_compact(pct_delta(float(country_count), float(prev_country_count))))
 
-        map_df = country_roll[country_roll["country_name"].astype(str).str.strip() != ""].copy()
+        map_df = country_roll.copy()
         map_df["country_code"] = map_df["country_code"].astype(str).str.strip().str.upper()
+        map_df["country_name"] = map_df.apply(
+            lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code", "")),
+            axis=1,
+        )
         map_df["country_label"] = map_df.apply(
-            lambda r: str(r.get("country_name", "")).strip() or str(r.get("country_code", "")).strip(),
+            lambda r: _clean_text_value(r.get("country_name")) or _clean_text_value(r.get("country_code")),
             axis=1,
         )
         map_df["cpl"] = map_df.apply(
@@ -4770,7 +5207,7 @@ def render_exec(
             )
             if not top_country_view.empty:
                 top_country_view["country_label"] = top_country_view.apply(
-                    lambda r: str(r.get("country_name", "")).strip() or str(r.get("country_code", "")).strip(),
+                    lambda r: _clean_text_value(r.get("country_name")) or _clean_text_value(r.get("country_code")),
                     axis=1,
                 )
                 top_country_view = top_country_view.sort_values("leads", ascending=True, na_position="last")
@@ -4796,7 +5233,7 @@ def render_exec(
 
             region_view = geo_roll.copy()
             region_view["country_label"] = region_view.apply(
-                lambda r: str(r["country_name"]) if str(r["country_name"]).strip() else str(r["country_code"]),
+                lambda r: _clean_text_value(r.get("country_name")) or _clean_text_value(r.get("country_code")),
                 axis=1,
             )
             region_view["share_leads"] = region_view["leads"].apply(lambda v: sdiv(float(v), total_geo_leads) or 0.0)
@@ -6004,6 +6441,1909 @@ def _render_admin_users_wireframe(
                             selected_username,
                         )
 
+def _build_coco_metrics_context(
+    tenant_name: str,
+    tenant_id: str,
+    platform: str,
+    s: date,
+    e: date,
+    cur_summary: dict[str, float | None],
+    prev_summary: dict[str, float | None],
+) -> dict[str, Any]:
+    metric_keys = ["spend", "conv", "cpl", "ctr", "impr", "clicks", "cpc", "cpm", "cvr", "sessions", "users"]
+    current_metrics: dict[str, Any] = {}
+    previous_metrics: dict[str, Any] = {}
+    deltas: dict[str, Any] = {}
+    for key in metric_keys:
+        cur_val = cur_summary.get(key)
+        prev_val = prev_summary.get(key)
+        current_metrics[key] = cur_val
+        previous_metrics[key] = prev_val
+        deltas[key] = pct_delta(cur_val, prev_val)
+    return {
+        "tenant_name": tenant_name,
+        "tenant_id": tenant_id,
+        "platform": platform,
+        "date_range": {"start": s.isoformat(), "end": e.isoformat()},
+        "current_period": current_metrics,
+        "previous_period": previous_metrics,
+        "delta_vs_previous_pct": deltas,
+    }
+
+
+def _sanitize_coco_context(
+    context: dict[str, Any],
+    *,
+    tenant_id: str,
+    platform: str,
+    start_day: date,
+    end_day: date,
+) -> dict[str, Any]:
+    safe_tenant = str(tenant_id).strip().lower()
+    safe_platform = str(platform).strip()
+    safe_start = start_day.isoformat()
+    safe_end = end_day.isoformat()
+    safe_context = {
+        "tenant_name": str(context.get("tenant_name", "")).strip(),
+        "tenant_id": safe_tenant,
+        "platform": safe_platform,
+        "date_range": {"start": safe_start, "end": safe_end},
+        "current_period": {},
+        "previous_period": {},
+        "delta_vs_previous_pct": {},
+    }
+    allowed_metric_keys = {
+        "spend",
+        "conv",
+        "cpl",
+        "ctr",
+        "impr",
+        "clicks",
+        "cpc",
+        "cpm",
+        "cvr",
+        "sessions",
+        "users",
+    }
+    for section_key in ("current_period", "previous_period", "delta_vs_previous_pct"):
+        section_raw = context.get(section_key, {})
+        if not isinstance(section_raw, dict):
+            continue
+        safe_section: dict[str, float | None] = {}
+        for metric_key in allowed_metric_keys:
+            if metric_key not in section_raw:
+                continue
+            value = section_raw.get(metric_key)
+            if value is None:
+                safe_section[metric_key] = None
+                continue
+            try:
+                parsed = float(value)
+            except Exception:
+                continue
+            if math.isfinite(parsed):
+                safe_section[metric_key] = parsed
+        safe_context[section_key] = safe_section
+    return safe_context
+
+
+def _normalize_question_text(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    ascii_txt = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_txt).strip()
+
+
+def _safe_make_date(year_value: int, month_value: int, day_value: int) -> date | None:
+    try:
+        return date(int(year_value), int(month_value), int(day_value))
+    except Exception:
+        return None
+
+
+def _extract_first_date_token(text: str) -> date | None:
+    txt = _normalize_question_text(text)
+    if not txt:
+        return None
+    iso_match = re.search(r"\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b", txt)
+    if iso_match:
+        return _safe_make_date(
+            int(iso_match.group(1)),
+            int(iso_match.group(2)),
+            int(iso_match.group(3)),
+        )
+    long_match = re.search(
+        r"\b(\d{1,2})\s+de\s+([a-z]+)\s+(?:de|del)\s+(20\d{2})\b",
+        txt,
+    )
+    if long_match:
+        month_idx = SPANISH_MONTHS.get(str(long_match.group(2)).strip().lower())
+        if month_idx:
+            return _safe_make_date(
+                int(long_match.group(3)),
+                int(month_idx),
+                int(long_match.group(1)),
+            )
+    short_match = re.search(r"\b([a-z]+)\s+(?:de|del)\s+(20\d{2})\b", txt)
+    if short_match:
+        month_idx = SPANISH_MONTHS.get(str(short_match.group(1)).strip().lower())
+        if month_idx:
+            return _safe_make_date(int(short_match.group(2)), int(month_idx), 1)
+    return None
+
+
+def _resolve_question_range(
+    question: str,
+    *,
+    data_min: date,
+    data_max: date,
+    ui_start: date,
+    ui_end: date,
+) -> tuple[date, date, bool]:
+    q = _normalize_question_text(question)
+    start = ui_start
+    end = ui_end
+    explicit = False
+
+    from_match = re.search(r"\bdesde\s+(?:el\s+)?(.+?)(?:\s+hasta\s+(?:el\s+)?(.+))?$", q)
+    if from_match:
+        parsed_start = _extract_first_date_token(str(from_match.group(1)))
+        parsed_end = _extract_first_date_token(str(from_match.group(2))) if from_match.group(2) else None
+        if parsed_start is not None:
+            start = parsed_start
+            end = parsed_end if parsed_end is not None else data_max
+            explicit = True
+
+    if not explicit:
+        between_match = re.search(r"\bentre\s+(.+?)\s+y\s+(.+)$", q)
+        if between_match:
+            parsed_start = _extract_first_date_token(str(between_match.group(1)))
+            parsed_end = _extract_first_date_token(str(between_match.group(2)))
+            if parsed_start is not None and parsed_end is not None:
+                start = parsed_start
+                end = parsed_end
+                explicit = True
+
+    if not explicit:
+        year_match = re.search(r"\b(?:en|del|durante)\s+(20\d{2})\b", q)
+        if year_match:
+            year_value = int(year_match.group(1))
+            parsed_start = _safe_make_date(year_value, 1, 1)
+            parsed_end = _safe_make_date(year_value, 12, 31)
+            if parsed_start is not None and parsed_end is not None:
+                start = parsed_start
+                end = parsed_end
+                explicit = True
+
+    start = _coerce_date_value(start, data_min, data_max)
+    end = _coerce_date_value(end, data_min, data_max)
+    if start > end:
+        start, end = end, start
+    return start, end, explicit
+
+
+def _detect_peak_day_metric(question: str) -> str:
+    q = _normalize_question_text(question)
+    if not q:
+        return ""
+    if not any(token in q for token in ("dia", "fecha")):
+        return ""
+    has_superlative = any(token in q for token in ("mayor", "maximo", "maxima", "mas alto", "mas alta", "pico"))
+    if not has_superlative and re.search(
+        (
+            r"\bmas\s+("
+            r"conversion(?:es)?|conv|inversion|gasto|spend|costo|"
+            r"impresion(?:es)?|impr|click(?:s)?|clic(?:s)?|"
+            r"cvr|ctr|cpl|cpc|cpm|tasa\s+de\s+conversion|tasa\s+de\s+clic(?:s)?|"
+            r"costo\s+por\s+lead|costo\s+por\s+clic|costo\s+por\s+mil"
+            r")\b"
+        ),
+        q,
+    ):
+        has_superlative = True
+    if not has_superlative and "mejor" in q:
+        has_superlative = True
+    if not has_superlative:
+        return ""
+    if any(token in q for token in ("cvr", "tasa de conversion", "ratio de conversion")):
+        return "cvr"
+    if any(token in q for token in ("ctr", "tasa de clic", "tasa de clics")):
+        return "ctr"
+    if any(token in q for token in ("cpl", "costo por lead", "coste por lead")):
+        return "cpl"
+    if any(token in q for token in ("cpc", "costo por clic", "coste por clic")):
+        return "cpc"
+    if any(token in q for token in ("cpm", "costo por mil", "coste por mil")):
+        return "cpm"
+    if any(token in q for token in ("conversion", "conv")):
+        return "conv"
+    if any(token in q for token in ("inversion", "gasto", "spend", "costo")):
+        return "spend"
+    if any(token in q for token in ("impresion", "impr")):
+        return "impr"
+    if any(token in q for token in ("click", "clic")):
+        return "clicks"
+    return ""
+
+
+def _platform_from_question(question: str) -> str:
+    q = _normalize_question_text(question)
+    if not q:
+        return ""
+    if any(token in q for token in ("google", "google ads", "adwords", "gads")):
+        return "Google"
+    if any(token in q for token in ("meta", "facebook", "instagram", "fb")):
+        return "Meta"
+    return ""
+
+
+def _weekday_name_es(day_value: date) -> str:
+    return WEEKDAY_NAMES_ES.get(int(day_value.weekday()), "desconocido")
+
+
+def _is_weekday_followup_question(question: str) -> bool:
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    if "dia de la semana" in q:
+        return True
+    if "weekday" in q:
+        return True
+    if re.search(r"\bque\s+dia\b", q) and any(token in q for token in ("era", "fue", "caia", "cayo")):
+        return True
+    return False
+
+
+def _try_resolve_weekday_followup_question(
+    *,
+    question: str,
+    last_context: dict[str, Any] | None,
+    include_actions: bool = True,
+) -> tuple[str, dict[str, str]]:
+    if not _is_weekday_followup_question(question):
+        return "", {}
+    parsed_day = _extract_first_date_token(question)
+    source = "pregunta"
+    ctx = last_context if isinstance(last_context, dict) else {}
+    if parsed_day is None:
+        parsed_day = _parse_iso_date(ctx.get("peak_day"))
+        source = "contexto_previo"
+    if parsed_day is None:
+        return "", {}
+
+    weekday_name = _weekday_name_es(parsed_day)
+    metric_key = str(ctx.get("metric_key", "")).strip()
+    metric_label = str(KPI_CATALOG.get(metric_key, {}).get("label", metric_key)).strip() if metric_key else ""
+    finding_lines = [f"{parsed_day.isoformat()} fue {weekday_name}."]
+    if source == "contexto_previo" and metric_label:
+        finding_lines.append(f"La fecha corresponde al último resultado consultado de {metric_label.lower()}.")
+    answer = _format_coco_structured_answer(
+        headline=f"La fecha {parsed_day.isoformat()} fue {weekday_name}.",
+        findings=finding_lines,
+        actions=(
+            ["Si quieres, te doy el top 3 de días por ese mismo indicador."]
+            if include_actions
+            else []
+        ),
+    )
+    meta = {
+        "resolver": "deterministic_weekday",
+        "target_date": parsed_day.isoformat(),
+        "source": source,
+    }
+    return answer, meta
+
+
+def _try_resolve_peak_day_question(
+    *,
+    question: str,
+    df_base: pd.DataFrame,
+    selected_platform: str,
+    ui_start: date,
+    ui_end: date,
+    include_actions: bool = True,
+    include_platform_breakdown: bool = False,
+) -> tuple[str, dict[str, str]]:
+    metric_key = _detect_peak_day_metric(question)
+    if not metric_key:
+        return "", {}
+    if df_base.empty or "date" not in df_base.columns:
+        return "", {}
+
+    data_min = df_base["date"].min()
+    data_max = df_base["date"].max()
+    if not isinstance(data_min, date) or not isinstance(data_max, date):
+        return "", {}
+
+    range_start, range_end, explicit_range = _resolve_question_range(
+        question,
+        data_min=data_min,
+        data_max=data_max,
+        ui_start=ui_start,
+        ui_end=ui_end,
+    )
+    cp = df_base[(df_base["date"] >= range_start) & (df_base["date"] <= range_end)].copy().reset_index(drop=True)
+    if cp.empty:
+        answer = _format_coco_structured_answer(
+            headline="No encontré datos para ese rango de fechas.",
+            findings=[
+                f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}."
+            ],
+            actions=(
+                [
+                    "Ajusta el rango de fechas o valida que el tenant tenga histórico en ese periodo.",
+                ]
+                if include_actions
+                else []
+            ),
+        )
+        meta = {
+            "range_start": range_start.isoformat(),
+            "range_end": range_end.isoformat(),
+            "metric_key": metric_key,
+            "resolver": "deterministic_peak",
+            "range_source": "pregunta" if explicit_range else "selector",
+        }
+        return answer, meta
+
+    label = str(KPI_CATALOG.get(metric_key, {}).get("label", metric_key)).strip()
+    fmt_key = str(KPI_CATALOG.get(metric_key, {}).get("fmt", "int")).strip()
+    asked_platform = _platform_from_question(question)
+    effective_platform = asked_platform if asked_platform in {"Google", "Meta"} else selected_platform
+    tie_note = ""
+    applied_platform = effective_platform
+    breakdown_line = ""
+    total_series = _platform_kpi_series(cp, "total", metric_key)
+    meta_series = _platform_kpi_series(cp, "meta", metric_key)
+    google_series = _platform_kpi_series(cp, "google", metric_key)
+    if total_series is None or meta_series is None or google_series is None:
+        return "", {}
+
+    total_series = pd.to_numeric(total_series, errors="coerce").fillna(0.0)
+    meta_series = pd.to_numeric(meta_series, errors="coerce").fillna(0.0)
+    google_series = pd.to_numeric(google_series, errors="coerce").fillna(0.0)
+
+    def _peak_rows_for(series: pd.Series) -> pd.DataFrame:
+        if series.empty:
+            return cp.iloc[0:0].copy()
+        peak_val = float(series.max())
+        if not math.isfinite(peak_val):
+            return cp.iloc[0:0].copy()
+        series_num = pd.to_numeric(series, errors="coerce").fillna(0.0).astype(float)
+        tolerance = 1e-12 + (1e-9 * abs(peak_val))
+        peak_mask = (series_num - peak_val).abs() <= tolerance
+        return cp.loc[peak_mask].sort_values("date")
+
+    if effective_platform in {"Meta", "Google"}:
+        selected_series = meta_series if effective_platform == "Meta" else google_series
+        peak_rows = _peak_rows_for(selected_series)
+        if peak_rows.empty:
+            return "", {}
+        peak_row = peak_rows.iloc[0]
+        peak_idx = int(peak_row.name)
+        peak_day = peak_row["date"]
+        tie_days = int(len(peak_rows))
+        if tie_days > 1:
+            tie_note = f"Hubo empate en {tie_days} días; reporto el primero cronológico."
+        platform_value = float(selected_series.iloc[peak_idx])
+        total_value = platform_value
+        platform_label = effective_platform
+        if include_platform_breakdown:
+            counterpart = "Google" if effective_platform == "Meta" else "Meta"
+            counterpart_series = google_series if counterpart == "Google" else meta_series
+            counterpart_value = float(counterpart_series.iloc[peak_idx])
+            breakdown_line = (
+                f"Desglose por plataforma ese día: {effective_platform} ({_format_kpi_value(fmt_key, platform_value)}) "
+                f"| {counterpart} ({_format_kpi_value(fmt_key, counterpart_value)})."
+            )
+    else:
+        peak_rows = _peak_rows_for(total_series)
+        if peak_rows.empty:
+            return "", {}
+        peak_row = peak_rows.iloc[0]
+        peak_idx = int(peak_row.name)
+        peak_day = peak_row["date"]
+        tie_days = int(len(peak_rows))
+        if tie_days > 1:
+            tie_note = f"Hubo empate en {tie_days} días; reporto el primero cronológico."
+        total_value = float(total_series.iloc[peak_idx])
+        meta_value = float(meta_series.iloc[peak_idx])
+        google_value = float(google_series.iloc[peak_idx])
+        if meta_value > google_value:
+            platform_label = "Meta"
+            platform_value = meta_value
+        elif google_value > meta_value:
+            platform_label = "Google"
+            platform_value = google_value
+        else:
+            platform_label = "Empate Meta/Google"
+            platform_value = meta_value
+        applied_platform = "All"
+        if include_platform_breakdown:
+            breakdown_line = (
+                f"Desglose por plataforma ese día: Meta ({_format_kpi_value(fmt_key, meta_value)}) "
+                f"| Google ({_format_kpi_value(fmt_key, google_value)})."
+            )
+
+    peak_total_txt = _format_kpi_value(fmt_key, total_value)
+    platform_value_txt = _format_kpi_value(fmt_key, platform_value)
+    findings_lines = [
+        f"Plataforma líder ese día: {platform_label} ({platform_value_txt}).",
+        breakdown_line,
+        f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}.",
+        tie_note,
+    ]
+    answer = _format_coco_structured_answer(
+        headline=f"Día pico de {label}: {peak_day.isoformat()} ({peak_total_txt}).",
+        findings=findings_lines,
+        actions=(
+            [
+                f"Revisa creativos y campañas activas en {platform_label} durante {peak_day.isoformat()}.",
+                "Compara ese pico contra el promedio semanal para validar sostenibilidad.",
+            ]
+            if include_actions
+            else []
+        ),
+    )
+    meta = {
+        "range_start": range_start.isoformat(),
+        "range_end": range_end.isoformat(),
+        "metric_key": metric_key,
+        "resolver": "deterministic_peak",
+        "range_source": "pregunta" if explicit_range else "selector",
+        "applied_platform": applied_platform,
+        "peak_day": peak_day.isoformat(),
+        "leader_platform": platform_label,
+    }
+    return answer, meta
+
+
+def _coco_scope_guard_message(question: str) -> str:
+    q = str(question or "").strip().lower()
+    if not q:
+        return "Escribe una pregunta para continuar."
+    if len(q) > 800:
+        return "La pregunta es muy larga. Intenta con un máximo de 800 caracteres."
+    restricted_terms = [
+        "password",
+        "contrase",
+        "api key",
+        "secret",
+        "token de acceso",
+        "access token",
+        "users.json",
+        "dashboard_settings.json",
+        "config/",
+        "credencial",
+    ]
+    for term in restricted_terms:
+        if term in q:
+            return (
+                "COCO IA solo responde sobre métricas analíticas agregadas del tenant/rango activo. "
+                "No puede exponer configuración sensible o credenciales."
+            )
+    return ""
+
+
+def _question_requests_actions(question: str) -> bool:
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    action_terms = (
+        "recomienda",
+        "recomendacion",
+        "recomendaciones",
+        "accion",
+        "acciones",
+        "sugerencia",
+        "sugerencias",
+        "sugerir",
+        "que hago",
+        "que hacemos",
+        "como mejorar",
+        "como optimizar",
+        "plan",
+        "pasos",
+        "prioriza",
+        "estrategia",
+        "next step",
+        "siguiente paso",
+    )
+    return any(term in q for term in action_terms)
+
+
+def _question_requests_platform_breakdown(question: str) -> bool:
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    breakdown_terms = (
+        "desglose",
+        "desglosa",
+        "desglosalas",
+        "desglosalo",
+        "desglosar",
+        "por plataforma",
+        "por canal",
+        "breakdown",
+    )
+    return any(term in q for term in breakdown_terms)
+
+
+def _question_mentions_both_major_platforms(question: str) -> bool:
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    mentions_google = "google" in q
+    mentions_meta = any(token in q for token in ("meta", "facebook", "instagram", "fb"))
+    return bool(mentions_google and mentions_meta)
+
+
+def _detect_piece_metric(question: str) -> str:
+    q = _normalize_question_text(question)
+    if not q:
+        return ""
+    if any(token in q for token in ("conversion", "conv")):
+        return "conversions"
+    if any(token in q for token in ("inversion", "gasto", "spend", "costo")):
+        return "spend"
+    if any(token in q for token in ("impresion", "impr")):
+        return "impressions"
+    if any(token in q for token in ("click", "clic")):
+        return "clicks"
+    return ""
+
+
+def _is_piece_top_question(question: str) -> bool:
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    mentions_piece = any(token in q for token in ("pieza", "piezas", "campana", "campanas", "anuncio", "creative"))
+    mentions_rank = any(token in q for token in ("mayor", "maximo", "maxima", "mas", "top", "mejor"))
+    return bool(mentions_piece and mentions_rank and _detect_piece_metric(q))
+
+
+def _piece_metric_label(metric_key: str) -> str:
+    mapping = {
+        "conversions": "conversiones",
+        "spend": "inversión",
+        "impressions": "impresiones",
+        "clicks": "clics",
+    }
+    return mapping.get(metric_key, metric_key)
+
+
+def _piece_metric_fmt(metric_key: str, value: float | None) -> str:
+    if metric_key == "spend":
+        return fmt_money(value)
+    if metric_key == "impressions":
+        return fmt_compact(value)
+    if metric_key == "clicks":
+        return f"{int(round(sf(value))):,}" if value is not None else "N/A"
+    return f"{int(round(sf(value))):,}" if value is not None else "N/A"
+
+
+def _top_piece_for_platform(
+    cp: pd.DataFrame,
+    *,
+    platform_name: str,
+    metric_key: str,
+) -> dict[str, Any] | None:
+    if cp.empty:
+        return None
+    part = cp[cp["platform"] == platform_name].copy()
+    if part.empty:
+        return None
+    agg = (
+        part.groupby(["campaign_id", "campaign_name"], as_index=False)
+        .agg(
+            conversions=("conversions", "sum"),
+            spend=("spend", "sum"),
+            impressions=("impressions", "sum"),
+            clicks=("clicks", "sum"),
+        )
+        .sort_values([metric_key, "conversions", "clicks"], ascending=[False, False, False], na_position="last")
+    )
+    if agg.empty:
+        return None
+    row = agg.iloc[0]
+    return {
+        "campaign_id": str(row.get("campaign_id", "")).strip(),
+        "campaign_name": str(row.get("campaign_name", "")).strip() or "Sin nombre",
+        "metric_value": float(row.get(metric_key, 0.0)),
+        "conversions": float(row.get("conversions", 0.0)),
+        "spend": float(row.get("spend", 0.0)),
+        "impressions": float(row.get("impressions", 0.0)),
+        "clicks": float(row.get("clicks", 0.0)),
+    }
+
+
+def _try_resolve_top_piece_question(
+    *,
+    question: str,
+    camp_df: pd.DataFrame,
+    selected_platform: str,
+    ui_start: date,
+    ui_end: date,
+    include_actions: bool = True,
+) -> tuple[str, dict[str, str]]:
+    if not _is_piece_top_question(question):
+        return "", {}
+    if camp_df.empty or "date" not in camp_df.columns:
+        return "", {}
+
+    metric_key = _detect_piece_metric(question)
+    if not metric_key:
+        return "", {}
+
+    cp = camp_df.copy()
+    cp["date"] = pd.to_datetime(cp["date"], errors="coerce").dt.date
+    cp = cp.dropna(subset=["date"])
+    for col, default in {
+        "platform": "",
+        "campaign_id": "",
+        "campaign_name": "",
+        "spend": 0.0,
+        "impressions": 0.0,
+        "clicks": 0.0,
+        "conversions": 0.0,
+    }.items():
+        if col not in cp.columns:
+            cp[col] = default
+    cp["platform"] = cp["platform"].astype(str).str.strip().replace({"": "N/A"})
+    for num_col in ("spend", "impressions", "clicks", "conversions"):
+        cp[num_col] = pd.to_numeric(cp[num_col], errors="coerce").fillna(0.0)
+    if cp.empty:
+        return "", {}
+
+    data_min = cp["date"].min()
+    data_max = cp["date"].max()
+    if not isinstance(data_min, date) or not isinstance(data_max, date):
+        return "", {}
+    range_start, range_end, explicit_range = _resolve_question_range(
+        question,
+        data_min=data_min,
+        data_max=data_max,
+        ui_start=ui_start,
+        ui_end=ui_end,
+    )
+    cp = cp[(cp["date"] >= range_start) & (cp["date"] <= range_end)].copy()
+    if cp.empty:
+        return "", {}
+
+    asked_platform = _platform_from_question(question)
+    both_platforms = _question_mentions_both_major_platforms(question)
+
+    platforms_to_use: list[str]
+    if both_platforms:
+        platforms_to_use = ["Meta", "Google"]
+    elif asked_platform in {"Meta", "Google"}:
+        platforms_to_use = [asked_platform]
+    elif selected_platform in {"Meta", "Google"}:
+        platforms_to_use = [selected_platform]
+    else:
+        platforms_to_use = ["Meta", "Google"]
+
+    metric_label = _piece_metric_label(metric_key)
+    findings: list[str] = []
+    top_rows: dict[str, dict[str, Any] | None] = {}
+    for platform_name in platforms_to_use:
+        top_rows[platform_name] = _top_piece_for_platform(cp, platform_name=platform_name, metric_key=metric_key)
+        row = top_rows[platform_name]
+        if row is None:
+            findings.append(f"{platform_name}: sin piezas/campañas con datos para el rango.")
+            continue
+        findings.append(
+            f"{platform_name}: {row.get('campaign_name')} "
+            f"({_piece_metric_fmt(metric_key, float(row.get('metric_value', 0.0)))} {metric_label})."
+        )
+
+    if not findings:
+        return "", {}
+
+    overall_row: dict[str, Any] | None = None
+    if len(platforms_to_use) == 1:
+        overall_row = top_rows.get(platforms_to_use[0])
+    else:
+        valid_rows = [row for row in top_rows.values() if isinstance(row, dict)]
+        if valid_rows:
+            overall_row = sorted(valid_rows, key=lambda row: float(row.get("metric_value", 0.0)), reverse=True)[0]
+    if overall_row is None:
+        return "", {}
+
+    headline = (
+        f"Top pieza/campaña por {metric_label}: {overall_row.get('campaign_name')} "
+        f"({_piece_metric_fmt(metric_key, float(overall_row.get('metric_value', 0.0)))})."
+    )
+    findings.append(f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}.")
+    answer = _format_coco_structured_answer(
+        headline=headline,
+        findings=findings,
+        actions=(
+            [
+                "Compara el top creativo/campaña con el segundo lugar para validar concentración de resultados.",
+            ]
+            if include_actions
+            else []
+        ),
+    )
+    meta = {
+        "resolver": "deterministic_top_piece",
+        "metric_key": metric_key,
+        "range_start": range_start.isoformat(),
+        "range_end": range_end.isoformat(),
+        "range_source": "pregunta" if explicit_range else "selector",
+        "platforms": ",".join(platforms_to_use),
+        "top_piece_name": str(overall_row.get("campaign_name", "")).strip(),
+    }
+    return answer, meta
+
+
+def _format_coco_structured_answer(
+    *,
+    headline: str,
+    findings: list[str],
+    actions: list[str] | None = None,
+    note: str = "",
+) -> str:
+    finding_lines = "\n".join(f"- {line}" for line in findings if str(line).strip())
+    action_lines = "\n".join(f"- {line}" for line in (actions or []) if str(line).strip())
+    output = (
+        f"**Resumen**\n{headline.strip()}\n\n"
+        f"**Hallazgos**\n{finding_lines or '- Sin hallazgos relevantes.'}"
+    )
+    if action_lines:
+        output += f"\n\n**Acción sugerida**\n{action_lines}"
+    if str(note).strip():
+        output += f"\n\n**Nota**\n{note.strip()}"
+    return output
+
+
+def _local_coco_answer(
+    question: str,
+    context: dict[str, Any],
+    include_actions: bool = True,
+) -> str:
+    q = str(question).strip().lower()
+    cur = context.get("current_period", {}) if isinstance(context.get("current_period"), dict) else {}
+    prev = context.get("previous_period", {}) if isinstance(context.get("previous_period"), dict) else {}
+    delta = context.get("delta_vs_previous_pct", {}) if isinstance(context.get("delta_vs_previous_pct"), dict) else {}
+
+    lookup_rules = [
+        (("conversion", "conv"), "conv"),
+        (("cpl",), "cpl"),
+        (("ctr",), "ctr"),
+        (("cvr",), "cvr"),
+        (("impres", "impr"), "impr"),
+        (("click", "clic"), "clicks"),
+        (("cpc",), "cpc"),
+        (("cpm",), "cpm"),
+        (("sesion", "session"), "sessions"),
+        (("usuario", "users"), "users"),
+        (("gasto", "inversion", "spend", "costo"), "spend"),
+    ]
+    selected_key = ""
+    for terms, candidate in lookup_rules:
+        if any(term in q for term in terms):
+            selected_key = candidate
+            break
+
+    if selected_key:
+        label = str(KPI_CATALOG.get(selected_key, {}).get("label", selected_key)).strip()
+        fmt_key = str(KPI_CATALOG.get(selected_key, {}).get("fmt", "int")).strip()
+        cur_v = cur.get(selected_key)
+        prev_v = prev.get(selected_key)
+        d_v = delta.get(selected_key)
+        cur_txt = _format_kpi_value(fmt_key, sf(cur_v) if cur_v is not None else None)
+        prev_txt = _format_kpi_value(fmt_key, sf(prev_v) if prev_v is not None else None)
+        delta_txt = fmt_delta_compact(d_v)
+        trend = "mejoró" if (d_v or 0.0) > 0 else "cayó" if (d_v or 0.0) < 0 else "se mantuvo estable"
+        return _format_coco_structured_answer(
+            headline=f"{label}: {cur_txt} en el periodo activo.",
+            findings=[
+                f"Comparado al periodo anterior ({prev_txt}), el cambio fue {delta_txt}.",
+                f"El comportamiento del indicador {trend} frente al periodo previo.",
+            ],
+            actions=(
+                [
+                    "Mantener seguimiento diario para validar si la tendencia se sostiene.",
+                    "Cruzar este KPI con canal/plataforma para identificar causa principal.",
+                ]
+                if include_actions
+                else []
+            ),
+        )
+
+    spend = _format_kpi_value("money", sf(cur.get("spend")) if cur.get("spend") is not None else None)
+    conv = _format_kpi_value("int", sf(cur.get("conv")) if cur.get("conv") is not None else None)
+    cpl = _format_kpi_value("money", sf(cur.get("cpl")) if cur.get("cpl") is not None else None)
+    ctr = _format_kpi_value("pct", sf(cur.get("ctr")) if cur.get("ctr") is not None else None)
+    spend_delta = fmt_delta_compact(delta.get("spend"))
+    conv_delta = fmt_delta_compact(delta.get("conv"))
+    cpl_delta = fmt_delta_compact(delta.get("cpl"))
+    ctr_delta = fmt_delta_compact(delta.get("ctr"))
+    return _format_coco_structured_answer(
+        headline=f"Resumen general del tenant y rango activo: gasto {spend}, conversiones {conv}.",
+        findings=[
+            f"Gasto: {spend} ({spend_delta} vs periodo anterior).",
+            f"Conversiones: {conv} ({conv_delta} vs periodo anterior).",
+            f"CPL: {cpl} ({cpl_delta}) y CTR: {ctr} ({ctr_delta}).",
+        ],
+        actions=(
+            [
+                "Priorizar campañas con mejor relación conversiones/costo.",
+                "Revisar creativos y segmentación donde el CTR esté cayendo.",
+            ]
+            if include_actions
+            else []
+        ),
+    )
+
+
+def _call_openai_coco(
+    *,
+    model: str,
+    question: str,
+    context: dict[str, Any],
+    include_actions: bool = True,
+) -> tuple[str, int, int, str]:
+    api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
+    if not api_key:
+        return "", 0, 0, "OPENAI_API_KEY no está configurada."
+
+    system_prompt = (
+        "Eres COCO IA, analista de performance marketing multi-tenant. "
+        "Responde en español, con enfoque ejecutivo, usando SOLO el contexto entregado. "
+        "Si falta dato, dilo explícitamente."
+    )
+    if not include_actions:
+        system_prompt += " No incluyas recomendaciones, acciones sugeridas ni próximos pasos."
+    context_json = json.dumps(context, ensure_ascii=False)
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    "Contexto analítico (JSON):\n"
+                    f"{context_json}\n\n"
+                    f"Pregunta del usuario:\n{question}"
+                ),
+            },
+        ],
+    }
+    req = urllib.request.Request(
+        url="https://api.openai.com/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    parsed: dict[str, Any] = {}
+    last_error = ""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw else {}
+            last_error = ""
+            break
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            last_error = f"OpenAI HTTP {exc.code}: {body[:260]}"
+            if exc.code in {429, 500, 502, 503, 504} and attempt < 2:
+                time.sleep(1.1 * (attempt + 1))
+                continue
+            return "", 0, 0, last_error
+        except Exception as exc:
+            last_error = f"No se pudo consultar OpenAI: {exc}"
+            if attempt < 2:
+                time.sleep(1.1 * (attempt + 1))
+                continue
+            return "", 0, 0, last_error
+
+    if not parsed:
+        return "", 0, 0, last_error or "OpenAI no devolvió respuesta."
+
+    answer = ""
+    try:
+        answer = str(parsed.get("choices", [])[0].get("message", {}).get("content", "")).strip()
+    except Exception:
+        answer = ""
+    usage = parsed.get("usage", {}) if isinstance(parsed, dict) else {}
+    prompt_tokens = _normalize_non_negative_int(usage.get("prompt_tokens"), _estimate_token_count(question + context_json), minimum=0, maximum=5_000_000)
+    completion_tokens = _normalize_non_negative_int(usage.get("completion_tokens"), _estimate_token_count(answer), minimum=0, maximum=5_000_000)
+    if not answer:
+        return "", prompt_tokens, completion_tokens, "OpenAI no devolvió contenido en la respuesta."
+    return answer, prompt_tokens, completion_tokens, ""
+
+
+def _generate_coco_answer(
+    *,
+    question: str,
+    context: dict[str, Any],
+    coco_cfg: dict[str, Any],
+    include_actions: bool = True,
+) -> tuple[str, int, int, str, str, str]:
+    provider = str(coco_cfg.get("provider", COCO_DEFAULT_PROVIDER)).strip().lower() or COCO_DEFAULT_PROVIDER
+    model = str(coco_cfg.get("model", COCO_DEFAULT_MODEL)).strip() or COCO_DEFAULT_MODEL
+    if provider == "openai":
+        answer, input_tokens, output_tokens, err = _call_openai_coco(
+            model=model,
+            question=question,
+            context=context,
+            include_actions=include_actions,
+        )
+        if answer:
+            return answer, input_tokens, output_tokens, provider, model, ""
+        fallback = _local_coco_answer(question, context, include_actions=include_actions)
+        in_est = _estimate_token_count(question + json.dumps(context, ensure_ascii=False))
+        out_est = _estimate_token_count(fallback)
+        tagged_fallback = f"{fallback}\n\nNota: respuesta local temporal ({err})"
+        return tagged_fallback, in_est, out_est, "local", "fallback-local", err
+
+    fallback = _local_coco_answer(question, context, include_actions=include_actions)
+    in_est = _estimate_token_count(question + json.dumps(context, ensure_ascii=False))
+    out_est = _estimate_token_count(fallback)
+    return fallback, in_est, out_est, "local", "fallback-local", ""
+
+
+def _openai_key_status() -> tuple[bool, str]:
+    api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
+    if not api_key:
+        return False, "No configurada"
+    if len(api_key) < 20:
+        return False, "Formato inválido"
+    masked = f"{api_key[:7]}...{api_key[-4:]}"
+    return True, masked
+
+
+def _check_openai_connectivity(timeout: int = 10) -> tuple[bool, str]:
+    api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
+    if not api_key:
+        return False, "OPENAI_API_KEY no configurada."
+    req = urllib.request.Request(
+        url="https://api.openai.com/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if int(getattr(resp, "status", 0)) in {200, 201}:
+                return True, "Conexión OK con OpenAI."
+            return False, f"OpenAI respondió estado {getattr(resp, 'status', 'desconocido')}."
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return False, f"HTTP {exc.code}: {body[:220]}"
+    except Exception as exc:
+        return False, f"Error conexión OpenAI: {exc}"
+
+
+def render_coco_ia_widget(
+    *,
+    df_base: pd.DataFrame,
+    camp_df: pd.DataFrame,
+    df_sel: pd.DataFrame,
+    df_prev: pd.DataFrame,
+    platform: str,
+    s: date,
+    e: date,
+    tenant_id: str,
+    tenant_name: str,
+    auth_user: dict[str, Any],
+    coco_cfg: dict[str, Any],
+) -> None:
+    if not _is_coco_enabled_for_tenant(coco_cfg, tenant_id):
+        return
+
+    username = str(auth_user.get("username", "unknown")).strip().lower() or "unknown"
+    usage_rows = read_coco_usage(limit=10_000)
+    max_queries = _resolve_coco_daily_limit(coco_cfg, username, tenant_id)
+    used_today = _count_coco_queries_today(usage_rows, username, tenant_id)
+    query_blocked = max_queries > 0 and used_today >= max_queries
+    tenant_budget_usd = _resolve_coco_daily_budget_usd(coco_cfg, tenant_id)
+    tenant_cost_today_usd = _coco_tenant_cost_today_usd(usage_rows, tenant_id)
+    budget_blocked = tenant_budget_usd > 0 and tenant_cost_today_usd >= tenant_budget_usd
+    budget_usage_ratio = (
+        (tenant_cost_today_usd / tenant_budget_usd)
+        if tenant_budget_usd > 0
+        else 0.0
+    )
+    blocked = bool(query_blocked or budget_blocked)
+    remaining_queries = max(max_queries - used_today, 0) if max_queries > 0 else None
+    remaining_budget_usd = max(tenant_budget_usd - tenant_cost_today_usd, 0.0) if tenant_budget_usd > 0 else None
+    query_usage_ratio = (used_today / max_queries) if max_queries > 0 else 0.0
+
+    history_key = f"coco_chat_history::{tenant_id}::{username}"
+    if history_key not in st.session_state or not isinstance(st.session_state.get(history_key), list):
+        st.session_state[history_key] = []
+    history: list[dict[str, str]] = st.session_state.get(history_key, [])
+    context_key = f"coco_chat_context::{tenant_id}::{username}"
+    if context_key not in st.session_state or not isinstance(st.session_state.get(context_key), dict):
+        st.session_state[context_key] = {}
+
+    panel_state_key = f"coco_panel_open::{tenant_id}::{username}"
+    if panel_state_key not in st.session_state:
+        st.session_state[panel_state_key] = False
+    panel_open = bool(st.session_state.get(panel_state_key, False))
+
+    st.markdown(
+        """
+        <style>
+          [class*="st-key-coco-fab-"],
+          [class*="st-key-coco_toggle_panel_"] {
+            position: fixed;
+            right: 1.15rem;
+            bottom: 1.15rem;
+            z-index: 1100;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          [class*="st-key-coco-fab-"] [data-testid="stButton"],
+          [class*="st-key-coco_toggle_panel_"] [data-testid="stButton"] {
+            margin: 0 !important;
+          }
+          [class*="st-key-coco-fab-"] [data-testid="stButton"] button,
+          [class*="st-key-coco_toggle_panel_"] [data-testid="stButton"] button {
+            width: 56px;
+            min-width: 56px;
+            height: 56px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            box-shadow: 0 14px 30px rgba(17, 24, 39, 0.26);
+            background: linear-gradient(145deg, #396f14 0%, #5ea920 52%, #7dcf38 100%);
+            color: #ffffff !important;
+            padding: 0 !important;
+          }
+          [class*="st-key-coco-fab-"] [data-testid="stButton"] button p,
+          [class*="st-key-coco_toggle_panel_"] [data-testid="stButton"] button p {
+            margin: 0;
+            line-height: 1;
+            font-size: 1.28rem;
+            font-weight: 700;
+          }
+          [class*="st-key-coco-panel-"],
+          [class*="st-key-coco_panel_"] {
+            position: fixed;
+            right: 1rem;
+            bottom: 5.2rem;
+            top: auto;
+            width: min(430px, calc(100vw - 1.4rem));
+            max-height: min(72vh, 760px);
+            z-index: 1090;
+            margin: 0 !important;
+            padding: 0.8rem 0.8rem 0.65rem 0.8rem !important;
+            border-radius: 18px;
+            border: 1px solid rgba(60, 60, 67, 0.18);
+            background: #ffffff !important;
+            box-shadow: 0 22px 48px rgba(17, 24, 39, 0.22);
+            overflow-y: auto;
+            transform-origin: bottom right;
+            transition: opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+            will-change: transform, opacity;
+          }
+          [class*="st-key-coco-panel-"] [data-testid="stVerticalBlock"],
+          [class*="st-key-coco-panel-"] [data-testid="stHorizontalBlock"],
+          [class*="st-key-coco-panel-"] [data-testid="stElementContainer"],
+          [class*="st-key-coco_panel_"] [data-testid="stVerticalBlock"],
+          [class*="st-key-coco_panel_"] [data-testid="stHorizontalBlock"],
+          [class*="st-key-coco_panel_"] [data-testid="stElementContainer"] {
+            background: transparent !important;
+          }
+          [class*="st-key-coco-panel-"] [data-testid="stTextArea"] textarea,
+          [class*="st-key-coco_panel_"] [data-testid="stTextArea"] textarea {
+            background: #ffffff !important;
+          }
+          @media (max-width: 780px) {
+            [class*="st-key-coco-fab-"],
+            [class*="st-key-coco_toggle_panel_"] {
+              right: 0.65rem;
+              bottom: 0.65rem;
+            }
+            [class*="st-key-coco-fab-"] [data-testid="stButton"] button,
+            [class*="st-key-coco_toggle_panel_"] [data-testid="stButton"] button {
+              width: 48px;
+              min-width: 48px;
+              height: 48px;
+            }
+            [class*="st-key-coco-panel-"],
+            [class*="st-key-coco_panel_"] {
+              right: 0.6rem;
+              bottom: 4.6rem;
+              width: calc(100vw - 1.2rem);
+              max-height: min(74vh, 640px);
+              border-radius: 14px;
+              padding: 0.65rem 0.65rem 0.55rem 0.65rem !important;
+            }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key=f"coco-fab-{tenant_id}"):
+        if st.button(
+            "💬",
+            key=f"coco_toggle_panel_{tenant_id}_{username}",
+            help="Abrir/Cerrar COCO IA",
+            width="content",
+        ):
+            panel_open = not panel_open
+            st.session_state[panel_state_key] = panel_open
+
+    with st.container(key=f"coco-panel-{tenant_id}"):
+        head_col_1, head_col_2 = st.columns([0.72, 0.28])
+        with head_col_1:
+            st.markdown("**💬 COCO IA**")
+        with head_col_2:
+            if st.button("Cerrar", key=f"coco_close_panel_{tenant_id}_{username}", width="stretch"):
+                st.session_state[panel_state_key] = False
+                panel_open = False
+
+        top_col_1, top_col_2 = st.columns([0.68, 0.32])
+        with top_col_1:
+            st.caption(
+                (
+                    f"Consultas hoy: {used_today}/{max_queries} (restantes: {remaining_queries})"
+                    if max_queries > 0
+                    else f"Consultas hoy: {used_today} (sin límite)"
+                )
+            )
+        with top_col_2:
+            if st.button("Limpiar chat", key=f"coco_clear_chat_{tenant_id}_{username}", width="stretch"):
+                st.session_state[history_key] = []
+                st.session_state[context_key] = {}
+                history = []
+
+        st.caption(
+            (
+                f"Costo tenant hoy: ${tenant_cost_today_usd:,.4f} / "
+                f"{'$'+format(tenant_budget_usd,',.4f') if tenant_budget_usd > 0 else 'sin tope'}"
+                + (f" (restante: ${remaining_budget_usd:,.4f})" if remaining_budget_usd is not None else "")
+            )
+        )
+        st.caption(f"Tenant: {tenant_name} | Plataforma: {platform} | Rango: {s.isoformat()} - {e.isoformat()}")
+        if max_queries > 0 and query_usage_ratio >= COCO_DAILY_QUERY_ALERT_RATIO and not query_blocked:
+            st.warning(
+                f"Consumo alto de consultas: {query_usage_ratio*100:.1f}% del límite diario."
+            )
+        if tenant_budget_usd > 0 and budget_usage_ratio >= COCO_DAILY_BUDGET_ALERT_RATIO and not budget_blocked:
+            st.warning(
+                f"Consumo alto: {budget_usage_ratio*100:.1f}% del presupuesto diario del tenant."
+            )
+
+        recent_history = history[-8:] if len(history) > 8 else history
+        for msg in recent_history:
+            role = str(msg.get("role", "assistant")).strip().lower()
+            content = str(msg.get("content", "")).strip()
+            if not content:
+                continue
+            with st.chat_message("user" if role == "user" else "assistant"):
+                st.write(content)
+
+        with st.form(key=f"coco_ia_form_{tenant_id}_{username}", clear_on_submit=True):
+            user_question = st.text_area(
+                "Pregunta a COCO IA",
+                value="",
+                height=84,
+                placeholder="Ej: ¿Cómo va el CTR vs el periodo anterior y qué recomiendas?",
+                label_visibility="collapsed",
+            )
+            submit_question = st.form_submit_button(
+                "Preguntar",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if query_blocked:
+            st.error(
+                f"Límite diario alcanzado: {used_today}/{max_queries} consultas para @{username} en {tenant_name}."
+            )
+        if budget_blocked:
+            st.error(
+                f"Presupuesto diario agotado: ${tenant_cost_today_usd:,.4f} / ${tenant_budget_usd:,.4f} para {tenant_name}."
+            )
+
+        if submit_question:
+            clean_question = str(user_question).strip()
+            include_actions = _question_requests_actions(clean_question)
+            include_platform_breakdown = _question_requests_platform_breakdown(clean_question)
+            scope_guard = _coco_scope_guard_message(clean_question)
+            if scope_guard:
+                st.warning(scope_guard)
+            else:
+                if blocked:
+                    if query_blocked and budget_blocked:
+                        block_reason = "daily_limit_and_tenant_budget_reached"
+                        block_message = (
+                            f"Consulta bloqueada: límite ({used_today}/{max_queries}) y presupuesto "
+                            f"(${tenant_cost_today_usd:,.4f}/${tenant_budget_usd:,.4f}) agotados."
+                        )
+                    elif query_blocked:
+                        block_reason = "daily_limit_reached"
+                        block_message = f"Consulta bloqueada: límite diario alcanzado ({used_today}/{max_queries})."
+                    else:
+                        block_reason = "tenant_budget_reached"
+                        block_message = (
+                            "Consulta bloqueada: presupuesto diario del tenant agotado "
+                            f"(${tenant_cost_today_usd:,.4f}/${tenant_budget_usd:,.4f})."
+                        )
+                    append_coco_usage_event(
+                        actor=username,
+                        tenant_id=tenant_id,
+                        query=clean_question,
+                        response="",
+                        provider=str(coco_cfg.get("provider", COCO_DEFAULT_PROVIDER)),
+                        model=str(coco_cfg.get("model", COCO_DEFAULT_MODEL)),
+                        input_tokens=0,
+                        output_tokens=0,
+                        cost_usd=0.0,
+                        status="blocked",
+                        error=block_reason,
+                    )
+                    st.error(block_message)
+                else:
+                    answer = ""
+                    in_tokens = 0
+                    out_tokens = 0
+                    provider_used = "local"
+                    model_used = "deterministic"
+                    err = ""
+                    context_note = ""
+
+                    deterministic_answer, deterministic_meta = _try_resolve_top_piece_question(
+                        question=clean_question,
+                        camp_df=camp_df,
+                        selected_platform=platform,
+                        ui_start=s,
+                        ui_end=e,
+                        include_actions=include_actions,
+                    )
+                    if deterministic_answer:
+                        answer = deterministic_answer
+                        model_used = "deterministic-top-piece"
+                        if deterministic_meta:
+                            st.session_state[context_key] = dict(deterministic_meta)
+                            context_note = (
+                                f"Contexto aplicado: tenant `{tenant_id}`, rango "
+                                f"`{deterministic_meta.get('range_start')}` a `{deterministic_meta.get('range_end')}`, "
+                                f"plataformas `{deterministic_meta.get('platforms', platform)}`, "
+                                f"resolver `{deterministic_meta.get('resolver', 'deterministic')}`."
+                            )
+                    else:
+                        deterministic_answer, deterministic_meta = _try_resolve_peak_day_question(
+                        question=clean_question,
+                        df_base=df_base,
+                        selected_platform=platform,
+                        ui_start=s,
+                        ui_end=e,
+                        include_actions=include_actions,
+                        include_platform_breakdown=include_platform_breakdown,
+                    )
+                        if deterministic_answer:
+                            answer = deterministic_answer
+                            model_used = "deterministic-peak"
+                            if deterministic_meta:
+                                st.session_state[context_key] = dict(deterministic_meta)
+                                context_note = (
+                                    f"Contexto aplicado: tenant `{tenant_id}`, rango "
+                                    f"`{deterministic_meta.get('range_start')}` a `{deterministic_meta.get('range_end')}`, "
+                                    f"plataforma `{deterministic_meta.get('applied_platform', platform)}`, "
+                                    f"resolver `{deterministic_meta.get('resolver', 'deterministic')}`."
+                                )
+                        else:
+                            weekday_answer, weekday_meta = _try_resolve_weekday_followup_question(
+                                question=clean_question,
+                                last_context=st.session_state.get(context_key, {}),
+                                include_actions=include_actions,
+                            )
+                            if weekday_answer:
+                                answer = weekday_answer
+                                model_used = "deterministic-weekday"
+                                if weekday_meta:
+                                    context_note = (
+                                        f"Contexto aplicado: tenant `{tenant_id}`, fecha `{weekday_meta.get('target_date')}`, "
+                                        f"resolver `{weekday_meta.get('resolver', 'deterministic')}`, "
+                                        f"fuente `{weekday_meta.get('source', 'pregunta')}`."
+                                    )
+                            else:
+                                cur_summary = summary(df_sel, platform)
+                                prev_summary = summary(df_prev, platform)
+                                raw_context = _build_coco_metrics_context(
+                                    tenant_name=tenant_name,
+                                    tenant_id=tenant_id,
+                                    platform=platform,
+                                    s=s,
+                                    e=e,
+                                    cur_summary=cur_summary,
+                                    prev_summary=prev_summary,
+                                )
+                                safe_context = _sanitize_coco_context(
+                                    raw_context,
+                                    tenant_id=tenant_id,
+                                    platform=platform,
+                                    start_day=s,
+                                    end_day=e,
+                                )
+                                with st.spinner("COCO IA analizando datos del tenant..."):
+                                    answer, in_tokens, out_tokens, provider_used, model_used, err = _generate_coco_answer(
+                                        question=clean_question,
+                                        context=safe_context,
+                                        coco_cfg=coco_cfg,
+                                        include_actions=include_actions,
+                                    )
+                                context_note = (
+                                    f"Contexto aplicado: tenant `{safe_context.get('tenant_id')}`, "
+                                    f"rango `{safe_context.get('date_range', {}).get('start')}` a "
+                                    f"`{safe_context.get('date_range', {}).get('end')}`, plataforma `{safe_context.get('platform')}`."
+                                )
+                    if answer and "**Resumen**" not in answer:
+                        answer = _format_coco_structured_answer(
+                            headline="Respuesta de COCO IA generada con el contexto actual.",
+                            findings=[answer],
+                            actions=(
+                                ["Validar contra el dashboard y ajustar por plataforma/canal."]
+                                if include_actions
+                                else []
+                            ),
+                        )
+                    if str(err).strip():
+                        answer = _format_coco_structured_answer(
+                            headline="Respuesta con fallback local.",
+                            findings=[answer],
+                            actions=(
+                                ["Configura/valida OpenAI para respuestas más completas."]
+                                if include_actions
+                                else []
+                            ),
+                            note=err,
+                        ) if answer else answer
+                    if answer:
+                        if context_note:
+                            answer += f"\n\n_{context_note}_"
+                    cost_usd = _estimate_coco_cost_usd(in_tokens, out_tokens, coco_cfg)
+                    append_coco_usage_event(
+                        actor=username,
+                        tenant_id=tenant_id,
+                        query=clean_question,
+                        response=answer,
+                        provider=provider_used,
+                        model=model_used,
+                        input_tokens=in_tokens,
+                        output_tokens=out_tokens,
+                        cost_usd=cost_usd,
+                        status="ok" if answer else "error",
+                        error=err,
+                    )
+                    if answer:
+                        history.append({"role": "user", "content": clean_question})
+                        history.append({"role": "assistant", "content": answer})
+                        st.session_state[history_key] = history[-20:]
+                        st.rerun()
+                    else:
+                        st.error("COCO IA no pudo generar respuesta en este momento.")
+
+    panel_opacity = "1" if panel_open else "0"
+    panel_transform = "translate3d(0, 0, 0) scale(1)" if panel_open else "translate3d(0, 16px, 0) scale(0.98)"
+    panel_pointer_events = "auto" if panel_open else "none"
+    st.markdown(
+        f"""
+        <style>
+          [class*="st-key-coco-panel-"],
+          [class*="st-key-coco_panel_"] {{
+            opacity: {panel_opacity} !important;
+            transform: {panel_transform} !important;
+            pointer-events: {panel_pointer_events} !important;
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_admin_coco_ia_panel(
+    users: dict[str, dict[str, Any]],
+    tenants: dict[str, dict[str, Any]],
+    auth_user: dict[str, Any],
+    dashboard_settings: dict[str, Any],
+) -> None:
+    st.markdown("### COCO IA")
+    current_cfg = _normalize_coco_ia_settings(dashboard_settings.get("coco_ia", {}), tenants)
+
+    st.caption("Configura límites de uso y monitorea consumo de tokens/costo por tenant y usuario.")
+    cfg_col_1, cfg_col_2 = st.columns(2)
+    with cfg_col_1:
+        enabled = st.toggle("Activar COCO IA", value=bool(current_cfg.get("enabled", False)), key="coco_enabled")
+        provider = st.selectbox(
+            "Proveedor IA",
+            options=["openai", "local"],
+            index=0 if str(current_cfg.get("provider", "openai")).strip().lower() == "openai" else 1,
+            key="coco_provider",
+        )
+        model = st.text_input(
+            "Modelo",
+            value=str(current_cfg.get("model", COCO_DEFAULT_MODEL)),
+            key="coco_model",
+            help="Ejemplo OpenAI: gpt-4o-mini",
+        )
+        if provider == "openai":
+            key_ok, key_mask = _openai_key_status()
+            st.caption(f"API key OpenAI: {'OK' if key_ok else 'No disponible'} ({key_mask})")
+            if st.button("Probar conexión OpenAI", key="coco_probe_openai", width="stretch"):
+                ok_conn, msg_conn = _check_openai_connectivity(timeout=10)
+                if ok_conn:
+                    st.success(msg_conn)
+                else:
+                    st.error(msg_conn)
+    with cfg_col_2:
+        max_daily_default = int(
+            st.number_input(
+                "Máximo consultas/día (default)",
+                min_value=0,
+                max_value=10_000,
+                value=int(current_cfg.get("max_daily_queries_default", COCO_DEFAULT_MAX_DAILY_QUERIES)),
+                step=1,
+                key="coco_default_limit",
+                help="0 = sin límite.",
+            )
+        )
+        daily_budget_default = float(
+            st.number_input(
+                "Presupuesto diario USD (default)",
+                min_value=0.0,
+                max_value=1_000_000.0,
+                value=float(current_cfg.get("daily_budget_usd_default", COCO_DEFAULT_DAILY_BUDGET_USD)),
+                step=0.5,
+                key="coco_daily_budget_default",
+                help="0 = sin límite por costo.",
+                format="%.2f",
+            )
+        )
+        input_cost_per_1m = float(
+            st.number_input(
+                "Costo input USD / 1M tokens",
+                min_value=0.0,
+                max_value=1000.0,
+                value=float(current_cfg.get("input_cost_per_1m", COCO_DEFAULT_INPUT_COST_PER_1M)),
+                step=0.01,
+                key="coco_input_cost",
+                format="%.4f",
+            )
+        )
+        output_cost_per_1m = float(
+            st.number_input(
+                "Costo output USD / 1M tokens",
+                min_value=0.0,
+                max_value=1000.0,
+                value=float(current_cfg.get("output_cost_per_1m", COCO_DEFAULT_OUTPUT_COST_PER_1M)),
+                step=0.01,
+                key="coco_output_cost",
+                format="%.4f",
+            )
+        )
+
+    st.markdown("#### Activación por tenant")
+    tenant_enabled_values: dict[str, bool] = {}
+    tenant_ids_sorted = sorted(tenants.keys())
+    if tenant_ids_sorted:
+        enabled_cols = st.columns(min(3, len(tenant_ids_sorted)))
+        for idx, tenant_id in enumerate(tenant_ids_sorted):
+            tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
+            tenant_key = str(tenant_id).strip().lower()
+            default_tenant_enabled = bool(
+                current_cfg.get("enabled_tenants", {}).get(tenant_key, bool(enabled))
+            )
+            with enabled_cols[idx % len(enabled_cols)]:
+                tenant_enabled_values[tenant_key] = st.toggle(
+                    f"{tenant_name} ({tenant_id})",
+                    value=default_tenant_enabled,
+                    key=f"coco_enabled_tenant_{tenant_key}",
+                )
+    if bool(enabled) and tenant_enabled_values and not any(bool(v) for v in tenant_enabled_values.values()):
+        st.warning("COCO IA está activo globalmente, pero no hay tenants habilitados.")
+
+    st.markdown("#### Límites por tenant")
+    tenant_limit_values: dict[str, int] = {}
+    if tenant_ids_sorted:
+        tenant_cols = st.columns(min(3, len(tenant_ids_sorted)))
+        for idx, tenant_id in enumerate(tenant_ids_sorted):
+            tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
+            tenant_key = str(tenant_id).strip().lower()
+            default_tenant_limit = int(current_cfg.get("max_daily_queries_tenant", {}).get(tenant_key, max_daily_default))
+            with tenant_cols[idx % len(tenant_cols)]:
+                tenant_limit_values[tenant_key] = int(
+                    st.number_input(
+                        f"{tenant_name} ({tenant_id})",
+                        min_value=0,
+                        max_value=10_000,
+                        value=default_tenant_limit,
+                        step=1,
+                        key=f"coco_limit_tenant_{tenant_key}",
+                    )
+                )
+
+    st.markdown("#### Presupuesto diario por tenant (USD)")
+    tenant_budget_values: dict[str, float] = {}
+    if tenant_ids_sorted:
+        budget_cols = st.columns(min(3, len(tenant_ids_sorted)))
+        for idx, tenant_id in enumerate(tenant_ids_sorted):
+            tenant_name = str(tenants.get(tenant_id, {}).get("name", tenant_id))
+            tenant_key = str(tenant_id).strip().lower()
+            default_tenant_budget = float(
+                current_cfg.get("daily_budget_usd_tenant", {}).get(tenant_key, daily_budget_default)
+            )
+            with budget_cols[idx % len(budget_cols)]:
+                tenant_budget_values[tenant_key] = float(
+                    st.number_input(
+                        f"{tenant_name} ({tenant_id})",
+                        min_value=0.0,
+                        max_value=1_000_000.0,
+                        value=default_tenant_budget,
+                        step=0.5,
+                        key=f"coco_budget_tenant_{tenant_key}",
+                        format="%.2f",
+                    )
+                )
+
+    st.markdown("#### Límites por usuario")
+    user_limit_values: dict[str, int] = {}
+    usernames_sorted = sorted(users.keys())
+    if usernames_sorted:
+        user_cols = st.columns(min(3, len(usernames_sorted)))
+        for idx, username in enumerate(usernames_sorted):
+            user_key = str(username).strip().lower()
+            default_user_limit = int(current_cfg.get("max_daily_queries_user", {}).get(user_key, max_daily_default))
+            with user_cols[idx % len(user_cols)]:
+                user_limit_values[user_key] = int(
+                    st.number_input(
+                        f"@{user_key}",
+                        min_value=0,
+                        max_value=10_000,
+                        value=default_user_limit,
+                        step=1,
+                        key=f"coco_limit_user_{user_key}",
+                    )
+                )
+
+    with st.expander("Overrides avanzados usuario@tenant", expanded=False):
+        raw_rows: list[dict[str, Any]] = []
+        current_user_tenant_limits = current_cfg.get("max_daily_queries_user_tenant", {})
+        if isinstance(current_user_tenant_limits, dict):
+            for key, value in sorted(current_user_tenant_limits.items()):
+                user_part, tenant_part = (str(key).split("@", 1) + [""])[:2] if "@" in str(key) else ("", "")
+                raw_rows.append(
+                    {
+                        "usuario": str(user_part).strip().lower(),
+                        "tenant_id": str(tenant_part).strip().lower(),
+                        "max_consultas_dia": _normalize_non_negative_int(value, max_daily_default, minimum=0, maximum=10_000),
+                    }
+                )
+        edited_overrides = st.data_editor(
+            pd.DataFrame(raw_rows or [{"usuario": "", "tenant_id": "", "max_consultas_dia": max_daily_default}]),
+            num_rows="dynamic",
+            width="stretch",
+            key="coco_user_tenant_overrides_editor",
+            hide_index=True,
+        )
+
+    save_coco_cfg = st.button("Guardar configuración COCO IA", type="primary", width="stretch", key="save_coco_ia_cfg")
+    if save_coco_cfg:
+        normalized_user_tenant: dict[str, int] = {}
+        if isinstance(edited_overrides, pd.DataFrame):
+            for _, row in edited_overrides.iterrows():
+                raw_user = str(row.get("usuario", "")).strip().lower()
+                raw_tenant = str(row.get("tenant_id", "")).strip().lower()
+                if not raw_user or not raw_tenant:
+                    continue
+                key = f"{raw_user}@{raw_tenant}"
+                normalized_user_tenant[key] = _normalize_non_negative_int(
+                    row.get("max_consultas_dia"),
+                    max_daily_default,
+                    minimum=0,
+                    maximum=10_000,
+                )
+
+        next_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
+        next_settings["coco_ia"] = {
+            "enabled": bool(enabled),
+            "enabled_tenants": tenant_enabled_values,
+            "provider": str(provider).strip().lower() or COCO_DEFAULT_PROVIDER,
+            "model": str(model).strip() or COCO_DEFAULT_MODEL,
+            "max_daily_queries_default": _normalize_non_negative_int(max_daily_default, COCO_DEFAULT_MAX_DAILY_QUERIES, minimum=0, maximum=10_000),
+            "max_daily_queries_tenant": tenant_limit_values,
+            "max_daily_queries_user": user_limit_values,
+            "max_daily_queries_user_tenant": normalized_user_tenant,
+            "daily_budget_usd_default": _normalize_non_negative_float(daily_budget_default, COCO_DEFAULT_DAILY_BUDGET_USD, minimum=0.0, maximum=1_000_000.0),
+            "daily_budget_usd_tenant": {
+                k: _normalize_non_negative_float(v, daily_budget_default, minimum=0.0, maximum=1_000_000.0)
+                for k, v in tenant_budget_values.items()
+            },
+            "input_cost_per_1m": _normalize_non_negative_float(input_cost_per_1m, COCO_DEFAULT_INPUT_COST_PER_1M, minimum=0.0, maximum=1000.0),
+            "output_cost_per_1m": _normalize_non_negative_float(output_cost_per_1m, COCO_DEFAULT_OUTPUT_COST_PER_1M, minimum=0.0, maximum=1000.0),
+        }
+        ok, err_msg = save_dashboard_settings(DASHBOARD_SETTINGS_PATH, next_settings, tenants)
+        if not ok:
+            st.error(f"No se pudo guardar {DASHBOARD_SETTINGS_PATH.name}: {err_msg}")
+        else:
+            append_admin_audit(
+                "coco_ia_settings_updated",
+                str(auth_user.get("username", "unknown")),
+                target="coco_ia",
+                details={
+                    "enabled": bool(enabled),
+                    "enabled_tenants": [k for k, v in sorted(tenant_enabled_values.items()) if bool(v)],
+                    "provider": provider,
+                    "model": model,
+                    "max_daily_queries_default": max_daily_default,
+                    "daily_budget_usd_default": daily_budget_default,
+                },
+            )
+            st.success("Configuración de COCO IA guardada.")
+            st.rerun()
+
+    st.markdown("#### Consumo y costo")
+    usage_rows = read_coco_usage(limit=20_000)
+    reset_state_key = "coco_usage_reset_armed"
+    if reset_state_key not in st.session_state:
+        st.session_state[reset_state_key] = False
+
+    reset_col_1, reset_col_2 = st.columns([0.72, 0.28], gap="small")
+    with reset_col_1:
+        st.caption(f"Fuente: {AI_USAGE_LOG_PATH.name} | Eventos actuales: {len(usage_rows)}")
+    with reset_col_2:
+        if st.button("Resetear consumo", key="coco_usage_reset_open", width="stretch"):
+            st.session_state[reset_state_key] = True
+
+    if bool(st.session_state.get(reset_state_key)):
+        st.warning("Se borrará el historial de consumo de COCO IA (tokens/costo). Se guardará backup automático.")
+        confirm_col_1, confirm_col_2 = st.columns(2, gap="small")
+        with confirm_col_1:
+            if st.button("Confirmar reset", type="primary", key="coco_usage_reset_confirm", width="stretch"):
+                removed_events = len(usage_rows)
+                ok_reset, reset_info = clear_coco_usage_log()
+                st.session_state[reset_state_key] = False
+                if not ok_reset:
+                    st.error(f"No se pudo limpiar el historial: {reset_info}")
+                else:
+                    append_admin_audit(
+                        "coco_ia_usage_reset",
+                        str(auth_user.get("username", "unknown")),
+                        target="coco_ia",
+                        details={
+                            "events_removed": removed_events,
+                            "backup_path": str(reset_info or ""),
+                        },
+                    )
+                    if str(reset_info).strip():
+                        st.success(f"Historial de COCO IA limpiado. Backup: {reset_info}")
+                    else:
+                        st.success("Historial de COCO IA limpiado.")
+                    st.rerun()
+        with confirm_col_2:
+            if st.button("Cancelar", key="coco_usage_reset_cancel", width="stretch"):
+                st.session_state[reset_state_key] = False
+                st.rerun()
+
+    if not usage_rows:
+        st.info("Todavía no hay consumo registrado de COCO IA.")
+        return
+
+    available_dates: list[date] = []
+    available_tenants: set[str] = set()
+    available_users: set[str] = set()
+    available_statuses: set[str] = set()
+    for row in usage_rows:
+        row_day = _parse_iso_date(row.get("event_date")) or (
+            _parse_coco_timestamp(row.get("timestamp_utc")).date()
+            if _parse_coco_timestamp(row.get("timestamp_utc")) is not None
+            else None
+        )
+        if row_day is not None:
+            available_dates.append(row_day)
+        row_tenant = str(row.get("tenant_id", "")).strip().lower()
+        row_user = str(row.get("actor", "")).strip().lower()
+        row_status = str(row.get("status", "")).strip().lower()
+        if row_tenant:
+            available_tenants.add(row_tenant)
+        if row_user:
+            available_users.add(row_user)
+        if row_status:
+            available_statuses.add(row_status)
+
+    min_date = min(available_dates) if available_dates else date.today()
+    max_date = max(available_dates) if available_dates else date.today()
+    flt_col_1, flt_col_2, flt_col_3, flt_col_4 = st.columns([1.4, 1.0, 1.0, 1.0], gap="small")
+    with flt_col_1:
+        raw_date_range = st.date_input(
+            "Rango consumo",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+            key="coco_usage_date_filter",
+        )
+    with flt_col_2:
+        tenant_filter_options = ["Todos"] + sorted([t for t in available_tenants if t])
+        selected_tenant_filter = st.selectbox(
+            "Tenant",
+            options=tenant_filter_options,
+            key="coco_usage_tenant_filter",
+        )
+    with flt_col_3:
+        user_filter_options = ["Todos"] + sorted([u for u in available_users if u])
+        selected_user_filter = st.selectbox(
+            "Usuario",
+            options=user_filter_options,
+            key="coco_usage_user_filter",
+        )
+    with flt_col_4:
+        status_filter_options = ["Todos"] + sorted([s for s in available_statuses if s])
+        selected_status_filter = st.selectbox(
+            "Estado",
+            options=status_filter_options,
+            key="coco_usage_status_filter",
+        )
+
+    filter_start, filter_end = _normalize_date_range(raw_date_range, min_date, max_date)
+    filtered_rows: list[dict[str, Any]] = []
+    for row in usage_rows:
+        row_day = _parse_iso_date(row.get("event_date")) or (
+            _parse_coco_timestamp(row.get("timestamp_utc")).date()
+            if _parse_coco_timestamp(row.get("timestamp_utc")) is not None
+            else None
+        )
+        if row_day is None or row_day < filter_start or row_day > filter_end:
+            continue
+        row_tenant = str(row.get("tenant_id", "")).strip().lower()
+        row_user = str(row.get("actor", "")).strip().lower()
+        row_status = str(row.get("status", "")).strip().lower()
+        if selected_tenant_filter != "Todos" and row_tenant != str(selected_tenant_filter).strip().lower():
+            continue
+        if selected_user_filter != "Todos" and row_user != str(selected_user_filter).strip().lower():
+            continue
+        if selected_status_filter != "Todos" and row_status != str(selected_status_filter).strip().lower():
+            continue
+        filtered_rows.append(row)
+
+    ok_rows = [row for row in filtered_rows if str(row.get("status", "")).strip().lower() == "ok"]
+    blocked_rows = [row for row in filtered_rows if str(row.get("status", "")).strip().lower() == "blocked"]
+    error_rows = [row for row in filtered_rows if str(row.get("status", "")).strip().lower() == "error"]
+    total_queries = len(ok_rows)
+    total_tokens = sum(_normalize_non_negative_int(row.get("total_tokens"), 0, minimum=0, maximum=10_000_000) for row in ok_rows)
+    total_cost = sum(_normalize_non_negative_float(row.get("cost_usd"), 0.0, minimum=0.0, maximum=1_000_000.0) for row in ok_rows)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Consultas OK (filtro)", f"{total_queries}")
+    m2.metric("Tokens OK (filtro)", f"{total_tokens:,}")
+    m3.metric("Costo OK (USD)", f"${total_cost:,.4f}")
+    m4.metric("Eventos filtro", f"{len(filtered_rows)}")
+    if not filtered_rows:
+        st.info("No hay eventos de COCO IA para el filtro actual.")
+        st.caption(f"Fuente: {AI_USAGE_LOG_PATH.name}")
+        return
+
+    # Presupuesto diario por tenant: alertas del día actual.
+    today_iso = date.today().isoformat()
+    today_ok_rows = [row for row in usage_rows if str(row.get("status", "")).strip().lower() == "ok" and str(row.get("event_date", "")).strip() == today_iso]
+    tenant_today_cost: dict[str, float] = {}
+    for row in today_ok_rows:
+        tenant_key = str(row.get("tenant_id", "")).strip().lower()
+        tenant_today_cost[tenant_key] = tenant_today_cost.get(tenant_key, 0.0) + _normalize_non_negative_float(row.get("cost_usd"), 0.0, minimum=0.0, maximum=1_000_000.0)
+    budget_alerts: list[str] = []
+    for tenant_key, cost_today in sorted(tenant_today_cost.items()):
+        budget = _resolve_coco_daily_budget_usd(current_cfg, tenant_key)
+        if budget <= 0:
+            continue
+        ratio = cost_today / budget if budget > 0 else 0.0
+        if ratio >= 1.0:
+            budget_alerts.append(f"{tenant_key}: presupuesto excedido ({ratio*100:.1f}%, ${cost_today:,.4f}/${budget:,.4f})")
+        elif ratio >= COCO_DAILY_BUDGET_ALERT_RATIO:
+            budget_alerts.append(f"{tenant_key}: alerta consumo alto ({ratio*100:.1f}%, ${cost_today:,.4f}/${budget:,.4f})")
+    for msg in budget_alerts:
+        if "excedido" in msg:
+            st.error(msg)
+        else:
+            st.warning(msg)
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in ok_rows:
+        actor = str(row.get("actor", "unknown")).strip().lower() or "unknown"
+        tenant = str(row.get("tenant_id", "unknown")).strip().lower() or "unknown"
+        key = f"{actor}@{tenant}"
+        if key not in grouped:
+            grouped[key] = {
+                "Cuenta": key,
+                "Usuario": actor,
+                "Tenant": tenant,
+                "Consultas": 0,
+                "Tokens": 0,
+                "Costo USD": 0.0,
+                "Última consulta UTC": "",
+            }
+        grouped[key]["Consultas"] += 1
+        grouped[key]["Tokens"] += _normalize_non_negative_int(row.get("total_tokens"), 0, minimum=0, maximum=10_000_000)
+        grouped[key]["Costo USD"] += _normalize_non_negative_float(row.get("cost_usd"), 0.0, minimum=0.0, maximum=1_000_000.0)
+        timestamp = str(row.get("timestamp_utc", "")).strip()
+        if timestamp and (not grouped[key]["Última consulta UTC"] or timestamp > grouped[key]["Última consulta UTC"]):
+            grouped[key]["Última consulta UTC"] = timestamp
+
+    grouped_rows = sorted(grouped.values(), key=lambda item: float(item.get("Costo USD", 0.0)), reverse=True)
+    if grouped_rows:
+        top = grouped_rows[0]
+        st.info(
+            "Cuenta con mayor consumo (filtro): "
+            f"{top.get('Cuenta')} | Costo ${float(top.get('Costo USD', 0.0)):,.4f} | "
+            f"Tokens {int(top.get('Tokens', 0)):,} | Consultas {int(top.get('Consultas', 0))}"
+        )
+        st.dataframe(pd.DataFrame(grouped_rows), width="stretch", hide_index=True)
+
+    if ok_rows:
+        tenant_rank: dict[str, dict[str, Any]] = {}
+        user_rank: dict[str, dict[str, Any]] = {}
+        for row in ok_rows:
+            tenant_key = str(row.get("tenant_id", "unknown")).strip().lower() or "unknown"
+            user_key = str(row.get("actor", "unknown")).strip().lower() or "unknown"
+            tokens = _normalize_non_negative_int(row.get("total_tokens"), 0, minimum=0, maximum=10_000_000)
+            cost = _normalize_non_negative_float(row.get("cost_usd"), 0.0, minimum=0.0, maximum=1_000_000.0)
+
+            if tenant_key not in tenant_rank:
+                tenant_rank[tenant_key] = {"Tenant": tenant_key, "Consultas": 0, "Tokens": 0, "Costo USD": 0.0}
+            tenant_rank[tenant_key]["Consultas"] += 1
+            tenant_rank[tenant_key]["Tokens"] += tokens
+            tenant_rank[tenant_key]["Costo USD"] += cost
+
+            if user_key not in user_rank:
+                user_rank[user_key] = {"Usuario": user_key, "Consultas": 0, "Tokens": 0, "Costo USD": 0.0}
+            user_rank[user_key]["Consultas"] += 1
+            user_rank[user_key]["Tokens"] += tokens
+            user_rank[user_key]["Costo USD"] += cost
+
+        rank_col_1, rank_col_2 = st.columns(2, gap="small")
+        with rank_col_1:
+            st.markdown("**Ranking por tenant (filtro)**")
+            st.dataframe(
+                pd.DataFrame(sorted(tenant_rank.values(), key=lambda item: float(item.get("Costo USD", 0.0)), reverse=True)),
+                width="stretch",
+                hide_index=True,
+            )
+        with rank_col_2:
+            st.markdown("**Ranking por usuario (filtro)**")
+            st.dataframe(
+                pd.DataFrame(sorted(user_rank.values(), key=lambda item: float(item.get("Costo USD", 0.0)), reverse=True)),
+                width="stretch",
+                hide_index=True,
+            )
+
+    st.markdown("#### Consultas recientes")
+    recent_rows: list[dict[str, Any]] = []
+    for row in filtered_rows[:300]:
+        recent_rows.append(
+            {
+                "timestamp_utc": str(row.get("timestamp_utc", "")),
+                "event_date": str(row.get("event_date", "")),
+                "tenant": str(row.get("tenant_id", "")),
+                "usuario": str(row.get("actor", "")),
+                "estado": str(row.get("status", "")),
+                "provider": str(row.get("provider", "")),
+                "model": str(row.get("model", "")),
+                "tokens": _normalize_non_negative_int(row.get("total_tokens"), 0, minimum=0, maximum=10_000_000),
+                "cost_usd": round(_normalize_non_negative_float(row.get("cost_usd"), 0.0, minimum=0.0, maximum=1_000_000.0), 6),
+                "query": str(row.get("query", ""))[:180],
+                "respuesta_preview": str(row.get("response_preview", ""))[:180],
+                "error": str(row.get("error", ""))[:180],
+            }
+        )
+    if recent_rows:
+        st.dataframe(pd.DataFrame(recent_rows), width="stretch", hide_index=True)
+    else:
+        st.info("No hay eventos para el filtro seleccionado.")
+
+    st.caption(
+        f"Eventos filtro: OK={len(ok_rows)} | Bloqueados={len(blocked_rows)} | Errores={len(error_rows)} | "
+        f"Fuente: {AI_USAGE_LOG_PATH.name}"
+    )
+
 
 def render_admin_panel(
     users: dict[str, dict[str, Any]],
@@ -6019,6 +8359,10 @@ def render_admin_panel(
 
     if admin_section == "users":
         _render_admin_users_wireframe(users, tenants, auth_user)
+        return
+
+    if admin_section == "coco_ia":
+        _render_admin_coco_ia_panel(users, tenants, auth_user, dashboard_settings)
         return
 
     if admin_section == "users":
@@ -6711,6 +9055,7 @@ def main() -> None:
     tenants = load_tenants_config(TENANTS_CONFIG_PATH)
     ensure_dashboard_settings_runtime_file(DASHBOARD_SETTINGS_PATH, DASHBOARD_SETTINGS_TEMPLATE_PATH)
     dashboard_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
+    coco_cfg = _normalize_coco_ia_settings(dashboard_settings.get("coco_ia", {}), tenants)
     tenant_id, view_mode, admin_section = render_sidebar(tenants, dashboard_settings)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
     tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
@@ -6746,6 +9091,54 @@ def main() -> None:
             admin_report = {}
         if isinstance(admin_report, dict):
             render_sidebar_meta_token_health(admin_report)
+            admin_df = daily_df(admin_report)
+            admin_camp = acq_df(admin_report, "meta_campaign_daily")
+            if not admin_camp.empty:
+                admin_camp["platform"] = "Meta"
+            admin_gcamp = acq_df(admin_report, "google_campaign_daily")
+            if not admin_gcamp.empty:
+                admin_gcamp["platform"] = "Google"
+                if "cost" in admin_gcamp.columns:
+                    admin_gcamp["spend"] = pd.to_numeric(admin_gcamp["cost"], errors="coerce").fillna(0.0)
+            if admin_camp.empty and admin_gcamp.empty:
+                admin_camp_all = pd.DataFrame()
+            elif admin_camp.empty:
+                admin_camp_all = admin_gcamp
+            elif admin_gcamp.empty:
+                admin_camp_all = admin_camp
+            else:
+                admin_camp_all = pd.concat([admin_camp, admin_gcamp], ignore_index=True)
+        else:
+            admin_df = pd.DataFrame()
+            admin_camp_all = pd.DataFrame()
+
+        if admin_df.empty or "date" not in admin_df.columns:
+            admin_s = date.today()
+            admin_e = date.today()
+            admin_df_sel = admin_df.copy()
+            admin_df_prev = admin_df.copy()
+        else:
+            admin_s = admin_df["date"].min()
+            admin_e = admin_df["date"].max()
+            admin_df_sel = admin_df[(admin_df["date"] >= admin_s) & (admin_df["date"] <= admin_e)].copy()
+            admin_period_days = max((admin_e - admin_s).days + 1, 1)
+            admin_prev_e = admin_s - timedelta(days=1)
+            admin_prev_s = admin_prev_e - timedelta(days=admin_period_days - 1)
+            admin_df_prev = admin_df[(admin_df["date"] >= admin_prev_s) & (admin_df["date"] <= admin_prev_e)].copy()
+
+        render_coco_ia_widget(
+            df_base=admin_df,
+            camp_df=admin_camp_all,
+            df_sel=admin_df_sel,
+            df_prev=admin_df_prev,
+            platform="All",
+            s=admin_s,
+            e=admin_e,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            auth_user=auth_user,
+            coco_cfg=coco_cfg,
+        )
         render_sidebar_logout_button()
         render_admin_panel(users, tenants, auth_user, dashboard_settings, admin_section)
         return
@@ -6820,6 +9213,19 @@ def main() -> None:
     )
 
     if view_mode == "Tráfico y Adquisición":
+        render_coco_ia_widget(
+            df_base=df,
+            camp_df=camp_all,
+            df_sel=df_sel,
+            df_prev=df_prev,
+            platform=platform,
+            s=s,
+            e=e,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            auth_user=auth_user,
+            coco_cfg=coco_cfg,
+        )
         render_traffic(
             df_sel,
             df_prev,
@@ -6837,6 +9243,19 @@ def main() -> None:
             traffic_sections,
         )
     else:
+        render_coco_ia_widget(
+            df_base=df,
+            camp_df=camp_all,
+            df_sel=df_sel,
+            df_prev=df_prev,
+            platform=platform,
+            s=s,
+            e=e,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            auth_user=auth_user,
+            coco_cfg=coco_cfg,
+        )
         if "daily_fact" in set(overview_sections):
             render_daily_fact(df_sel, platform)
         render_exec(
