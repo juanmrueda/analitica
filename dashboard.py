@@ -58,6 +58,16 @@ C_MUTE = "#7A879D"
 C_PANEL_BORDER = "rgba(32,29,29,0.08)"
 C_PANEL_BG = "rgba(255,255,255,0.72)"
 C_GRID = "rgba(32,29,29,0.07)"
+THEME_COLOR_KEYS: tuple[str, ...] = ("google", "meta", "accent", "neutral", "success", "danger")
+DEFAULT_THEME_COLORS: dict[str, str] = {
+    "google": C_GOOGLE,
+    "meta": C_META,
+    "accent": C_ACCENT,
+    "neutral": C_MUTE,
+    "success": "#67B22D",
+    "danger": "#D14343",
+}
+ACTIVE_THEME_COLORS: dict[str, str] = dict(DEFAULT_THEME_COLORS)
 
 VIEW_MODE_OPTIONS = ("Overview", "Tráfico y Adquisición")
 PLATFORM_OPTIONS = ("All", "Google", "Meta")
@@ -2764,6 +2774,265 @@ def _normalize_logo_source(raw_value: Any) -> str:
     return str(raw_value or "").strip()
 
 
+def _normalize_hex_color(raw_value: Any, fallback: str) -> str:
+    default_color = str(fallback or "#000000").strip()
+    if not re.fullmatch(r"#?[0-9A-Fa-f]{6}", default_color):
+        default_color = "#000000"
+    if not default_color.startswith("#"):
+        default_color = f"#{default_color}"
+    value = str(raw_value or "").strip()
+    if not re.fullmatch(r"#?[0-9A-Fa-f]{6}", value):
+        return default_color.upper()
+    if not value.startswith("#"):
+        value = f"#{value}"
+    return value.upper()
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    color = _normalize_hex_color(hex_color, "#000000")
+    a = max(0.0, min(float(alpha), 1.0))
+    r = int(color[1:3], 16)
+    g = int(color[3:5], 16)
+    b = int(color[5:7], 16)
+    return f"rgba({r},{g},{b},{a:.3f})"
+
+
+def _normalize_theme_colors(raw_value: Any, fallback: dict[str, str] | None = None) -> dict[str, str]:
+    base = dict(DEFAULT_THEME_COLORS if fallback is None else fallback)
+    source = raw_value if isinstance(raw_value, dict) else {}
+    normalized: dict[str, str] = {}
+    for key in THEME_COLOR_KEYS:
+        normalized[key] = _normalize_hex_color(source.get(key), base.get(key, DEFAULT_THEME_COLORS[key]))
+    return normalized
+
+
+def _apply_theme_palette(theme_colors: Any) -> dict[str, str]:
+    global C_GOOGLE, C_META, C_ACCENT, C_MUTE, C_GRID, C_PANEL_BORDER, ACTIVE_THEME_COLORS
+    normalized = _normalize_theme_colors(theme_colors, ACTIVE_THEME_COLORS)
+    ACTIVE_THEME_COLORS = dict(normalized)
+    C_GOOGLE = normalized["google"]
+    C_META = normalized["meta"]
+    C_ACCENT = normalized["accent"]
+    C_MUTE = normalized["neutral"]
+    C_GRID = _hex_to_rgba(C_MUTE, 0.18)
+    C_PANEL_BORDER = _hex_to_rgba(C_MUTE, 0.24)
+    return normalized
+
+
+def _theme_color_scale(base_hex: str) -> list[list[Any]]:
+    base = _normalize_hex_color(base_hex, C_GOOGLE)
+    return [
+        [0.0, _hex_to_rgba(base, 0.18)],
+        [0.35, _hex_to_rgba(base, 0.34)],
+        [0.7, _hex_to_rgba(base, 0.58)],
+        [1.0, base],
+    ]
+
+
+def apply_tenant_theme_overrides(theme_colors: Any) -> None:
+    palette = _normalize_theme_colors(theme_colors, ACTIVE_THEME_COLORS)
+    meta_bg = _hex_to_rgba(palette["meta"], 0.12)
+    meta_border = _hex_to_rgba(palette["meta"], 0.30)
+    google_bg = _hex_to_rgba(palette["google"], 0.12)
+    google_border = _hex_to_rgba(palette["google"], 0.30)
+    success_bg = _hex_to_rgba(palette["success"], 0.16)
+    success_border = _hex_to_rgba(palette["success"], 0.28)
+    danger_bg = _hex_to_rgba(palette["danger"], 0.12)
+    danger_border = _hex_to_rgba(palette["danger"], 0.28)
+    accent_bg_20 = _hex_to_rgba(palette["accent"], 0.20)
+    accent_bg_28 = _hex_to_rgba(palette["accent"], 0.28)
+    accent_bg_35 = _hex_to_rgba(palette["accent"], 0.35)
+    accent_border_44 = _hex_to_rgba(palette["accent"], 0.44)
+    accent_border_72 = _hex_to_rgba(palette["accent"], 0.72)
+    accent_shadow = _hex_to_rgba(palette["accent"], 0.26)
+    accent_shadow_soft = _hex_to_rgba(palette["accent"], 0.18)
+    neutral_bg = _hex_to_rgba(palette["neutral"], 0.12)
+    neutral_border = _hex_to_rgba(palette["neutral"], 0.30)
+    neutral_border_soft = _hex_to_rgba(palette["neutral"], 0.18)
+    panel_border = _hex_to_rgba(palette["neutral"], 0.24)
+    panel_shadow = _hex_to_rgba(palette["neutral"], 0.24)
+    text_on_dark = "#FFFFFF"
+    st.markdown(
+        f"""
+        <style>
+          [data-baseweb="tab-list"] {{
+            border-color: {neutral_border_soft} !important;
+          }}
+          [aria-selected="true"][data-baseweb="tab"] {{
+            background: {palette["accent"]} !important;
+            color: {text_on_dark} !important;
+            box-shadow: 0 8px 16px {accent_shadow_soft} !important;
+          }}
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"],
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[aria-checked="true"],
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label:has(input:checked) {{
+            background: linear-gradient(180deg, {accent_bg_28} 0%, {accent_bg_20} 100%) !important;
+            border-color: {accent_border_72} !important;
+            box-shadow: 0 4px 12px {accent_shadow_soft} !important;
+          }}
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label[aria-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-testid="stMain"] .stRadio [role="radiogroup"] > label:has(input:checked) [data-testid="stMarkdownContainer"] p {{
+            color: {palette["accent"]} !important;
+          }}
+          [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {{
+            border-color: {neutral_border_soft} !important;
+          }}
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-pressed="true"],
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][aria-selected="true"],
+          [data-testid="stSegmentedControl"] [data-baseweb="button"][data-active="true"] {{
+            background: linear-gradient(180deg, {accent_bg_28} 0%, {accent_bg_20} 100%) !important;
+            color: {palette["accent"]} !important;
+            border-color: {accent_border_72} !important;
+            box-shadow: 0 4px 12px {accent_shadow_soft} !important;
+          }}
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"],
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked) {{
+            background: linear-gradient(180deg, {accent_bg_28} 0%, {accent_bg_20} 100%) !important;
+            border-color: {accent_border_72} !important;
+          }}
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"]::before,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked)::before {{
+            color: {palette["accent"]} !important;
+            border-color: {accent_border_72} !important;
+            background: linear-gradient(180deg, {accent_bg_35} 0%, {accent_bg_20} 100%) !important;
+          }}
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] *,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label[aria-checked="true"] [data-testid="stMarkdownContainer"] *,
+          [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:has(input:checked) [data-testid="stMarkdownContainer"] * {{
+            color: {palette["accent"]} !important;
+          }}
+          [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"],
+          [data-testid="stMain"] [data-testid="stButton"] button[kind="primary"],
+          [data-testid="stFormSubmitButton"] button {{
+            border-color: {accent_border_72} !important;
+            background: {palette["accent"]} !important;
+            color: {text_on_dark} !important;
+            box-shadow: 0 10px 20px {accent_shadow} !important;
+          }}
+          [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"]:hover,
+          [data-testid="stSidebar"] [data-testid="stButton"] button:not([kind="primary"]):hover {{
+            border-color: {accent_border_44} !important;
+            background: {accent_bg_20} !important;
+            color: {palette["accent"]} !important;
+            box-shadow: 0 6px 14px {accent_shadow_soft} !important;
+          }}
+          [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"]:hover svg,
+          [data-testid="stSidebar"] [data-testid="stButton"] button:not([kind="primary"]):hover svg {{
+            fill: {palette["accent"]} !important;
+            stroke: {palette["accent"]} !important;
+          }}
+          [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]:hover,
+          [data-testid="stMain"] [data-testid="stButton"] button[kind="primary"]:hover,
+          [data-testid="stFormSubmitButton"] button:hover {{
+            background: {palette["google"]} !important;
+            border-color: {google_border} !important;
+          }}
+          .filter-chip {{
+            border-color: {neutral_border} !important;
+            color: {palette["neutral"]} !important;
+            background: {neutral_bg} !important;
+          }}
+          .filter-chip .k {{
+            color: {palette["neutral"]} !important;
+          }}
+          .sidebar-nav-item.active {{
+            color: {palette["accent"]} !important;
+            border-color: {accent_border_72} !important;
+            background: linear-gradient(180deg, {accent_bg_28} 0%, {accent_bg_20} 100%) !important;
+            box-shadow: 0 6px 14px {accent_shadow_soft} !important;
+          }}
+          .piece-link:hover {{
+            border-color: {accent_border_72} !important;
+            color: {palette["accent"]} !important;
+            box-shadow: 0 6px 14px {accent_shadow_soft} !important;
+          }}
+          .daily-fact-icon {{
+            border-color: {success_border} !important;
+            background: {success_bg} !important;
+            color: {palette["success"]} !important;
+          }}
+          .daily-fact-highlight {{
+            color: {palette["success"]} !important;
+          }}
+          .daily-fact-highlight.neg {{
+            color: {palette["danger"]} !important;
+          }}
+          .funnel-drop {{
+            color: {palette["danger"]} !important;
+            background: {danger_bg} !important;
+            border-color: {danger_border} !important;
+          }}
+          .funnel-drop-base {{
+            color: {palette["neutral"]} !important;
+            background: {neutral_bg} !important;
+            border-color: {neutral_border} !important;
+          }}
+          .pill-meta {{
+            background: {meta_bg} !important;
+            border-color: {meta_border} !important;
+            color: {palette["meta"]} !important;
+          }}
+          .pill-google {{
+            background: {google_bg} !important;
+            border-color: {google_border} !important;
+            color: {palette["google"]} !important;
+          }}
+          .roas-good {{
+            color: {palette["success"]} !important;
+          }}
+          .roas-mid {{
+            color: {palette["neutral"]} !important;
+          }}
+          .top-pieces-footer {{
+            color: {palette["accent"]} !important;
+          }}
+          .sidebar-token-days.good {{
+            color: {palette["success"]} !important;
+          }}
+          .sidebar-token-days.warn {{
+            color: {palette["accent"]} !important;
+          }}
+          .sidebar-token-days.bad {{
+            color: {palette["danger"]} !important;
+          }}
+          .sidebar-token-days.na {{
+            color: {palette["neutral"]} !important;
+          }}
+          [class*="st-key-coco-fab-"] [data-testid="stButton"] button,
+          [class*="st-key-coco_toggle_panel_"] [data-testid="stButton"] button {{
+            border-color: {accent_border_44} !important;
+            box-shadow: 0 14px 30px {accent_shadow} !important;
+            background: linear-gradient(145deg, {palette["accent"]} 0%, {palette["google"]} 58%, {palette["success"]} 100%) !important;
+          }}
+          [class*="st-key-coco-panel-"],
+          [class*="st-key-coco_panel_"] {{
+            border-color: {panel_border} !important;
+            box-shadow: 0 22px 48px {panel_shadow} !important;
+          }}
+          [class*="st-key-coco-panel-"] [data-testid="stTextArea"] textarea,
+          [class*="st-key-coco_panel_"] [data-testid="stTextArea"] textarea {{
+            border-color: {neutral_border_soft} !important;
+          }}
+          [class*="st-key-coco-panel-"] [data-testid="stTextArea"] textarea:focus,
+          [class*="st-key-coco_panel_"] [data-testid="stTextArea"] textarea:focus {{
+            border-color: {accent_border_72} !important;
+            box-shadow: 0 0 0 1px {accent_bg_35} !important;
+          }}
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricLabel"] {{
+            color: {palette["accent"]} !important;
+          }}
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricValue"] {{
+            color: {palette["accent"]} !important;
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _resolve_logo_image_source(raw_value: Any) -> str:
     logo_value = _normalize_logo_source(raw_value)
     if logo_value:
@@ -3099,6 +3368,7 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
         "default_platform": "All",
         "default_view_mode": "Overview",
         "tenant_logo": "",
+        "theme_colors": dict(DEFAULT_THEME_COLORS),
     }
     tenant_cfg: dict[str, dict[str, Any]] = {}
     for tenant_id in tenants.keys():
@@ -3112,6 +3382,7 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
             "default_platform": "All",
             "default_view_mode": "Overview",
             "tenant_logo": "",
+            "theme_colors": dict(DEFAULT_THEME_COLORS),
         }
     return {
         "defaults": defaults,
@@ -3175,6 +3446,10 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
         "tenant_logo": _normalize_logo_source(
             raw_defaults.get("tenant_logo", base["defaults"].get("tenant_logo", ""))
         ),
+        "theme_colors": _normalize_theme_colors(
+            raw_defaults.get("theme_colors", base["defaults"].get("theme_colors", DEFAULT_THEME_COLORS)),
+            base["defaults"].get("theme_colors", DEFAULT_THEME_COLORS),
+        ),
     }
     raw_tenants = payload.get("tenants", {}) if isinstance(payload, dict) else {}
     if not isinstance(raw_tenants, dict):
@@ -3218,6 +3493,10 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
                 raw_cfg.get("default_view_mode", defaults["default_view_mode"])
             ),
             "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo", defaults.get("tenant_logo", ""))),
+            "theme_colors": _normalize_theme_colors(
+                raw_cfg.get("theme_colors", defaults.get("theme_colors", DEFAULT_THEME_COLORS)),
+                defaults.get("theme_colors", DEFAULT_THEME_COLORS),
+            ),
         }
     raw_coco = payload.get("coco_ia", {}) if isinstance(payload, dict) else {}
     coco_ia = _normalize_coco_ia_settings(raw_coco, tenants)
@@ -3264,6 +3543,10 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
             "tenant_logo": _normalize_logo_source(
                 incoming_defaults.get("tenant_logo", normalized["defaults"].get("tenant_logo", ""))
             ),
+            "theme_colors": _normalize_theme_colors(
+                incoming_defaults.get("theme_colors", normalized["defaults"].get("theme_colors", DEFAULT_THEME_COLORS)),
+                normalized["defaults"].get("theme_colors", DEFAULT_THEME_COLORS),
+            ),
         }
         if normalized["defaults"]["default_view_mode"] not in normalized["defaults"]["enabled_view_modes"]:
             normalized["defaults"]["default_view_mode"] = normalized["defaults"]["enabled_view_modes"][0]
@@ -3275,6 +3558,9 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
             raw_cfg = incoming_tenants.get(tenant_id, {})
             if not isinstance(raw_cfg, dict):
                 raw_cfg = {}
+            existing_tenant_cfg = normalized.get("tenants", {}).get(tenant_id, {})
+            if not isinstance(existing_tenant_cfg, dict):
+                existing_tenant_cfg = {}
             tenant_cfg[tenant_id] = {
                 "overview_kpis": _normalize_kpi_keys(
                     raw_cfg.get("overview_kpis", normalized["defaults"]["overview_kpis"]),
@@ -3310,6 +3596,16 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                 ),
                 "tenant_logo": _normalize_logo_source(
                     raw_cfg.get("tenant_logo", normalized["defaults"].get("tenant_logo", ""))
+                ),
+                "theme_colors": _normalize_theme_colors(
+                    raw_cfg.get(
+                        "theme_colors",
+                        existing_tenant_cfg.get(
+                            "theme_colors",
+                            normalized["defaults"].get("theme_colors", DEFAULT_THEME_COLORS),
+                        ),
+                    ),
+                    normalized["defaults"].get("theme_colors", DEFAULT_THEME_COLORS),
                 ),
             }
             if tenant_cfg[tenant_id]["default_view_mode"] not in tenant_cfg[tenant_id]["enabled_view_modes"]:
@@ -3367,6 +3663,10 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         list(VIEW_MODE_OPTIONS),
     )
     defaults_tenant_logo = _normalize_logo_source(defaults.get("tenant_logo", ""))
+    defaults_theme_colors = _normalize_theme_colors(
+        defaults.get("theme_colors", DEFAULT_THEME_COLORS),
+        DEFAULT_THEME_COLORS,
+    )
     enabled_view_modes = _normalize_view_mode_keys(
         raw_cfg.get("enabled_view_modes", defaults_enabled_view_modes),
         defaults_enabled_view_modes,
@@ -3403,6 +3703,10 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         "default_platform": _normalize_platform_option(raw_cfg.get("default_platform", defaults.get("default_platform", "All"))),
         "default_view_mode": default_view_mode,
         "tenant_logo": _normalize_logo_source(raw_cfg.get("tenant_logo")) or defaults_tenant_logo,
+        "theme_colors": _normalize_theme_colors(
+            raw_cfg.get("theme_colors", defaults_theme_colors),
+            defaults_theme_colors,
+        ),
     }
 
 
@@ -3494,7 +3798,13 @@ def render_kpi_cards(
             )
         return active_key
 
-    st.markdown(
+    active_border = _hex_to_rgba(C_ACCENT, 0.74)
+    active_bg_top = _hex_to_rgba(C_ACCENT, 0.16)
+    active_glow = _hex_to_rgba(C_ACCENT, 0.22)
+    active_shadow = _hex_to_rgba(C_ACCENT, 0.16)
+    active_focus = _hex_to_rgba(C_ACCENT, 0.35)
+    active_outline = _hex_to_rgba(C_ACCENT, 0.72)
+    kpi_cards_css = textwrap.dedent(
         """
         <style>
           .st-key-overview-kpi-wrap { margin-bottom: 0.34rem; }
@@ -3522,12 +3832,12 @@ def render_kpi_cards(
             box-shadow: 0 10px 22px rgba(15,23,42,0.08);
           }
           [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetric"] {
-            border: 1px solid rgba(103,178,45,0.74) !important;
-            background: linear-gradient(180deg, rgba(123,204,53,0.16) 0%, rgba(255,255,255,0.90) 100%) !important;
-            box-shadow: 0 0 0 1px rgba(103,178,45,0.22), 0 12px 24px rgba(103,178,45,0.16) !important;
+            border: 1px solid __ACTIVE_BORDER__ !important;
+            background: linear-gradient(180deg, __ACTIVE_BG_TOP__ 0%, rgba(255,255,255,0.90) 100%) !important;
+            box-shadow: 0 0 0 1px __ACTIVE_GLOW__, 0 12px 24px __ACTIVE_SHADOW__ !important;
           }
-          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricLabel"] { color: #355914 !important; }
-          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricValue"] { color: #1F4D0A !important; }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricLabel"] { color: __ACTIVE_ACCENT__ !important; }
+          [class*="st-key-overview-kpi-card-active-"] [data-testid="stMetricValue"] { color: __ACTIVE_ACCENT__ !important; }
           [class*="st-key-overview-kpi-card-active-"] [data-testid="stButton"],
           [class*="st-key-overview-kpi-card-idle-"] [data-testid="stButton"] {
             position: relative !important;
@@ -3552,14 +3862,24 @@ def render_kpi_cards(
           [class*="st-key-overview-kpi-card-active-"] [data-testid="stButton"] button:focus-visible,
           [class*="st-key-overview-kpi-card-idle-"] [data-testid="stButton"] button:focus-visible {
             opacity: 0.08 !important;
-            background: rgba(123,204,53,0.35) !important;
-            outline: 2px solid rgba(103,178,45,0.72) !important;
+            background: __ACTIVE_FOCUS__ !important;
+            outline: 2px solid __ACTIVE_OUTLINE__ !important;
             outline-offset: -2px !important;
           }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """
     )
+    kpi_cards_css = (
+        kpi_cards_css
+        .replace("__ACTIVE_BORDER__", active_border)
+        .replace("__ACTIVE_BG_TOP__", active_bg_top)
+        .replace("__ACTIVE_GLOW__", active_glow)
+        .replace("__ACTIVE_SHADOW__", active_shadow)
+        .replace("__ACTIVE_ACCENT__", C_ACCENT)
+        .replace("__ACTIVE_FOCUS__", active_focus)
+        .replace("__ACTIVE_OUTLINE__", active_outline)
+    )
+    st.markdown(kpi_cards_css, unsafe_allow_html=True)
 
     with st.container(key="overview-kpi-wrap"):
         cols = st.columns(len(valid))
@@ -4524,6 +4844,11 @@ def _inject_sidebar_admin_active_state_style(active_section: str) -> None:
         active_idx = admin_options.index(active_section) + 1
     except Exception:
         active_idx = 1
+    active_bg = _hex_to_rgba(C_ACCENT, 0.18)
+    active_shadow = _hex_to_rgba(C_ACCENT, 0.76)
+    active_border = _hex_to_rgba(C_ACCENT, 0.82)
+    active_grad_top = _hex_to_rgba(C_ACCENT, 0.35)
+    active_grad_bottom = _hex_to_rgba(C_ACCENT, 0.24)
 
     css = textwrap.dedent(
         """
@@ -4531,28 +4856,38 @@ def _inject_sidebar_admin_active_state_style(active_section: str) -> None:
           /* Stable active state for admin submenu across Streamlit DOM versions. */
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__),
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label {
-            color: #1F4D0A !important;
+            color: __ACCENT__ !important;
             font-weight: 800 !important;
-            background: rgba(123,204,53,0.18) !important;
+            background: __ACTIVE_BG__ !important;
             border-radius: 8px !important;
-            box-shadow: inset 2px 0 0 rgba(103,178,45,0.76);
+            box-shadow: inset 2px 0 0 __ACTIVE_SHADOW__;
           }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__)::before,
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label::before {
-            color: #1F4D0A !important;
-            border-color: rgba(103,178,45,0.82) !important;
-            background: linear-gradient(180deg, rgba(123,204,53,0.35) 0%, rgba(123,204,53,0.24) 100%) !important;
+            color: __ACCENT__ !important;
+            border-color: __ACTIVE_BORDER__ !important;
+            background: linear-gradient(180deg, __ACTIVE_GRAD_TOP__ 0%, __ACTIVE_GRAD_BOTTOM__ 100%) !important;
           }
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__) [data-testid="stMarkdownContainer"],
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > label:nth-child(__ACTIVE_IDX__) [data-testid="stMarkdownContainer"] *,
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label [data-testid="stMarkdownContainer"],
           [data-testid="stSidebar"] .stRadio [role="radiogroup"] > div:nth-child(__ACTIVE_IDX__) > label [data-testid="stMarkdownContainer"] * {
-            color: #1F4D0A !important;
+            color: __ACCENT__ !important;
             font-weight: 800 !important;
           }
         </style>
         """
-    ).replace("__ACTIVE_IDX__", str(active_idx))
+    )
+    css = (
+        css
+        .replace("__ACTIVE_IDX__", str(active_idx))
+        .replace("__ACCENT__", C_ACCENT)
+        .replace("__ACTIVE_BG__", active_bg)
+        .replace("__ACTIVE_SHADOW__", active_shadow)
+        .replace("__ACTIVE_BORDER__", active_border)
+        .replace("__ACTIVE_GRAD_TOP__", active_grad_top)
+        .replace("__ACTIVE_GRAD_BOTTOM__", active_grad_bottom)
+    )
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -4897,10 +5232,10 @@ def render_exec(
             else:
                 pbi_layout(fig, yaxis_title=_kpi_axis_title(active_overview_kpi), xaxis_title="")
                 fig.update_layout(height=355, hovermode="x unified", showlegend=True)
-                fig.update_xaxes(tickformat=x_tick_format, tickfont={"size": 10, "color": "#7A879D"})
+                fig.update_xaxes(tickformat=x_tick_format, tickfont={"size": 10, "color": C_MUTE})
                 if is_single_day:
                     fig.update_xaxes(dtick=2 * 60 * 60 * 1000)
-                fig.update_yaxes(tickfont={"size": 10, "color": "#7A879D"})
+                fig.update_yaxes(tickfont={"size": 10, "color": C_MUTE})
                 fmt = str(KPI_CATALOG.get(active_overview_kpi, {}).get("fmt", "int"))
                 if fmt == "pct":
                     fig.update_yaxes(tickformat=".1%")
@@ -4930,7 +5265,7 @@ def render_exec(
                 ("Conversiones", max(min(conv, sess), 0.0)),
             ]
             top_val = max(float(funnel_vals[0][1]), 1.0)
-            funnel_stage_colors = ["#7BCC35", "#3AE7FC", "#7A879D", "#FE492A"]
+            funnel_stage_colors = [C_GOOGLE, C_ACCENT, C_MUTE, C_META]
             rows_html: list[str] = []
             prev_val: float | None = None
             for idx, (name, value) in enumerate(funnel_vals):
@@ -5078,7 +5413,7 @@ def render_exec(
                     labels=mix["platform"],
                     values=mix["spend"],
                     hole=0.56,
-                    marker={"colors": [color_map.get(str(p), "#7A879D") for p in mix["platform"]]},
+                    marker={"colors": [color_map.get(str(p), C_MUTE) for p in mix["platform"]]},
                     texttemplate="%{label}<br>%{percent}",
                     hovertemplate="%{label}<br>Spend: $%{value:,.2f}<extra></extra>",
                 )
@@ -5099,7 +5434,7 @@ def render_exec(
                     x=mix["platform"],
                     y=mix["cpc"],
                     name="CPC",
-                    marker={"color": "#4ECDC4"},
+                    marker={"color": C_ACCENT},
                     hovertemplate="%{x}<br>CPC: $%{y:,.2f}<extra></extra>",
                 )
             )
@@ -5108,7 +5443,7 @@ def render_exec(
                     x=mix["platform"],
                     y=mix["cpm"],
                     name="CPM",
-                    marker={"color": "#7A879D"},
+                    marker={"color": C_MUTE},
                     hovertemplate="%{x}<br>CPM: $%{y:,.2f}<extra></extra>",
                 )
             )
@@ -5118,8 +5453,8 @@ def render_exec(
                     y=(mix["cvr"] * 100.0),
                     name="CVR",
                     mode="lines+markers",
-                    marker={"color": "#FE492A", "size": 9},
-                    line={"color": "#FE492A", "width": 3},
+                    marker={"color": C_META, "size": 9},
+                    line={"color": C_META, "width": 3},
                     yaxis="y2",
                     hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
                 )
@@ -5297,7 +5632,7 @@ def render_exec(
                 age_gender = age_gender.reindex(ordered_age, fill_value=0.0)
 
                 bar = go.Figure()
-                for gender, color in (("Female", C_META), ("Male", C_GOOGLE), ("Unknown", C_MUTE), ("All", "#4C78A8")):
+                for gender, color in (("Female", C_META), ("Male", C_GOOGLE), ("Unknown", C_MUTE), ("All", C_ACCENT)):
                     if gender not in age_gender.columns:
                         continue
                     bar.add_trace(
@@ -5346,7 +5681,7 @@ def render_exec(
             if gender_totals.empty:
                 st.info("Sin datos por género para el rango seleccionado.")
             else:
-                gender_color = {"Female": C_META, "Male": C_GOOGLE, "Unknown": C_MUTE, "All": "#4C78A8"}
+                gender_color = {"Female": C_META, "Male": C_GOOGLE, "Unknown": C_MUTE, "All": C_ACCENT}
                 pie = go.Figure(
                     go.Pie(
                         labels=gender_totals["gender"],
@@ -5521,12 +5856,7 @@ def render_exec(
                             "cpl": ":.2f",
                             "share_leads": ":.2%",
                         },
-                        color_continuous_scale=[
-                            [0.0, "#EAF8D7"],
-                            [0.35, "#C8EFA0"],
-                            [0.7, "#93DB55"],
-                            [1.0, C_GOOGLE],
-                        ],
+                        color_continuous_scale=_theme_color_scale(C_GOOGLE),
                     )
                     ch.update_layout(
                         height=330,
@@ -5562,12 +5892,7 @@ def render_exec(
                             "impressions": ":.0f",
                             "share_leads": ":.2%",
                         },
-                        color_continuous_scale=[
-                            [0.0, "#EAF8D7"],
-                            [0.35, "#C8EFA0"],
-                            [0.7, "#93DB55"],
-                            [1.0, C_GOOGLE],
-                        ],
+                        color_continuous_scale=_theme_color_scale(C_GOOGLE),
                         size_max=48,
                         projection="natural earth",
                     )
@@ -5745,7 +6070,7 @@ def render_exec(
                         values=roll["impressions"],
                         hole=0.56,
                         marker={
-                            "colors": ["#7BCC35", "#FE492A", "#7A879D"],
+                            "colors": [C_GOOGLE, C_META, C_MUTE],
                             "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
                         },
                         texttemplate="%{label}<br>%{percent}",
@@ -10683,6 +11008,10 @@ def render_admin_panel(
         if default_view_mode not in enabled_view_modes_defaults:
             default_view_mode = enabled_view_modes_defaults[0]
         default_tenant_logo = _normalize_logo_source(base_cfg.get("tenant_logo", ""))
+        base_theme_colors = _normalize_theme_colors(
+            base_cfg.get("theme_colors", DEFAULT_THEME_COLORS),
+            DEFAULT_THEME_COLORS,
+        )
         kpi_options = list(KPI_CATALOG.keys())
         overview_section_options = list(OVERVIEW_SECTION_OPTIONS.keys())
         traffic_section_options = list(TRAFFIC_SECTION_OPTIONS.keys())
@@ -10780,6 +11109,41 @@ def render_admin_panel(
                 f"Archivo listo para guardar: {logo_upload.name} | "
                 f"Formato esperado: {TENANT_LOGO_UPLOAD_WIDTH_PX}x{TENANT_LOGO_UPLOAD_HEIGHT_PX}px"
             )
+        st.markdown("#### Paleta visual por tenant")
+        cpal_1, cpal_2, cpal_3 = st.columns(3)
+        with cpal_1:
+            color_google = st.color_picker(
+                "Google",
+                value=base_theme_colors["google"],
+                key=f"adm_dash_color_google_{target_scope}",
+            )
+            color_success = st.color_picker(
+                "Éxito",
+                value=base_theme_colors["success"],
+                key=f"adm_dash_color_success_{target_scope}",
+            )
+        with cpal_2:
+            color_meta = st.color_picker(
+                "Meta",
+                value=base_theme_colors["meta"],
+                key=f"adm_dash_color_meta_{target_scope}",
+            )
+            color_danger = st.color_picker(
+                "Alerta",
+                value=base_theme_colors["danger"],
+                key=f"adm_dash_color_danger_{target_scope}",
+            )
+        with cpal_3:
+            color_accent = st.color_picker(
+                "Accent",
+                value=base_theme_colors["accent"],
+                key=f"adm_dash_color_accent_{target_scope}",
+            )
+            color_neutral = st.color_picker(
+                "Neutral",
+                value=base_theme_colors["neutral"],
+                key=f"adm_dash_color_neutral_{target_scope}",
+            )
         save_dashboard_button = st.button(
             "Guardar Variables Dashboard",
             key=f"adm_dash_save_{target_scope}",
@@ -10818,6 +11182,17 @@ def render_admin_panel(
                 if upload_err:
                     errors.append(upload_err)
             tenant_logo_norm = _normalize_logo_source(uploaded_logo_rel or tenant_logo_input)
+            theme_colors_norm = _normalize_theme_colors(
+                {
+                    "google": color_google,
+                    "meta": color_meta,
+                    "accent": color_accent,
+                    "neutral": color_neutral,
+                    "success": color_success,
+                    "danger": color_danger,
+                },
+                base_theme_colors,
+            )
             if not overview_norm:
                 errors.append("Debes seleccionar al menos 1 KPI para Overview.")
             if not traffic_norm:
@@ -10843,6 +11218,7 @@ def render_admin_panel(
                     "default_platform": _normalize_platform_option(selected_platform),
                     "default_view_mode": selected_view_mode_norm,
                     "tenant_logo": tenant_logo_norm,
+                    "theme_colors": theme_colors_norm,
                 }
                 if target_scope == "__defaults__":
                     updated_settings["defaults"] = cfg_payload
@@ -10870,6 +11246,7 @@ def render_admin_panel(
                             "default_platform": _normalize_platform_option(selected_platform),
                             "default_view_mode": selected_view_mode_norm,
                             "tenant_logo": tenant_logo_norm,
+                            "theme_colors": theme_colors_norm,
                         },
                     )
                     if uploaded_logo_rel:
@@ -10971,6 +11348,8 @@ def main() -> None:
     tenant_id, view_mode, admin_section = render_sidebar(tenants, dashboard_settings)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
     tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
+    tenant_theme_colors = _apply_theme_palette(tenant_dash_cfg.get("theme_colors", DEFAULT_THEME_COLORS))
+    apply_tenant_theme_overrides(tenant_theme_colors)
     desired_view_mode = _normalize_view_mode_option(tenant_dash_cfg.get("default_view_mode", "Overview"))
     last_view_tenant = str(st.session_state.get("sidebar_view_tenant_cfg", ""))
     if not last_view_tenant:

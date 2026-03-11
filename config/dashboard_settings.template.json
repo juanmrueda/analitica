@@ -40,7 +40,15 @@
     ],
     "default_platform": "All",
     "default_view_mode": "Overview",
-    "tenant_logo": "assets/logos/defaults_20260306_215035_363870d32f.png"
+    "tenant_logo": "assets/logos/defaults_20260306_215035_363870d32f.png",
+    "theme_colors": {
+      "google": "#7BCC35",
+      "meta": "#FE492A",
+      "accent": "#7BCC35",
+      "neutral": "#7A879D",
+      "success": "#67B22D",
+      "danger": "#D14343"
+    }
   },
   "tenants": {
     "yap": {
@@ -80,7 +88,15 @@
       ],
       "default_platform": "All",
       "default_view_mode": "Overview",
-      "tenant_logo": "assets/logos/yap_20260306_220501_bbf99d05b5.png"
+      "tenant_logo": "assets/logos/yap_20260306_220501_bbf99d05b5.png",
+      "theme_colors": {
+        "google": "#7BCC35",
+        "meta": "#FE492A",
+        "accent": "#7BCC35",
+        "neutral": "#7A879D",
+        "success": "#67B22D",
+        "danger": "#D14343"
+      }
     },
     "hyundai_hn": {
       "overview_kpis": [
@@ -116,7 +132,15 @@
       ],
       "default_platform": "All",
       "default_view_mode": "Overview",
-      "tenant_logo": "assets/logos/hyundai_hn_20260306_220905_3056a8b22e.png"
+      "tenant_logo": "assets/logos/hyundai_hn_20260306_220905_3056a8b22e.png",
+      "theme_colors": {
+        "google": "#7BCC35",
+        "meta": "#FE492A",
+        "accent": "#7BCC35",
+        "neutral": "#7A879D",
+        "success": "#67B22D",
+        "danger": "#D14343"
+      }
     }
   },
   "coco_ia": {
