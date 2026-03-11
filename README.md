@@ -8,14 +8,14 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Dashboard en Streamlit (`dashboard.py`)
 - Pipeline orquestado por tenant (`scripts/run_all_tenants.py`)
 
-## Estado actual (2026-03-06)
+## Estado actual (2026-03-10)
 
 - Produccion desplegada en DigitalOcean (Droplet Ubuntu).
 - Dominio: `analitica.ipalmera.com` (Cloudflare al frente).
-- Version desplegada: `Multitenant V2-adminpanel` (commit `9ca64ae`).
+- Version desplegada en app: commit `f9e2f88` (main).
 - Dashboard activo como servicio systemd: `yap-dashboard.service`.
 - Pipeline automatico cada hora: `yap-pipeline.timer` -> `yap-pipeline.service`.
-- El servicio de pipeline ejecuta `scripts/run_all_tenants.py --mode auto --bootstrap-start 2025-01-01`.
+- El servicio de pipeline ejecuta `scripts/run_all_tenants.py --mode auto --organic-lookback-days 30`.
 - Tenants activos en `config/tenants.json`:
   - `yap`
   - `hyundai_hn`
@@ -141,6 +141,7 @@ journalctl -u yap-pipeline.service -n 120 --no-pager
 Nota:
 - Si un tenant no tiene `ga4_property_id` (ejemplo actual `hyundai_hn`), GA4 se omite para ese tenant y el pipeline continua normalmente.
 - `dashboard.py` bootstrapea `config/dashboard_settings.json` desde `config/dashboard_settings.template.json` cuando falta el runtime.
+- Para vista de miniaturas remotas (Meta) en "Top 10 Piezas", Caddy debe permitir `img-src ... https:`.
 
 ## Deploy de cambios
 
@@ -162,6 +163,32 @@ sudo systemctl start yap-pipeline.service
 Nota deploy:
 - `config/users.json` y `config/dashboard_settings.json` no se versionan, por lo que `git pull` no los reemplaza.
 - Guardrail de historico: el pipeline protege contra bootstrap-start mayor al piso historico del tenant (por defecto `2025-01-01`) salvo que se use `--allow-historical-truncation`.
+
+### Infraestructura (Caddy) versionada
+
+- Config repo: `config/caddy/Caddyfile`
+- Sync a `/etc/caddy/Caddyfile` en DO:
+
+```bash
+cd /opt/yap/app
+bash scripts/sync_caddy.sh
+```
+
+### Smoke test rapido post-deploy
+
+```bash
+sudo systemctl status yap-dashboard --no-pager
+sudo systemctl status yap-pipeline.timer --no-pager
+curl -I https://analitica.ipalmera.com
+```
+
+Validar datos para rango de un dia (hora real + top piezas):
+
+```bash
+cd /opt/yap/app
+jq '.hourly|length' reports/yap/yap_historical.json
+jq '.traffic_acquisition.paid_piece_daily|length' reports/yap/yap_historical.json
+```
 
 ## Configuracion sensible (no versionar)
 
