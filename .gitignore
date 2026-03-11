@@ -8,6 +8,7 @@ valiant-adviser-316513-6854721bd01b.json
 config/users.json
 config/dashboard_settings.json
 config/admin_audit.jsonl
+config/ai_usage.jsonl
 
 # Local generated data/logs
 reports/

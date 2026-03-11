@@ -4019,6 +4019,76 @@ def daily_df(report: dict[str, Any]) -> pd.DataFrame:
     return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
 
 
+def hourly_df(report: dict[str, Any]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for r in report.get("hourly", []):
+        m = r.get("meta", {})
+        g = r.get("google_ads", {})
+        n = r.get("normalization", {})
+        dt_raw = str(r.get("datetime", "")).strip()
+        if not dt_raw:
+            raw_day = str(r.get("date", "")).strip()
+            raw_hour = int(sf(r.get("hour")))
+            if raw_day:
+                dt_raw = f"{raw_day} {raw_hour:02d}:00:00"
+        ms = sf(m.get("spend"))
+        gs = sf(g.get("cost"))
+        mc = sf(m.get("clicks"))
+        gc = sf(g.get("clicks"))
+        mv = sf(m.get("conversions"))
+        gv = sf(g.get("conversions"))
+        mi = sf(m.get("impressions"))
+        gi = sf(g.get("impressions"))
+        rows.append(
+            {
+                "timestamp": dt_raw,
+                "date": r.get("date"),
+                "hour": sf(r.get("hour")),
+                "meta_spend": ms,
+                "google_spend": gs,
+                "total_spend": sf(n.get("total_spend")) or (ms + gs),
+                "meta_clicks": mc,
+                "google_clicks": gc,
+                "total_clicks": sf(n.get("total_clicks")) or (mc + gc),
+                "meta_conv": mv,
+                "google_conv": gv,
+                "total_conv": sf(n.get("total_conversions")) or (mv + gv),
+                "meta_impr": mi,
+                "google_impr": gi,
+                "total_impr": sf(n.get("total_impressions")) or (mi + gi),
+                "ga4_sessions": 0.0,
+                "ga4_users": 0.0,
+                "ga4_avg_sess": 0.0,
+                "ga4_bounce": 0.0,
+            }
+        )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    if "date" in df.columns:
+        parsed_date = pd.to_datetime(df["date"], errors="coerce")
+        df["date"] = parsed_date.dt.date
+    else:
+        df["date"] = df["timestamp"].dt.date
+    if "hour" not in df.columns:
+        df["hour"] = df["timestamp"].dt.hour
+    else:
+        df["hour"] = (
+            pd.to_numeric(df["hour"], errors="coerce")
+            .fillna(df["timestamp"].dt.hour)
+            .fillna(0)
+            .astype(int)
+        )
+    num_cols = [c for c in df.columns if c not in {"timestamp", "date"}]
+    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    return (
+        df.dropna(subset=["timestamp", "date"])
+        .sort_values(["timestamp"])
+        .reset_index(drop=True)
+    )
+
+
 def acq_df(report: dict[str, Any], key: str) -> pd.DataFrame:
     rows = report.get("traffic_acquisition", {}).get(key, [])
     df = pd.DataFrame(rows)
@@ -4678,6 +4748,7 @@ def render_exec(
     prev_s,
     prev_e,
     overview_chart_state_key: str,
+    hourly_sel: pd.DataFrame | None = None,
 ):
     selected_sections = _normalize_section_keys(
         overview_section_keys,
@@ -4707,8 +4778,30 @@ def render_exec(
 
     def _render_trend_chart() -> None:
         trend_label = str(KPI_CATALOG.get(active_overview_kpi, {}).get("label", active_overview_kpi))
-        trend_subtitle = _kpi_trend_subtitle(active_overview_kpi)
         hover_value_template = _kpi_hover_value_template(active_overview_kpi)
+        ld = df_sel.sort_values("date").copy()
+        hd = hourly_sel.copy() if isinstance(hourly_sel, pd.DataFrame) else pd.DataFrame()
+        if not hd.empty:
+            if "timestamp" in hd.columns:
+                hd["timestamp"] = pd.to_datetime(hd["timestamp"], errors="coerce")
+            if "date" in hd.columns:
+                hd["date"] = pd.to_datetime(hd["date"], errors="coerce").dt.date
+        is_single_day = bool(not ld.empty and ld["date"].nunique() == 1)
+        hd_day = pd.DataFrame()
+        if is_single_day and not hd.empty and "date" in hd.columns:
+            selected_day = ld["date"].iloc[0]
+            hd_day = hd[hd["date"] == selected_day].copy()
+        use_hourly_real = bool(
+            is_single_day
+            and active_overview_kpi in PAID_TREND_KPI_KEYS
+            and not hd_day.empty
+            and "timestamp" in hd_day.columns
+        )
+        trend_subtitle = (
+            ("Hourly investment over time" if active_overview_kpi == "spend" else f"Tendencia por hora de {trend_label.lower()}")
+            if use_hourly_real
+            else ("Vista por hora del dia seleccionado" if is_single_day else _kpi_trend_subtitle(active_overview_kpi))
+        )
         st.markdown(
             f"""
             <div class="viz-card">
@@ -4717,52 +4810,85 @@ def render_exec(
             """,
             unsafe_allow_html=True,
         )
-        ld = df_sel.sort_values("date").copy()
         if ld.empty:
             st.info("Sin datos para el periodo seleccionado.")
         else:
             fig = go.Figure()
             traces_added = 0
+            additive_kpis = {"spend", "conv", "clicks", "impr", "sessions", "users"}
+            plot_df = hd_day.sort_values("timestamp").copy() if use_hourly_real else ld
+            x_values: pd.Series | pd.DatetimeIndex = plot_df["timestamp"] if use_hourly_real else ld["date"]
+            x_tick_format = "%H:%M" if is_single_day else "%d %b"
+            x_hover_format = "%d %b %Y %H:%M" if is_single_day else "%d %b %Y"
+            hourly_projection_note = ""
+            if is_single_day and not use_hourly_real:
+                selected_day = ld["date"].iloc[0]
+                day_start = datetime.combine(selected_day, datetime.min.time())
+                x_values = pd.date_range(start=day_start, periods=24, freq="h")
+                hourly_projection_note = (
+                    "Vista horaria proyectada con distribucion uniforme del total diario "
+                    "(no hay datos horarios disponibles en el JSON actual)."
+                )
+
+            def _series_for_plot(series: pd.Series | None) -> pd.Series | None:
+                if series is None:
+                    return None
+                numeric_series = pd.to_numeric(series, errors="coerce").fillna(0.0)
+                if use_hourly_real or not is_single_day:
+                    return numeric_series
+                if numeric_series.empty:
+                    return pd.Series([0.0] * 24)
+                if active_overview_kpi in additive_kpis:
+                    base_value = float(numeric_series.sum())
+                    projected_hour = base_value / 24.0
+                else:
+                    base_value = float(numeric_series.mean())
+                    projected_hour = base_value
+                return pd.Series([projected_hour] * 24)
+
             if active_overview_kpi in PAID_TREND_KPI_KEYS:
                 if platform in ("All", "Google"):
-                    google_series = _platform_kpi_series(ld, "google", active_overview_kpi)
-                    if google_series is not None:
+                    google_series = _platform_kpi_series(plot_df, "google", active_overview_kpi)
+                    google_plot_series = _series_for_plot(google_series)
+                    if google_plot_series is not None:
                         fig.add_trace(
                             go.Scatter(
-                                x=ld["date"],
-                                y=google_series,
-                                mode="lines",
+                                x=x_values,
+                                y=google_plot_series,
+                                mode="lines+markers" if is_single_day else "lines",
                                 name="Google Ads",
-                                line={"color": C_GOOGLE, "width": 4, "shape": "spline"},
-                                hovertemplate=f"%{{x|%d %b %Y}}<br>Google: {hover_value_template}<extra></extra>",
+                                line={"color": C_GOOGLE, "width": 4, "shape": "linear"},
+                                hovertemplate=f"%{{x|{x_hover_format}}}<br>Google: {hover_value_template}<extra></extra>",
                             )
                         )
                         traces_added += 1
                 if platform in ("All", "Meta"):
-                    meta_series = _platform_kpi_series(ld, "meta", active_overview_kpi)
-                    if meta_series is not None:
+                    meta_series = _platform_kpi_series(plot_df, "meta", active_overview_kpi)
+                    meta_plot_series = _series_for_plot(meta_series)
+                    if meta_plot_series is not None:
                         fig.add_trace(
                             go.Scatter(
-                                x=ld["date"],
-                                y=meta_series,
-                                mode="lines",
+                                x=x_values,
+                                y=meta_plot_series,
+                                mode="lines+markers" if is_single_day else "lines",
                                 name="Meta Ads",
-                                line={"color": C_META, "width": 4, "shape": "spline"},
-                                hovertemplate=f"%{{x|%d %b %Y}}<br>Meta: {hover_value_template}<extra></extra>",
+                                line={"color": C_META, "width": 4, "shape": "linear"},
+                                hovertemplate=f"%{{x|{x_hover_format}}}<br>Meta: {hover_value_template}<extra></extra>",
                             )
                         )
                         traces_added += 1
             else:
                 ga4_series = _ga4_kpi_series(ld, active_overview_kpi)
-                if ga4_series is not None:
+                ga4_plot_series = _series_for_plot(ga4_series)
+                if ga4_plot_series is not None:
                     fig.add_trace(
                         go.Scatter(
-                            x=ld["date"],
-                            y=ga4_series,
-                            mode="lines",
+                            x=x_values,
+                            y=ga4_plot_series,
+                            mode="lines+markers" if is_single_day else "lines",
                             name="GA4",
-                            line={"color": C_ACCENT, "width": 4, "shape": "spline"},
-                            hovertemplate=f"%{{x|%d %b %Y}}<br>{html.escape(trend_label)}: {hover_value_template}<extra></extra>",
+                            line={"color": C_ACCENT, "width": 4, "shape": "linear"},
+                            hovertemplate=f"%{{x|{x_hover_format}}}<br>{html.escape(trend_label)}: {hover_value_template}<extra></extra>",
                         )
                     )
                     traces_added += 1
@@ -4771,7 +4897,9 @@ def render_exec(
             else:
                 pbi_layout(fig, yaxis_title=_kpi_axis_title(active_overview_kpi), xaxis_title="")
                 fig.update_layout(height=355, hovermode="x unified", showlegend=True)
-                fig.update_xaxes(tickformat="%d %b", tickfont={"size": 10, "color": "#7A879D"})
+                fig.update_xaxes(tickformat=x_tick_format, tickfont={"size": 10, "color": "#7A879D"})
+                if is_single_day:
+                    fig.update_xaxes(dtick=2 * 60 * 60 * 1000)
                 fig.update_yaxes(tickfont={"size": 10, "color": "#7A879D"})
                 fmt = str(KPI_CATALOG.get(active_overview_kpi, {}).get("fmt", "int"))
                 if fmt == "pct":
@@ -4781,6 +4909,8 @@ def render_exec(
                 else:
                     fig.update_yaxes(tickformat=",.0f")
                 st.plotly_chart(fig, width="stretch")
+                if hourly_projection_note:
+                    st.caption(hourly_projection_note)
         st.markdown("</div>", unsafe_allow_html=True)
 
     def _render_funnel_and_ga4() -> None:
@@ -10940,6 +11070,7 @@ def main() -> None:
     if df.empty:
         st.warning("No hay datos diarios en el JSON.")
         st.stop()
+    hourly = hourly_df(report)
 
     ch = acq_df(report, "ga4_channel_daily")
     ga4_event_daily = acq_df(report, "ga4_event_daily")
@@ -10987,6 +11118,10 @@ def main() -> None:
     )
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
+    if hourly.empty:
+        hourly_sel = hourly.copy()
+    else:
+        hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
     period_days = max((e - s).days + 1, 1)
     prev_e = s - timedelta(days=1)
     prev_s = prev_e - timedelta(days=period_days - 1)
@@ -11074,6 +11209,7 @@ def main() -> None:
             prev_s,
             prev_e,
             f"overview_chart_metric_{tenant_id}",
+            hourly_sel,
         )
 
     render_sidebar_logout_button()

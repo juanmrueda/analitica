@@ -118,5 +118,28 @@
       "default_view_mode": "Overview",
       "tenant_logo": "assets/logos/hyundai_hn_20260306_220905_3056a8b22e.png"
     }
+  },
+  "coco_ia": {
+    "enabled": false,
+    "enabled_tenants": {
+      "yap": true,
+      "hyundai_hn": true
+    },
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "max_daily_queries_default": 20,
+    "max_daily_queries_tenant": {
+      "yap": 20,
+      "hyundai_hn": 20
+    },
+    "max_daily_queries_user": {},
+    "max_daily_queries_user_tenant": {},
+    "daily_budget_usd_default": 0.0,
+    "daily_budget_usd_tenant": {
+      "yap": 0.0,
+      "hyundai_hn": 0.0
+    },
+    "input_cost_per_1m": 0.15,
+    "output_cost_per_1m": 0.6
   }
 }

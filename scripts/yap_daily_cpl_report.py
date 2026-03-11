@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -72,6 +73,7 @@ def _http_json(
     json_body: Dict[str, Any] | None = None,
     form_body: Dict[str, str] | None = None,
     timeout: int = 60,
+    max_retries: int = 4,
 ) -> Any:
     request_headers = dict(headers or {})
     body_bytes = None
@@ -87,20 +89,46 @@ def _http_json(
         request_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
 
     req = Request(url=url, method=method.upper(), headers=request_headers, data=body_bytes)
+    retries = max(int(max_retries), 0)
+    attempts = retries + 1
+    last_exc: Exception | None = None
 
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except HTTPError as exc:
-        payload = exc.read().decode("utf-8", errors="replace")
+    for attempt in range(attempts):
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except HTTPError as exc:
+            payload = exc.read().decode("utf-8", errors="replace")
+            payload_l = payload.lower()
+            retriable = bool(
+                exc.code in {500, 502, 503, 504, 429}
+                or "service temporarily unavailable" in payload_l
+                or '"code":2' in payload_l
+                or '"is_transient":true' in payload_l
+            )
+            if retriable and attempt < retries:
+                wait_s = min(2 ** attempt, 8)
+                time.sleep(wait_s)
+                continue
+            raise RuntimeError(
+                f"HTTP {exc.code} for {_redact_sensitive_text(url)}: {_redact_sensitive_text(payload)}"
+            ) from exc
+        except URLError as exc:
+            last_exc = exc
+            if attempt < retries:
+                wait_s = min(2 ** attempt, 8)
+                time.sleep(wait_s)
+                continue
+            raise RuntimeError(
+                f"Network error for {_redact_sensitive_text(url)}: {_redact_sensitive_text(exc)}"
+            ) from exc
+
+    if last_exc is not None:
         raise RuntimeError(
-            f"HTTP {exc.code} for {_redact_sensitive_text(url)}: {_redact_sensitive_text(payload)}"
-        ) from exc
-    except URLError as exc:
-        raise RuntimeError(
-            f"Network error for {_redact_sensitive_text(url)}: {_redact_sensitive_text(exc)}"
-        ) from exc
+            f"Network error for {_redact_sensitive_text(url)}: {_redact_sensitive_text(last_exc)}"
+        ) from last_exc
+    raise RuntimeError(f"Unexpected error for {_redact_sensitive_text(url)}")
 
 
 def _load_codex_config(path: Path) -> Dict[str, Any]:
@@ -1136,6 +1164,102 @@ def _fetch_meta_range(
     return by_day
 
 
+def _parse_meta_hour_bucket(raw_value: Any) -> int | None:
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    match = re.match(r"^(\d{1,2})", text)
+    if match is None:
+        return None
+    hour_value = _safe_int(match.group(1))
+    if hour_value < 0 or hour_value > 23:
+        return None
+    return int(hour_value)
+
+
+def _fetch_meta_hourly_range(
+    meta_token: str, ad_account_id: str, start_day: date, end_day: date
+) -> Dict[str, Dict[str, float]]:
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ad_account_id}/insights"
+    by_hour: Dict[str, Dict[str, float]] = {}
+
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 7):
+        params = {
+            "fields": (
+                "date_start,spend,clicks,conversions,actions,impressions,reach,frequency,ctr,cpc"
+            ),
+            "time_increment": "1",
+            "breakdowns": "hourly_stats_aggregated_by_audience_time_zone",
+            "time_range": json.dumps(
+                {"since": chunk_start.isoformat(), "until": chunk_end.isoformat()}
+            ),
+            "access_token": meta_token,
+        }
+        next_url = f"{endpoint}?{urlencode(params)}"
+        while next_url:
+            data = None
+            retry_error: RuntimeError | None = None
+            for _attempt in range(4):
+                try:
+                    data = _http_json("GET", next_url)
+                    retry_error = None
+                    break
+                except RuntimeError as exc:
+                    retry_error = exc
+                    err_txt = str(exc)
+                    retriable = any(
+                        marker in err_txt
+                        for marker in ("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504")
+                    )
+                    if retriable:
+                        continue
+                    raise
+            if data is None:
+                if retry_error is not None:
+                    # Skip this problematic page and continue with remaining chunks.
+                    break
+                break
+            rows = data.get("data", [])
+            for row in rows:
+                day = str(row.get("date_start", "")).strip()
+                hour_value = _parse_meta_hour_bucket(
+                    row.get("hourly_stats_aggregated_by_audience_time_zone")
+                )
+                if not day or hour_value is None:
+                    continue
+                key = f"{day} {hour_value:02d}:00:00"
+                conv_selected, conv_raw, conv_lead, conv_fb_pixel_lead = _meta_conversion_value(row)
+                bucket = by_hour.setdefault(
+                    key,
+                    {
+                        "spend": 0.0,
+                        "clicks": 0.0,
+                        "conversions": 0.0,
+                        "conversions_raw": 0.0,
+                        "conversions_lead": 0.0,
+                        "conversions_fb_pixel_lead": 0.0,
+                        "impressions": 0.0,
+                        "reach": 0.0,
+                        "frequency": 0.0,
+                        "ctr": 0.0,
+                        "cpc": 0.0,
+                    },
+                )
+                bucket["spend"] += _safe_float(row.get("spend"))
+                bucket["clicks"] += _safe_float(row.get("clicks"))
+                bucket["conversions"] += conv_selected
+                bucket["conversions_raw"] += conv_raw
+                bucket["conversions_lead"] += conv_lead
+                bucket["conversions_fb_pixel_lead"] += conv_fb_pixel_lead
+                bucket["impressions"] += _safe_float(row.get("impressions"))
+                bucket["reach"] += _safe_float(row.get("reach"))
+                bucket["frequency"] = _safe_float(row.get("frequency"))
+                bucket["ctr"] = _safe_float(row.get("ctr")) / 100.0
+                bucket["cpc"] = _safe_float(row.get("cpc"))
+            next_url = data.get("paging", {}).get("next")
+    return by_hour
+
+
 def _fetch_meta_campaign_range(
     meta_token: str, ad_account_id: str, start_day: date, end_day: date
 ) -> List[Dict[str, Any]]:
@@ -1241,6 +1365,206 @@ def _fetch_meta_campaign_objectives(
             if objective:
                 objective_by_campaign[campaign_id] = objective
     return objective_by_campaign
+
+
+def _pick_first_non_empty_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text.lower() not in {"nan", "none", "null"}:
+            return text
+    return ""
+
+
+def _extract_meta_creative_preview(creative: Dict[str, Any]) -> Tuple[str, str]:
+    image_url = _pick_first_non_empty_text(
+        creative.get("image_url"),
+        creative.get("url"),
+    )
+    thumbnail_url = _pick_first_non_empty_text(creative.get("thumbnail_url"))
+
+    spec = creative.get("object_story_spec")
+    if isinstance(spec, dict):
+        for key in ("link_data", "video_data", "photo_data", "template_data"):
+            block = spec.get(key)
+            if not isinstance(block, dict):
+                continue
+            image_url = _pick_first_non_empty_text(
+                image_url,
+                block.get("image_url"),
+                block.get("picture"),
+            )
+            thumbnail_url = _pick_first_non_empty_text(
+                thumbnail_url,
+                block.get("thumbnail_url"),
+                block.get("image_url"),
+                block.get("picture"),
+            )
+
+    if not image_url:
+        image_url = thumbnail_url
+    if not thumbnail_url:
+        thumbnail_url = image_url
+    return image_url, thumbnail_url
+
+
+def _fetch_meta_ad_creative_details(
+    meta_token: str,
+    ad_ids: List[str],
+) -> Dict[str, Dict[str, str]]:
+    uniq_ids: List[str] = []
+    seen: set[str] = set()
+    for raw_id in ad_ids:
+        ad_id = str(raw_id or "").strip()
+        if not ad_id or ad_id in seen:
+            continue
+        seen.add(ad_id)
+        uniq_ids.append(ad_id)
+    if not uniq_ids:
+        return {}
+
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/"
+    details_by_ad: Dict[str, Dict[str, str]] = {}
+    for batch_ids in _chunk_list(uniq_ids, 40):
+        params = {
+            "ids": ",".join(batch_ids),
+            "fields": (
+                "id,name,"
+                "creative{id,name,image_url,thumbnail_url,object_story_spec,object_story_id,effective_object_story_id}"
+            ),
+            "access_token": meta_token,
+        }
+        batch_url = f"{endpoint}?{urlencode(params)}"
+        try:
+            data = _http_json("GET", batch_url)
+        except Exception as exc:
+            print(
+                f"[warn] Could not read Meta ad creative details for batch "
+                f"{batch_ids[:3]}... ({len(batch_ids)} ids): {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        if not isinstance(data, dict):
+            continue
+        for ad_id in batch_ids:
+            raw = data.get(ad_id, {})
+            if not isinstance(raw, dict):
+                continue
+
+            creative = raw.get("creative", {})
+            if isinstance(creative, list):
+                creative = creative[0] if creative and isinstance(creative[0], dict) else {}
+            if not isinstance(creative, dict):
+                creative = {}
+
+            image_url, thumbnail_url = _extract_meta_creative_preview(creative)
+            details_by_ad[ad_id] = {
+                "ad_name": _pick_first_non_empty_text(raw.get("name")),
+                "creative_id": _pick_first_non_empty_text(creative.get("id")),
+                "creative_name": _pick_first_non_empty_text(creative.get("name")),
+                "image_url": image_url,
+                "thumbnail_url": thumbnail_url,
+            }
+    return details_by_ad
+
+
+def _fetch_meta_piece_range(
+    meta_token: str,
+    ad_account_id: str,
+    start_day: date,
+    end_day: date,
+) -> List[Dict[str, Any]]:
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ad_account_id}/insights"
+    out: List[Dict[str, Any]] = []
+
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 60):
+        params = {
+            "fields": (
+                "date_start,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,"
+                "spend,impressions,reach,frequency,clicks,ctr,cpc,conversions,actions"
+            ),
+            "level": "ad",
+            "time_increment": "1",
+            "time_range": json.dumps(
+                {"since": chunk_start.isoformat(), "until": chunk_end.isoformat()}
+            ),
+            "access_token": meta_token,
+        }
+        next_url = f"{endpoint}?{urlencode(params)}"
+        while next_url:
+            data = _http_json("GET", next_url)
+            rows = data.get("data", [])
+            for row in rows:
+                day = str(row.get("date_start", "")).strip()
+                if not day:
+                    continue
+                campaign_id = str(row.get("campaign_id", "")).strip()
+                adset_id = str(row.get("adset_id", "")).strip()
+                ad_id = str(row.get("ad_id", "")).strip()
+                ad_name = str(row.get("ad_name", "")).strip()
+                if ad_id:
+                    piece_id = ad_id
+                else:
+                    fallback_bits = [campaign_id, adset_id, ad_name, day]
+                    fallback_id = "::".join(bit for bit in fallback_bits if bit)
+                    piece_id = f"meta_piece::{fallback_id or day}"
+                conv_selected, conv_raw, conv_lead, conv_fb_pixel_lead = _meta_conversion_value(row)
+                out.append(
+                    {
+                        "date": day,
+                        "platform": "Meta",
+                        "piece_level": "ad",
+                        "piece_id": piece_id,
+                        "piece_name": _pick_first_non_empty_text(ad_name),
+                        "ad_id": ad_id,
+                        "ad_name": ad_name,
+                        "adset_id": adset_id,
+                        "adset_name": str(row.get("adset_name", "")),
+                        "campaign_id": campaign_id,
+                        "campaign_name": str(row.get("campaign_name", "")),
+                        "spend": _safe_float(row.get("spend")),
+                        "impressions": _safe_float(row.get("impressions")),
+                        "reach": _safe_float(row.get("reach")),
+                        "frequency": _safe_float(row.get("frequency")),
+                        "clicks": _safe_float(row.get("clicks")),
+                        "ctr": _safe_float(row.get("ctr")) / 100.0,
+                        "cpc": _safe_float(row.get("cpc")),
+                        "conversions": conv_selected,
+                        "conversions_raw": conv_raw,
+                        "conversions_lead": conv_lead,
+                        "conversions_fb_pixel_lead": conv_fb_pixel_lead,
+                        "creative_id": "",
+                        "creative_name": "",
+                        "image_url": "",
+                        "thumbnail_url": "",
+                        "preview_url": "",
+                    }
+                )
+            next_url = data.get("paging", {}).get("next")
+
+    ad_ids = [
+        str(row.get("ad_id", "")).strip()
+        for row in out
+        if str(row.get("ad_id", "")).strip()
+    ]
+    ad_details = _fetch_meta_ad_creative_details(meta_token, ad_ids)
+    for row in out:
+        ad_id = str(row.get("ad_id", "")).strip()
+        detail = ad_details.get(ad_id, {})
+        ad_name = _pick_first_non_empty_text(row.get("ad_name"), detail.get("ad_name"))
+        row["ad_name"] = ad_name
+        row["piece_name"] = _pick_first_non_empty_text(
+            row.get("piece_name"),
+            ad_name,
+            row.get("campaign_name"),
+            "Sin nombre",
+        )
+        row["creative_id"] = _pick_first_non_empty_text(detail.get("creative_id"))
+        row["creative_name"] = _pick_first_non_empty_text(detail.get("creative_name"))
+        row["image_url"] = _pick_first_non_empty_text(detail.get("image_url"))
+        row["thumbnail_url"] = _pick_first_non_empty_text(detail.get("thumbnail_url"))
+        row["preview_url"] = _pick_first_non_empty_text(row.get("image_url"), row.get("thumbnail_url"))
+    return out
 
 
 def _normalize_paid_device(raw: Any) -> str:
@@ -1531,6 +1855,74 @@ def _fetch_google_ads_range(
                 "conversions": _safe_float(metrics.get("conversions")),
             }
     return by_day
+
+
+def _fetch_google_ads_hourly_range(
+    *,
+    access_token: str,
+    developer_token: str,
+    customer_id: str,
+    login_customer_id: str,
+    quota_project: str | None,
+    start_day: date,
+    end_day: date,
+) -> Dict[str, Dict[str, float]]:
+    endpoint = (
+        f"https://googleads.googleapis.com/{GOOGLE_ADS_API_VERSION}/customers/"
+        f"{customer_id}/googleAds:searchStream"
+    )
+    query = (
+        "SELECT segments.date, segments.hour, metrics.cost_micros, metrics.clicks, metrics.impressions, "
+        "metrics.ctr, metrics.average_cpc, metrics.conversions "
+        "FROM customer "
+        f"WHERE segments.date BETWEEN '{start_day.isoformat()}' AND '{end_day.isoformat()}' "
+        "ORDER BY segments.date, segments.hour"
+    )
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": login_customer_id,
+    }
+    if quota_project:
+        headers["x-goog-user-project"] = quota_project
+
+    data = _http_json("POST", endpoint, headers=headers, json_body={"query": query})
+    chunks = data if isinstance(data, list) else [data]
+
+    by_hour: Dict[str, Dict[str, float]] = {}
+    for chunk in chunks:
+        for row in chunk.get("results", []):
+            segments = row.get("segments", {})
+            metrics = row.get("metrics", {})
+            day = str(segments.get("date", "")).strip()
+            hour_value = _safe_int(segments.get("hour"))
+            if not day or hour_value < 0 or hour_value > 23:
+                continue
+            key = f"{day} {hour_value:02d}:00:00"
+            cost_micros = _safe_int(metrics.get("costMicros"))
+            avg_cpc_micros = _safe_float(metrics.get("averageCpc"))
+            bucket = by_hour.setdefault(
+                key,
+                {
+                    "cost_micros": 0.0,
+                    "cost": 0.0,
+                    "clicks": 0.0,
+                    "impressions": 0.0,
+                    "ctr": 0.0,
+                    "average_cpc_micros": 0.0,
+                    "average_cpc": 0.0,
+                    "conversions": 0.0,
+                },
+            )
+            bucket["cost_micros"] += float(cost_micros)
+            bucket["cost"] += float(cost_micros) / 1_000_000.0
+            bucket["clicks"] += _safe_float(metrics.get("clicks"))
+            bucket["impressions"] += _safe_float(metrics.get("impressions"))
+            bucket["conversions"] += _safe_float(metrics.get("conversions"))
+            bucket["average_cpc_micros"] = avg_cpc_micros
+            bucket["average_cpc"] = avg_cpc_micros / 1_000_000.0 if avg_cpc_micros else 0.0
+            bucket["ctr"] = _safe_float(metrics.get("ctr"))
+    return by_hour
 
 
 def _fetch_google_device_range(
@@ -2287,6 +2679,16 @@ def _day_keys(start_day: date, end_day: date) -> List[str]:
     return keys
 
 
+def _hour_keys(start_day: date, end_day: date) -> List[str]:
+    keys: List[str] = []
+    current = datetime.combine(start_day, datetime.min.time())
+    final_hour = datetime.combine(end_day, datetime.min.time()) + timedelta(hours=23)
+    while current <= final_hour:
+        keys.append(current.strftime("%Y-%m-%d %H:00:00"))
+        current += timedelta(hours=1)
+    return keys
+
+
 def _build_daily_rows(
     *,
     start_day: date,
@@ -2396,12 +2798,127 @@ def _build_daily_rows(
     return rows
 
 
+def _build_hourly_rows(
+    *,
+    start_day: date,
+    end_day: date,
+    meta_data: Dict[str, Dict[str, float]],
+    google_data: Dict[str, Dict[str, float]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for dt_key in _hour_keys(start_day, end_day):
+        day = dt_key[:10]
+        hour_value = _safe_int(dt_key[11:13])
+        meta = meta_data.get(
+            dt_key,
+            {
+                "spend": 0.0,
+                "clicks": 0.0,
+                "conversions": 0.0,
+                "conversions_raw": 0.0,
+                "conversions_lead": 0.0,
+                "conversions_fb_pixel_lead": 0.0,
+                "impressions": 0.0,
+                "reach": 0.0,
+                "frequency": 0.0,
+                "ctr": 0.0,
+                "cpc": 0.0,
+            },
+        )
+        google = google_data.get(
+            dt_key,
+            {
+                "cost_micros": 0.0,
+                "cost": 0.0,
+                "clicks": 0.0,
+                "impressions": 0.0,
+                "ctr": 0.0,
+                "average_cpc_micros": 0.0,
+                "average_cpc": 0.0,
+                "conversions": 0.0,
+            },
+        )
+
+        total_spend = _safe_float(meta["spend"]) + _safe_float(google["cost"])
+        total_conversions = _safe_float(meta["conversions"]) + _safe_float(google["conversions"])
+        total_clicks = _safe_float(meta["clicks"]) + _safe_float(google["clicks"])
+        total_impressions = _safe_float(meta["impressions"]) + _safe_float(google["impressions"])
+
+        rows.append(
+            {
+                "datetime": dt_key,
+                "date": day,
+                "hour": hour_value,
+                "meta": {
+                    "spend": _safe_float(meta["spend"]),
+                    "clicks": _safe_float(meta["clicks"]),
+                    "conversions": _safe_float(meta["conversions"]),
+                    "conversions_raw": _safe_float(meta["conversions_raw"]),
+                    "conversions_lead": _safe_float(meta["conversions_lead"]),
+                    "conversions_fb_pixel_lead": _safe_float(meta["conversions_fb_pixel_lead"]),
+                    "impressions": _safe_float(meta["impressions"]),
+                    "reach": _safe_float(meta["reach"]),
+                    "frequency": _safe_float(meta["frequency"]),
+                    "ctr": _safe_float(meta["ctr"]),
+                    "cpc": _safe_float(meta["cpc"]),
+                },
+                "google_ads": {
+                    "cost_micros": _safe_float(google["cost_micros"]),
+                    "cost": _safe_float(google["cost"]),
+                    "clicks": _safe_float(google["clicks"]),
+                    "impressions": _safe_float(google["impressions"]),
+                    "ctr": _safe_float(google["ctr"]),
+                    "average_cpc_micros": _safe_float(google["average_cpc_micros"]),
+                    "average_cpc": _safe_float(google["average_cpc"]),
+                    "conversions": _safe_float(google["conversions"]),
+                },
+                "normalization": {
+                    "total_spend": total_spend,
+                    "total_conversions": total_conversions,
+                    "total_clicks": total_clicks,
+                    "total_impressions": total_impressions,
+                    "ctr_consolidated": _safe_div(total_clicks, total_impressions),
+                    "cpl_consolidated": _calc_cpl(total_spend, total_conversions),
+                    "cpl_by_platform": {
+                        "meta": _calc_cpl(
+                            _safe_float(meta["spend"]), _safe_float(meta["conversions"])
+                        ),
+                        "google_ads": _calc_cpl(
+                            _safe_float(google["cost"]), _safe_float(google["conversions"])
+                        ),
+                    },
+                },
+            }
+        )
+    return rows
+
+
 def _merge_daily(existing: List[Dict[str, Any]], new_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_date = {str(r["date"]): r for r in existing}
     for row in new_rows:
         by_date[str(row["date"])] = row
     merged = list(by_date.values())
     merged.sort(key=lambda r: str(r["date"]))
+    return merged
+
+
+def _merge_hourly(existing: List[Dict[str, Any]], new_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for row in existing:
+        key = str(row.get("datetime", "")).strip()
+        if not key:
+            day = str(row.get("date", "")).strip()
+            hour_value = _safe_int(row.get("hour"))
+            if day:
+                key = f"{day} {hour_value:02d}:00:00"
+        if key:
+            by_key[key] = row
+    for row in new_rows:
+        key = str(row.get("datetime", "")).strip()
+        if key:
+            by_key[key] = row
+    merged = list(by_key.values())
+    merged.sort(key=lambda r: str(r.get("datetime", "")))
     return merged
 
 
@@ -2766,7 +3283,13 @@ def main() -> int:
         raise RuntimeError("Missing Google Ads OAuth/developer token values in ~/.codex/config.toml")
 
     meta_data = _fetch_meta_range(str(meta_token), meta_ad_account_id, start_day, end_day)
+    meta_hourly_data = _fetch_meta_hourly_range(
+        str(meta_token), meta_ad_account_id, start_day, end_day
+    )
     meta_campaign_daily = _fetch_meta_campaign_range(
+        str(meta_token), meta_ad_account_id, start_day, end_day
+    )
+    meta_piece_daily = _fetch_meta_piece_range(
         str(meta_token), meta_ad_account_id, start_day, end_day
     )
     meta_device_daily = _fetch_meta_device_range(
@@ -2784,6 +3307,15 @@ def main() -> int:
         str(ga_client_id), str(ga_client_secret), str(ga_refresh_token)
     )
     google_data = _fetch_google_ads_range(
+        access_token=google_ads_access_token,
+        developer_token=str(ga_developer_token),
+        customer_id=tenant_google_ads_customer_id,
+        login_customer_id=str(ga_login_customer_id),
+        quota_project=str(ga_quota_project) if ga_quota_project else None,
+        start_day=start_day,
+        end_day=end_day,
+    )
+    google_hourly_data = _fetch_google_ads_hourly_range(
         access_token=google_ads_access_token,
         developer_token=str(ga_developer_token),
         customer_id=tenant_google_ads_customer_id,
@@ -2874,9 +3406,16 @@ def main() -> int:
     new_daily = _build_daily_rows(
         start_day=start_day, end_day=end_day, meta_data=meta_data, google_data=google_data, ga4_data=ga4_main
     )
+    new_hourly = _build_hourly_rows(
+        start_day=start_day,
+        end_day=end_day,
+        meta_data=meta_hourly_data,
+        google_data=google_hourly_data,
+    )
 
     existing = _load_existing(output_path)
     all_daily = _merge_daily(existing.get("daily", []), new_daily)
+    all_hourly = _merge_hourly(existing.get("hourly", []), new_hourly)
     all_device = _merge_breakdown_rows(
         existing=existing.get("ga4_breakdowns", {}).get("device_daily", []),
         new_rows=ga4_device,
@@ -2926,6 +3465,13 @@ def main() -> int:
         end_day=end_day,
         key_fields=("date", "campaign_id"),
     )
+    all_paid_piece_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("paid_piece_daily", []),
+        new_rows=meta_piece_daily,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "platform", "piece_id", "campaign_id"),
+    )
     all_paid_device_daily = _merge_breakdown_rows(
         existing=existing.get("traffic_acquisition", {}).get("paid_device_daily", []),
         new_rows=meta_device_daily + google_device_daily,
@@ -2963,6 +3509,7 @@ def main() -> int:
             "ga4_conversion_event_name": tenant_ga4_conversion_event_name,
         },
         "daily": all_daily,
+        "hourly": all_hourly,
         "ga4_breakdowns": {
             "device_daily": all_device,
             "country_daily": all_country,
@@ -2973,6 +3520,7 @@ def main() -> int:
             "ga4_event_daily": all_ga4_event_daily,
             "meta_campaign_daily": all_meta_campaign_daily,
             "google_campaign_daily": all_google_campaign_daily,
+            "paid_piece_daily": all_paid_piece_daily,
             "paid_device_daily": all_paid_device_daily,
             "paid_lead_demographics_daily": all_paid_lead_demographics_daily,
             "paid_lead_geo_daily": all_paid_lead_geo_daily,
