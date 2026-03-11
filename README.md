@@ -8,7 +8,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Dashboard en Streamlit (`dashboard.py`)
 - Pipeline orquestado por tenant (`scripts/run_all_tenants.py`)
 
-## Estado actual (2026-03-10)
+## Estado actual (2026-03-11)
 
 - Produccion desplegada en DigitalOcean (Droplet Ubuntu).
 - Dominio: `analitica.ipalmera.com` (Cloudflare al frente).
@@ -21,9 +21,29 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
   - `hyundai_hn`
 - El tenant `ipalmera_regional` fue retirado de la configuracion activa.
 
+### Avance local COCO IA (2026-03-11)
+
+- Se migro la logica de agente a `coco_agent/` para sacar complejidad de `dashboard.py`.
+- Se separaron capas:
+  - `coco_agent/engine.py` -> llamada a modelo y orquestacion de tool-calls.
+  - `coco_agent/tools.py` -> definicion de herramientas para respuestas con datos.
+  - `coco_agent/context_builder.py` -> construccion/saneamiento de contexto.
+  - `coco_agent/workflow.py` -> cadena de resolvers deterministas + fallback.
+  - `coco_agent/deterministic_resolvers.py` -> reglas de interpretacion/calculo.
+- COCO IA ahora resuelve de forma determinista:
+  - comparativos interanuales por periodos (ej. ene-feb 2025 vs 2026),
+  - follow-up "ponlo en tabla" reutilizando contexto previo,
+  - comparativos por ventanas de dias dentro de mes (ej. primeros 10 dias de marzo).
+- Se corrigieron problemas de encoding visibles en UI (tildes/caracteres mojibake).
+- Se ajusto visual del login para controlar el tamano del logo.
+- Pendiente en curso:
+  - robustecer parser semantico para mas variaciones de lenguaje natural,
+  - validacion numerica cruzada para evitar inconsistencias en respuestas libres.
+
 ## Estructura principal
 
 - `dashboard.py` -> UI principal.
+- `coco_agent/` -> modulo de agente COCO IA (engine, workflow, resolvers, context builder, tools).
 - `scripts/run_all_tenants.py` -> ejecuta el pipeline para todos los tenants configurados.
 - `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion por tenant.
 - `reports/yap/yap_historical.json` -> fuente principal tenant YAP.

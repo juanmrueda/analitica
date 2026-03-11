@@ -1,4 +1,4 @@
-﻿
+
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -27,6 +27,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
+from coco_agent import run_coco_agent_turn
+from coco_agent import deterministic_resolvers as coco_det
+from coco_agent import workflow as coco_workflow
+from coco_agent import context_builder as coco_context
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
@@ -154,6 +158,7 @@ COCO_HISTORY_PERSIST_LIMIT = 80
 COCO_HISTORY_FOR_MODEL_LIMIT = 24
 COCO_HISTORY_MSG_MAX_CHARS = 1200
 COCO_MEMORY_SUMMARY_MAX_CHARS = 2200
+COCO_CHAT_ICON = "\U0001F4AC"
 SPANISH_MONTHS: dict[str, int] = {
     "enero": 1,
     "febrero": 2,
@@ -3958,7 +3963,7 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
           :root {
             --login-card-width: 432px;
             --login-title-size: 2.15rem;
-            --login-logo-size: 108px;
+            --login-logo-size: 84px;
           }
           .stApp,
           [data-testid="stAppViewContainer"] {
@@ -4012,16 +4017,22 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
             margin: 0 !important;
           }
           .login-logo-wrap {
-            width: var(--login-logo-size);
-            height: var(--login-logo-size);
+            width: var(--login-logo-size) !important;
+            height: var(--login-logo-size) !important;
+            max-width: var(--login-logo-size) !important;
+            max-height: var(--login-logo-size) !important;
+            overflow: hidden;
+            flex: 0 0 var(--login-logo-size);
             margin: 0 auto 0.62rem auto;
             display: flex;
             align-items: center;
             justify-content: center;
           }
           .login-logo-wrap img {
-            width: 100%;
-            height: 100%;
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100% !important;
+            max-height: 100% !important;
             object-fit: contain;
             display: block;
           }
@@ -4160,7 +4171,12 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
     with st.form("login_form", clear_on_submit=False):
         login_logo_src = _image_source_to_data_uri(_resolve_logo_image_source("assets/login.png"))
         st.markdown(
-            f"<div class='login-logo-wrap'><img src='{html.escape(login_logo_src, quote=True)}' alt='Logo login' /></div>",
+            (
+                f"<div class='login-logo-wrap'>"
+                f"<img src='{html.escape(login_logo_src, quote=True)}' alt='Logo login' "
+                "style='width:84px;height:84px;max-width:84px;max-height:84px;object-fit:contain;display:block;' />"
+                "</div>"
+            ),
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -4193,7 +4209,7 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
               <div class="login-secure-title">Acceso Seguro</div>
               <div class="login-secure-icons">
                 <span class="login-secure-icon">◌</span>
-                <span class="login-secure-icon">⌁</span>
+                <span class="login-secure-icon">&#128274;</span>
               </div>
             </div>
             """,
@@ -7147,7 +7163,7 @@ def _render_admin_users_wireframe(
         flash_kind = str(flash_payload.get("kind", "info")).strip().lower() or "info"
         flash_message = str(flash_payload.get("message", "")).strip()
         if flash_message:
-            toast_icon = "✅" if flash_kind == "success" else "ℹ️"
+            toast_icon = "\u2705" if flash_kind == "success" else "\u26A0\uFE0F"
             st.toast(flash_message, icon=toast_icon)
 
     kpi_col_1, kpi_col_2, kpi_col_3 = st.columns(3)
@@ -7300,274 +7316,7 @@ def _render_admin_users_wireframe(
                             selected_username,
                         )
 
-def _build_coco_metrics_context(
-    tenant_name: str,
-    tenant_id: str,
-    platform: str,
-    s: date,
-    e: date,
-    cur_summary: dict[str, float | None],
-    prev_summary: dict[str, float | None],
-    *,
-    scope_mode: str = COCO_DEFAULT_SCOPE_MODE,
-    scope_source: str = "default",
-    total_start: date | None = None,
-    total_end: date | None = None,
-    active_start: date | None = None,
-    active_end: date | None = None,
-    total_summary_all: dict[str, float | None] | None = None,
-    total_summary_selected: dict[str, float | None] | None = None,
-    active_summary: dict[str, float | None] | None = None,
-    active_prev_summary: dict[str, float | None] | None = None,
-    requested_range_explicit: bool = False,
-    has_data_in_requested_range: bool | None = None,
-) -> dict[str, Any]:
-    metric_keys = [
-        "spend",
-        "conv",
-        "cpl",
-        "ctr",
-        "impr",
-        "clicks",
-        "cpc",
-        "cpm",
-        "cvr",
-        "sessions",
-        "users",
-        "avg_sess",
-        "bounce",
-    ]
-    current_metrics: dict[str, Any] = {}
-    previous_metrics: dict[str, Any] = {}
-    deltas: dict[str, Any] = {}
-    active_cur = active_summary if isinstance(active_summary, dict) else cur_summary
-    active_prev = active_prev_summary if isinstance(active_prev_summary, dict) else prev_summary
-    total_all = total_summary_all if isinstance(total_summary_all, dict) else cur_summary
-    total_sel = total_summary_selected if isinstance(total_summary_selected, dict) else cur_summary
-    safe_scope_mode = str(scope_mode).strip().lower()
-    if safe_scope_mode not in {"total", "filter"}:
-        safe_scope_mode = COCO_DEFAULT_SCOPE_MODE
-    scope_start = s
-    scope_end = e
-    data_start = total_start if isinstance(total_start, date) else scope_start
-    data_end = total_end if isinstance(total_end, date) else scope_end
-    for key in metric_keys:
-        cur_val = cur_summary.get(key)
-        prev_val = prev_summary.get(key)
-        current_metrics[key] = cur_val
-        previous_metrics[key] = prev_val
-        deltas[key] = pct_delta(cur_val, prev_val)
-    return {
-        "tenant_name": tenant_name,
-        "tenant_id": tenant_id,
-        "platform": platform,
-        "date_range": {"start": scope_start.isoformat(), "end": scope_end.isoformat()},
-        "current_period": current_metrics,
-        "previous_period": previous_metrics,
-        "delta_vs_previous_pct": deltas,
-        "scope": {
-            "mode": safe_scope_mode,
-            "source": str(scope_source).strip() or "default",
-            "default_mode": COCO_DEFAULT_SCOPE_MODE,
-        },
-        "data_coverage": {
-            "tenant_data_start": data_start.isoformat(),
-            "tenant_data_end": data_end.isoformat(),
-            "requested_start": scope_start.isoformat(),
-            "requested_end": scope_end.isoformat(),
-            "requested_range_explicit": bool(requested_range_explicit),
-            "has_data_in_requested_range": (
-                bool(has_data_in_requested_range)
-                if has_data_in_requested_range is not None
-                else True
-            ),
-        },
-        "total_lifetime": {
-            "date_range": {
-                "start": (total_start.isoformat() if isinstance(total_start, date) else s.isoformat()),
-                "end": (total_end.isoformat() if isinstance(total_end, date) else e.isoformat()),
-            },
-            "all_platforms": {k: total_all.get(k) for k in metric_keys},
-            "selected_platform": {k: total_sel.get(k) for k in metric_keys},
-        },
-        "active_filter": {
-            "platform": platform,
-            "date_range": {
-                "start": (active_start.isoformat() if isinstance(active_start, date) else s.isoformat()),
-                "end": (active_end.isoformat() if isinstance(active_end, date) else e.isoformat()),
-            },
-            "current_period": {k: active_cur.get(k) for k in metric_keys},
-            "previous_period": {k: active_prev.get(k) for k in metric_keys},
-            "delta_vs_previous_pct": {k: pct_delta(active_cur.get(k), active_prev.get(k)) for k in metric_keys},
-        },
-    }
-
-
-def _sanitize_coco_metric_section(section_raw: Any, allowed_metric_keys: set[str]) -> dict[str, float | None]:
-    if not isinstance(section_raw, dict):
-        return {}
-    safe_section: dict[str, float | None] = {}
-    for metric_key in allowed_metric_keys:
-        if metric_key not in section_raw:
-            continue
-        value = section_raw.get(metric_key)
-        if value is None:
-            safe_section[metric_key] = None
-            continue
-        try:
-            parsed = float(value)
-        except Exception:
-            continue
-        if math.isfinite(parsed):
-            safe_section[metric_key] = parsed
-    return safe_section
-
-
-def _sanitize_coco_context(
-    context: dict[str, Any],
-    *,
-    tenant_id: str,
-    platform: str,
-    start_day: date,
-    end_day: date,
-) -> dict[str, Any]:
-    safe_tenant = str(tenant_id).strip().lower()
-    safe_platform = str(platform).strip()
-    safe_start = start_day.isoformat()
-    safe_end = end_day.isoformat()
-    safe_context = {
-        "tenant_name": str(context.get("tenant_name", "")).strip(),
-        "tenant_id": safe_tenant,
-        "platform": safe_platform,
-        "date_range": {"start": safe_start, "end": safe_end},
-        "current_period": {},
-        "previous_period": {},
-        "delta_vs_previous_pct": {},
-        "scope": {
-            "mode": COCO_DEFAULT_SCOPE_MODE,
-            "source": "default",
-            "default_mode": COCO_DEFAULT_SCOPE_MODE,
-        },
-        "data_coverage": {
-            "tenant_data_start": safe_start,
-            "tenant_data_end": safe_end,
-            "requested_start": safe_start,
-            "requested_end": safe_end,
-            "requested_range_explicit": False,
-            "has_data_in_requested_range": True,
-        },
-        "total_lifetime": {
-            "date_range": {"start": safe_start, "end": safe_end},
-            "all_platforms": {},
-            "selected_platform": {},
-        },
-        "active_filter": {
-            "platform": safe_platform,
-            "date_range": {"start": safe_start, "end": safe_end},
-            "current_period": {},
-            "previous_period": {},
-            "delta_vs_previous_pct": {},
-        },
-        "conversation_memory": {
-            "summary": "",
-            "turn_count": 0,
-        },
-    }
-    allowed_metric_keys = {
-        "spend",
-        "conv",
-        "cpl",
-        "ctr",
-        "impr",
-        "clicks",
-        "cpc",
-        "cpm",
-        "cvr",
-        "sessions",
-        "users",
-        "avg_sess",
-        "bounce",
-    }
-    for section_key in ("current_period", "previous_period", "delta_vs_previous_pct"):
-        safe_context[section_key] = _sanitize_coco_metric_section(context.get(section_key, {}), allowed_metric_keys)
-
-    scope_raw = context.get("scope", {})
-    if isinstance(scope_raw, dict):
-        mode_raw = str(scope_raw.get("mode", COCO_DEFAULT_SCOPE_MODE)).strip().lower()
-        safe_context["scope"]["mode"] = mode_raw if mode_raw in {"total", "filter"} else COCO_DEFAULT_SCOPE_MODE
-        safe_context["scope"]["source"] = str(scope_raw.get("source", "default")).strip() or "default"
-        safe_context["scope"]["default_mode"] = COCO_DEFAULT_SCOPE_MODE
-
-    coverage_raw = context.get("data_coverage", {})
-    if isinstance(coverage_raw, dict):
-        tenant_data_start = _parse_iso_date(coverage_raw.get("tenant_data_start")) or start_day
-        tenant_data_end = _parse_iso_date(coverage_raw.get("tenant_data_end")) or end_day
-        requested_start = _parse_iso_date(coverage_raw.get("requested_start")) or start_day
-        requested_end = _parse_iso_date(coverage_raw.get("requested_end")) or end_day
-        safe_context["data_coverage"] = {
-            "tenant_data_start": tenant_data_start.isoformat(),
-            "tenant_data_end": tenant_data_end.isoformat(),
-            "requested_start": requested_start.isoformat(),
-            "requested_end": requested_end.isoformat(),
-            "requested_range_explicit": _coerce_bool(
-                coverage_raw.get("requested_range_explicit"), False
-            ),
-            "has_data_in_requested_range": _coerce_bool(
-                coverage_raw.get("has_data_in_requested_range"), True
-            ),
-        }
-
-    total_raw = context.get("total_lifetime", {})
-    if isinstance(total_raw, dict):
-        total_date_raw = total_raw.get("date_range", {})
-        if isinstance(total_date_raw, dict):
-            total_start = _parse_iso_date(total_date_raw.get("start")) or start_day
-            total_end = _parse_iso_date(total_date_raw.get("end")) or end_day
-            safe_context["total_lifetime"]["date_range"] = {
-                "start": total_start.isoformat(),
-                "end": total_end.isoformat(),
-            }
-        safe_context["total_lifetime"]["all_platforms"] = _sanitize_coco_metric_section(
-            total_raw.get("all_platforms", {}),
-            allowed_metric_keys,
-        )
-        safe_context["total_lifetime"]["selected_platform"] = _sanitize_coco_metric_section(
-            total_raw.get("selected_platform", {}),
-            allowed_metric_keys,
-        )
-
-    active_raw = context.get("active_filter", {})
-    if isinstance(active_raw, dict):
-        safe_context["active_filter"]["platform"] = str(active_raw.get("platform", safe_platform)).strip() or safe_platform
-        active_date_raw = active_raw.get("date_range", {})
-        if isinstance(active_date_raw, dict):
-            active_start = _parse_iso_date(active_date_raw.get("start")) or start_day
-            active_end = _parse_iso_date(active_date_raw.get("end")) or end_day
-            safe_context["active_filter"]["date_range"] = {
-                "start": active_start.isoformat(),
-                "end": active_end.isoformat(),
-            }
-        safe_context["active_filter"]["current_period"] = _sanitize_coco_metric_section(
-            active_raw.get("current_period", {}),
-            allowed_metric_keys,
-        )
-        safe_context["active_filter"]["previous_period"] = _sanitize_coco_metric_section(
-            active_raw.get("previous_period", {}),
-            allowed_metric_keys,
-        )
-        safe_context["active_filter"]["delta_vs_previous_pct"] = _sanitize_coco_metric_section(
-            active_raw.get("delta_vs_previous_pct", {}),
-            allowed_metric_keys,
-        )
-
-    memory_raw = context.get("conversation_memory", {})
-    if isinstance(memory_raw, dict):
-        safe_context["conversation_memory"] = {
-            "summary": _coco_trim_text(memory_raw.get("summary", ""), max_chars=COCO_MEMORY_SUMMARY_MAX_CHARS),
-            "turn_count": _normalize_non_negative_int(memory_raw.get("turn_count", 0), 0, minimum=0, maximum=5_000),
-        }
-    return safe_context
-
+# Context builder moved to coco_agent.context_builder.
 
 def _normalize_question_text(value: Any) -> str:
     raw = str(value or "").strip().lower()
@@ -7678,1448 +7427,7 @@ def _question_has_last_year_intent(normalized_question: str) -> bool:
     return any(_is_one_edit_or_adjacent_swap(word, "pasado") for word in words)
 
 
-def _resolve_question_range(
-    question: str,
-    *,
-    data_min: date,
-    data_max: date,
-    ui_start: date,
-    ui_end: date,
-) -> tuple[date, date, bool]:
-    q = _normalize_question_text(question)
-    start = ui_start
-    end = ui_end
-    explicit = False
-    anchor_day = data_max if isinstance(data_max, date) else ui_end
-    yesterday_anchor = anchor_day - timedelta(days=1)
-
-    if not explicit:
-        asks_last_year = _question_has_last_year_intent(q)
-        asks_today = "hoy" in q
-        if asks_last_year and asks_today:
-            parsed_start = _safe_make_date(anchor_day.year - 1, 1, 1)
-            if parsed_start is not None:
-                start = parsed_start
-                end = anchor_day
-                explicit = True
-
-    if not explicit:
-        year_current_tokens = ("este ano", "este a?o", "este anio", "ano actual", "a?o actual", "anio actual")
-        if any(token in q for token in year_current_tokens):
-            parsed_start = _safe_make_date(anchor_day.year, 1, 1)
-            if parsed_start is not None:
-                start = parsed_start
-                end = anchor_day
-                explicit = True
-
-    if not explicit:
-        if re.search(r"\bayer\b", q):
-            start = yesterday_anchor
-            end = yesterday_anchor
-            explicit = True
-        elif re.search(r"\bhoy\b", q):
-            start = anchor_day
-            end = anchor_day
-            explicit = True
-
-    from_match = re.search(r"\bdesde\s+(?:el\s+)?(.+?)(?:\s+hasta\s+(?:el\s+)?(.+))?$", q)
-    if from_match:
-        parsed_start = _extract_first_date_token(str(from_match.group(1)))
-        parsed_end = _extract_first_date_token(str(from_match.group(2))) if from_match.group(2) else None
-        if parsed_start is not None:
-            start = parsed_start
-            end = parsed_end if parsed_end is not None else data_max
-            explicit = True
-
-    if not explicit:
-        between_match = re.search(r"\bentre\s+(.+?)\s+y\s+(.+)$", q)
-        if between_match:
-            parsed_start = _extract_first_date_token(str(between_match.group(1)))
-            parsed_end = _extract_first_date_token(str(between_match.group(2)))
-            if parsed_start is not None and parsed_end is not None:
-                start = parsed_start
-                end = parsed_end
-                explicit = True
-
-    if not explicit:
-        month_matches = list(
-            re.finditer(
-                r"\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)"
-                r"(?:\s+de(?:l)?\s+(20\d{2}))?\b",
-                q,
-            )
-        )
-        if month_matches:
-            month_name = str(month_matches[0].group(1)).strip().lower()
-            month_value = SPANISH_MONTHS.get(month_name)
-            year_token = str(month_matches[0].group(2) or "").strip()
-            if month_value:
-                if year_token:
-                    year_value = int(year_token)
-                else:
-                    year_value = int(ui_end.year) if isinstance(ui_end, date) else int(data_max.year)
-                month_range = _month_bounds(year_value, month_value)
-                if month_range is not None:
-                    start, end = month_range
-                    explicit = True
-
-    if not explicit:
-        year_match = re.search(r"\b(?:en|del|durante|para|de)\s+(?:el\s+)?(20\d{2})\b", q)
-        if year_match:
-            year_value = int(year_match.group(1))
-            parsed_start = _safe_make_date(year_value, 1, 1)
-            parsed_end = _safe_make_date(year_value, 12, 31)
-            if parsed_start is not None and parsed_end is not None:
-                start = parsed_start
-                end = parsed_end
-                explicit = True
-
-    if not explicit:
-        standalone_years = [int(x) for x in re.findall(r"\b(20\d{2})\b", q)]
-        unique_years = sorted(set(standalone_years))
-        if len(unique_years) == 1:
-            parsed_start = _safe_make_date(unique_years[0], 1, 1)
-            parsed_end = _safe_make_date(unique_years[0], 12, 31)
-            if parsed_start is not None and parsed_end is not None:
-                start = parsed_start
-                end = parsed_end
-                explicit = True
-
-    if not explicit:
-        asks_last_year = _question_has_last_year_intent(q)
-        if asks_last_year:
-            parsed_start = _safe_make_date(anchor_day.year - 1, 1, 1)
-            parsed_end = _safe_make_date(anchor_day.year - 1, 12, 31)
-            if parsed_start is not None and parsed_end is not None:
-                start = parsed_start
-                end = parsed_end
-                explicit = True
-
-    if not explicit:
-        start = _coerce_date_value(start, data_min, data_max)
-        end = _coerce_date_value(end, data_min, data_max)
-    if start > end:
-        start, end = end, start
-    return start, end, explicit
-
-
-def _detect_peak_day_metric(question: str) -> str:
-    q = _normalize_question_text(question)
-    if not q:
-        return ""
-    if not any(token in q for token in ("dia", "fecha")):
-        return ""
-    has_superlative = any(token in q for token in ("mayor", "maximo", "maxima", "mas alto", "mas alta", "pico"))
-    if not has_superlative and re.search(
-        (
-            r"\bmas\s+("
-            r"conversion(?:es)?|conv|inversion|gasto|spend|costo|"
-            r"impresion(?:es)?|impr|click(?:s)?|clic(?:s)?|"
-            r"cvr|ctr|cpl|cpc|cpm|tasa\s+de\s+conversion|tasa\s+de\s+clic(?:s)?|"
-            r"costo\s+por\s+lead|costo\s+por\s+clic|costo\s+por\s+mil"
-            r")\b"
-        ),
-        q,
-    ):
-        has_superlative = True
-    if not has_superlative and "mejor" in q:
-        has_superlative = True
-    if not has_superlative:
-        return ""
-    if any(token in q for token in ("cvr", "tasa de conversion", "ratio de conversion")):
-        return "cvr"
-    if any(token in q for token in ("ctr", "tasa de clic", "tasa de clics")):
-        return "ctr"
-    if any(token in q for token in ("cpl", "costo por lead", "coste por lead")):
-        return "cpl"
-    if any(token in q for token in ("cpc", "costo por clic", "coste por clic")):
-        return "cpc"
-    if any(token in q for token in ("cpm", "costo por mil", "coste por mil")):
-        return "cpm"
-    if any(token in q for token in ("conversion", "conv")):
-        return "conv"
-    if any(token in q for token in ("inversion", "gasto", "spend", "costo")):
-        return "spend"
-    if any(token in q for token in ("impresion", "impr")):
-        return "impr"
-    if any(token in q for token in ("click", "clic")):
-        return "clicks"
-    return ""
-
-
-def _platform_from_question(question: str) -> str:
-    q = _normalize_question_text(question)
-    if not q:
-        return ""
-    if any(token in q for token in ("google", "google ads", "adwords", "gads")):
-        return "Google"
-    if any(token in q for token in ("meta", "facebook", "instagram", "fb")):
-        return "Meta"
-    return ""
-
-
-def _weekday_name_es(day_value: date) -> str:
-    return WEEKDAY_NAMES_ES.get(int(day_value.weekday()), "desconocido")
-
-
-def _is_weekday_followup_question(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    if "dia de la semana" in q:
-        return True
-    if "weekday" in q:
-        return True
-    if re.search(r"\bque\s+dia\b", q) and any(token in q for token in ("era", "fue", "caia", "cayo")):
-        return True
-    return False
-
-
-def _try_resolve_weekday_followup_question(
-    *,
-    question: str,
-    last_context: dict[str, Any] | None,
-    include_actions: bool = True,
-) -> tuple[str, dict[str, str]]:
-    if not _is_weekday_followup_question(question):
-        return "", {}
-    parsed_day = _extract_first_date_token(question)
-    source = "pregunta"
-    ctx = last_context if isinstance(last_context, dict) else {}
-    if parsed_day is None:
-        parsed_day = _parse_iso_date(ctx.get("peak_day"))
-        source = "contexto_previo"
-    if parsed_day is None:
-        return "", {}
-
-    weekday_name = _weekday_name_es(parsed_day)
-    metric_key = str(ctx.get("metric_key", "")).strip()
-    metric_label = str(KPI_CATALOG.get(metric_key, {}).get("label", metric_key)).strip() if metric_key else ""
-    finding_lines = [f"{parsed_day.isoformat()} fue {weekday_name}."]
-    if source == "contexto_previo" and metric_label:
-        finding_lines.append(f"La fecha corresponde al último resultado consultado de {metric_label.lower()}.")
-    answer = _format_coco_structured_answer(
-        headline=f"La fecha {parsed_day.isoformat()} fue {weekday_name}.",
-        findings=finding_lines,
-        actions=(
-            ["Si quieres, te doy el top 3 de días por ese mismo indicador."]
-            if include_actions
-            else []
-        ),
-    )
-    meta = {
-        "resolver": "deterministic_weekday",
-        "target_date": parsed_day.isoformat(),
-        "source": source,
-    }
-    return answer, meta
-
-
-def _is_top_piece_period_followup_question(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    asks_period = bool(
-        re.search(r"\ben\s+que\s+(per.?odo|rango|fecha|lapso)\b", q)
-        or re.search(r"\b(per.?odo|rango|fecha|cuando)\b", q)
-    )
-    references_previous = any(
-        token in q
-        for token in (
-            "esa ",
-            "ese ",
-            "esas ",
-            "esos ",
-            "esas conversion",
-            "esa conversion",
-            "esa pieza",
-            "esa campana",
-            "ese resultado",
-            "pmax",
-        )
-    )
-    return bool(asks_period and references_previous)
-
-
-def _try_resolve_top_piece_period_followup_question(
-    *,
-    question: str,
-    last_context: dict[str, Any] | None,
-    include_actions: bool = True,
-) -> tuple[str, dict[str, str]]:
-    if not _is_top_piece_period_followup_question(question):
-        return "", {}
-    ctx = last_context if isinstance(last_context, dict) else {}
-    if str(ctx.get("resolver", "")).strip().lower() != "deterministic_top_piece":
-        return "", {}
-    range_start = _parse_iso_date(ctx.get("range_start"))
-    range_end = _parse_iso_date(ctx.get("range_end"))
-    if range_start is None or range_end is None:
-        return "", {}
-
-    top_piece_name = str(ctx.get("top_piece_name", "")).strip()
-    metric_key = str(ctx.get("metric_key", "")).strip()
-    platforms = str(ctx.get("platforms", "")).strip()
-    metric_label = _piece_metric_label(metric_key) if metric_key else "conversiones"
-    subject_name = top_piece_name or "la pieza/campaña consultada"
-
-    findings = [
-        f"El cálculo se hizo para `{subject_name}` en el rango {range_start.isoformat()} a {range_end.isoformat()}.",
-    ]
-    if platforms:
-        findings.append(f"Plataformas consideradas en ese resultado: {platforms}.")
-    answer = _format_coco_structured_answer(
-        headline=(
-            f"Esas {metric_label} corresponden al periodo {range_start.isoformat()} a {range_end.isoformat()}."
-        ),
-        findings=findings,
-        actions=(
-            [
-                "Si quieres, te desgloso ese periodo por mes o por plataforma para ver en qué tramo se concentraron.",
-            ]
-            if include_actions
-            else []
-        ),
-    )
-    meta = {
-        "resolver": "deterministic_top_piece_followup_range",
-        "range_start": range_start.isoformat(),
-        "range_end": range_end.isoformat(),
-        "top_piece_name": subject_name,
-        "metric_key": metric_key,
-        "source": "contexto_previo",
-    }
-    return answer, meta
-
-
-def _extract_comparison_years(question: str) -> list[int]:
-    q = _normalize_question_text(question)
-    if not q:
-        return []
-    found = [int(y) for y in re.findall(r"\b(20\d{2})\b", q)]
-    years: list[int] = []
-    seen: set[int] = set()
-    for year_value in found:
-        if year_value in seen:
-            continue
-        years.append(year_value)
-        seen.add(year_value)
-    return years
-
-
-def _extract_first_n_months(question: str) -> int | None:
-    q = _normalize_question_text(question)
-    if not q:
-        return None
-    if "primer trimestre" in q or "q1" in q:
-        return 3
-    if "primer semestre" in q:
-        return 6
-    if re.search(r"\benero\s*(?:y|-|/)\s*febrero\b", q):
-        return 2
-    word_to_num = {
-        "uno": 1,
-        "dos": 2,
-        "tres": 3,
-        "cuatro": 4,
-        "cinco": 5,
-        "seis": 6,
-        "siete": 7,
-        "ocho": 8,
-        "nueve": 9,
-        "diez": 10,
-        "once": 11,
-        "doce": 12,
-    }
-    month_count_match = re.search(
-        r"\b(?:los\s+)?(?:primeros\s+)?(\d{1,2}|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s+primeros?\s+mes(?:es)?\b",
-        q,
-    )
-    if month_count_match is None:
-        month_count_match = re.search(
-            r"\bprimeros?\s+(\d{1,2}|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s+mes(?:es)?\b",
-            q,
-        )
-    if month_count_match is None:
-        return None
-    token = str(month_count_match.group(1)).strip().lower()
-    if token.isdigit():
-        value = int(token)
-    else:
-        value = int(word_to_num.get(token, 0))
-    if value < 1 or value > 12:
-        return None
-    return value
-
-
-def _is_year_period_comparison_question(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    compare_tokens = ("compara", "comparar", "comparativo", "vs", "versus", "contra")
-    if not any(token in q for token in compare_tokens):
-        return False
-    years = _extract_comparison_years(q)
-    if len(years) < 2:
-        return False
-    return _extract_first_n_months(q) is not None
-
-
-def _try_resolve_year_period_comparison_question(
-    *,
-    question: str,
-    df_base: pd.DataFrame,
-    selected_platform: str,
-    include_actions: bool = True,
-) -> tuple[str, dict[str, str]]:
-    if not _is_year_period_comparison_question(question):
-        return "", {}
-    if df_base.empty or "date" not in df_base.columns:
-        return "", {}
-
-    years = _extract_comparison_years(question)
-    if len(years) < 2:
-        return "", {}
-    base_year = int(years[0])
-    target_year = int(years[1])
-    month_count = _extract_first_n_months(question)
-    if month_count is None:
-        return "", {}
-    month_count = max(1, min(int(month_count), 12))
-
-    base_start = _safe_make_date(base_year, 1, 1)
-    target_start = _safe_make_date(target_year, 1, 1)
-    base_month_range = _month_bounds(base_year, month_count)
-    target_month_range = _month_bounds(target_year, month_count)
-    if (
-        base_start is None
-        or target_start is None
-        or base_month_range is None
-        or target_month_range is None
-    ):
-        return "", {}
-    base_end = base_month_range[1]
-    target_end = target_month_range[1]
-
-    cp_base = df_base[(df_base["date"] >= base_start) & (df_base["date"] <= base_end)].copy()
-    cp_target = df_base[(df_base["date"] >= target_start) & (df_base["date"] <= target_end)].copy()
-    if cp_base.empty or cp_target.empty:
-        data_min = df_base["date"].min()
-        data_max = df_base["date"].max()
-        missing_periods: list[str] = []
-        if cp_base.empty:
-            missing_periods.append(
-                f"Sin datos para {base_year}: {base_start.isoformat()} a {base_end.isoformat()}."
-            )
-        if cp_target.empty:
-            missing_periods.append(
-                f"Sin datos para {target_year}: {target_start.isoformat()} a {target_end.isoformat()}."
-            )
-        if isinstance(data_min, date) and isinstance(data_max, date):
-            missing_periods.append(f"Cobertura disponible del tenant: {data_min.isoformat()} a {data_max.isoformat()}.")
-        answer = _format_coco_structured_answer(
-            headline="No hay cobertura completa para comparar los periodos solicitados.",
-            findings=missing_periods,
-            actions=(["Ajusta los años o valida la cobertura histórica del tenant."] if include_actions else []),
-        )
-        meta = {
-            "resolver": "deterministic_year_period_comparison",
-            "metric_key": "multi_kpi",
-            "range_start": base_start.isoformat(),
-            "range_end": target_end.isoformat(),
-            "applied_platform": selected_platform,
-            "comparison_years": f"{base_year},{target_year}",
-            "comparison_month_count": str(month_count),
-        }
-        return answer, meta
-
-    asked_platform = _platform_from_question(question)
-    both_platforms = _question_mentions_both_major_platforms(question)
-    if both_platforms:
-        platforms_to_use = ["Meta", "Google"]
-    elif asked_platform in {"Meta", "Google"}:
-        platforms_to_use = [asked_platform]
-    elif selected_platform in {"Meta", "Google"}:
-        platforms_to_use = [selected_platform]
-    else:
-        platforms_to_use = ["All"]
-
-    period_label_end = MONTH_NAMES_ES.get(month_count, f"mes {month_count}")
-    period_label = f"enero a {period_label_end}"
-    findings: list[str] = []
-    insight_lines: list[str] = []
-    metric_fmt = {k: str(KPI_CATALOG.get(k, {}).get("fmt", "int")).strip() for k in KPI_CATALOG.keys()}
-
-    for platform_name in platforms_to_use:
-        base_metrics = summary(cp_base, platform_name)
-        target_metrics = summary(cp_target, platform_name)
-        prefix = f"{platform_name}: " if len(platforms_to_use) > 1 else ""
-
-        findings.append(
-            f"{prefix}{base_year}: Gasto {_format_kpi_value(metric_fmt['spend'], base_metrics.get('spend'))}, "
-            f"Conversiones {_format_kpi_value(metric_fmt['conv'], base_metrics.get('conv'))}, "
-            f"Clics {_format_kpi_value(metric_fmt['clicks'], base_metrics.get('clicks'))}, "
-            f"Impresiones {_format_kpi_value(metric_fmt['impr'], base_metrics.get('impr'))}, "
-            f"CTR {_format_kpi_value(metric_fmt['ctr'], base_metrics.get('ctr'))}, "
-            f"CVR {_format_kpi_value(metric_fmt['cvr'], base_metrics.get('cvr'))}, "
-            f"CPC {_format_kpi_value(metric_fmt['cpc'], base_metrics.get('cpc'))}."
-        )
-        findings.append(
-            f"{prefix}{target_year}: Gasto {_format_kpi_value(metric_fmt['spend'], target_metrics.get('spend'))}, "
-            f"Conversiones {_format_kpi_value(metric_fmt['conv'], target_metrics.get('conv'))}, "
-            f"Clics {_format_kpi_value(metric_fmt['clicks'], target_metrics.get('clicks'))}, "
-            f"Impresiones {_format_kpi_value(metric_fmt['impr'], target_metrics.get('impr'))}, "
-            f"CTR {_format_kpi_value(metric_fmt['ctr'], target_metrics.get('ctr'))}, "
-            f"CVR {_format_kpi_value(metric_fmt['cvr'], target_metrics.get('cvr'))}, "
-            f"CPC {_format_kpi_value(metric_fmt['cpc'], target_metrics.get('cpc'))}."
-        )
-
-        d_spend = pct_delta(target_metrics.get("spend"), base_metrics.get("spend"))
-        d_conv = pct_delta(target_metrics.get("conv"), base_metrics.get("conv"))
-        d_clicks = pct_delta(target_metrics.get("clicks"), base_metrics.get("clicks"))
-        d_ctr = pct_delta(target_metrics.get("ctr"), base_metrics.get("ctr"))
-        d_cvr = pct_delta(target_metrics.get("cvr"), base_metrics.get("cvr"))
-        d_cpc = pct_delta(target_metrics.get("cpc"), base_metrics.get("cpc"))
-        d_cpl = pct_delta(target_metrics.get("cpl"), base_metrics.get("cpl"))
-
-        findings.append(
-            f"{prefix}Variación {target_year} vs {base_year}: "
-            f"Gasto {fmt_delta_compact(d_spend)}, "
-            f"Conversiones {fmt_delta_compact(d_conv)}, "
-            f"Clics {fmt_delta_compact(d_clicks)}, "
-            f"CTR {fmt_delta_compact(d_ctr)}, "
-            f"CVR {fmt_delta_compact(d_cvr)}, "
-            f"CPC {fmt_delta_compact(d_cpc)}."
-        )
-
-        if d_conv is not None:
-            conv_trend = "crecieron" if d_conv >= 0 else "cayeron"
-            insight_lines.append(
-                f"{prefix}Conversión: las conversiones {conv_trend} {fmt_delta_compact(d_conv)} en {target_year} vs {base_year}."
-            )
-        if d_cpl is not None:
-            if d_cpl < 0:
-                insight_lines.append(
-                    f"{prefix}Eficiencia: el CPL mejoró {abs(d_cpl):.1f}% (más bajo en {target_year})."
-                )
-            else:
-                insight_lines.append(
-                    f"{prefix}Eficiencia: el CPL empeoró {fmt_delta_compact(d_cpl)} (más alto en {target_year})."
-                )
-        if d_ctr is not None and d_cvr is not None:
-            insight_lines.append(
-                f"{prefix}Calidad de tráfico: CTR {fmt_delta_compact(d_ctr)} y CVR {fmt_delta_compact(d_cvr)}."
-            )
-
-    findings.append(f"Rango comparado ({period_label}): {base_year} vs {target_year}.")
-    findings.append(f"Plataforma aplicada: {', '.join(platforms_to_use)}.")
-    if insight_lines:
-        findings.append("Insights clave:")
-        findings.extend(insight_lines[:3] if len(platforms_to_use) == 1 else insight_lines[:4])
-
-    answer = _format_coco_structured_answer(
-        headline=(
-            f"Comparativo {period_label} {target_year} vs {base_year} con datos reales del tenant."
-        ),
-        findings=findings,
-        actions=(
-            [
-                "Si quieres, te lo desgloso por mes para ver en cuál se concentra la variación.",
-                "También puedo separar el comparativo por plataforma (Meta vs Google).",
-            ]
-            if include_actions
-            else []
-        ),
-    )
-    meta = {
-        "resolver": "deterministic_year_period_comparison",
-        "metric_key": "multi_kpi",
-        "range_start": base_start.isoformat(),
-        "range_end": target_end.isoformat(),
-        "applied_platform": ",".join(platforms_to_use),
-        "comparison_years": f"{base_year},{target_year}",
-        "comparison_month_count": str(month_count),
-    }
-    return answer, meta
-
-
-def _is_monthly_breakdown_question(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    monthly_terms = (
-        "por mes",
-        "mes a mes",
-        "mensual",
-        "cada mes",
-    )
-    return any(term in q for term in monthly_terms)
-
-
-def _detect_monthly_metric(question: str) -> str:
-    q = _normalize_question_text(question)
-    if not q:
-        return ""
-    if any(token in q for token in ("conversion", "conv", "lead", "leads")):
-        return "conv"
-    if any(token in q for token in ("inversion", "gasto", "spend", "costo", "coste")):
-        return "spend"
-    if any(token in q for token in ("click", "clic")):
-        return "clicks"
-    if any(token in q for token in ("impresion", "impr")):
-        return "impr"
-    if "cpl" in q:
-        return "cpl"
-    if "cpc" in q:
-        return "cpc"
-    if "cpm" in q:
-        return "cpm"
-    if "ctr" in q:
-        return "ctr"
-    if "cvr" in q:
-        return "cvr"
-    if any(token in q for token in ("sesion", "session")):
-        return "sessions"
-    if any(token in q for token in ("usuario", "users")):
-        return "users"
-    if "rebote" in q:
-        return "bounce"
-    if "duracion" in q or "tiempo" in q:
-        return "avg_sess"
-    return "spend" if _is_monthly_breakdown_question(question) else ""
-
-
-def _iter_month_windows(start_day: date, end_day: date) -> list[tuple[date, date]]:
-    windows: list[tuple[date, date]] = []
-    current = date(start_day.year, start_day.month, 1)
-    while current <= end_day:
-        month_last = calendar.monthrange(current.year, current.month)[1]
-        month_end = date(current.year, current.month, month_last)
-        win_start = current if current >= start_day else start_day
-        win_end = month_end if month_end <= end_day else end_day
-        windows.append((win_start, win_end))
-        if current.month == 12:
-            current = date(current.year + 1, 1, 1)
-        else:
-            current = date(current.year, current.month + 1, 1)
-    return windows
-
-
-def _monthly_kpi_value(part: pd.DataFrame, *, platform_prefix: str, kpi_key: str) -> float | None:
-    spend = float(_series_num(part, f"{platform_prefix}_spend").sum())
-    clicks = float(_series_num(part, f"{platform_prefix}_clicks").sum())
-    conv = float(_series_num(part, f"{platform_prefix}_conv").sum())
-    impr = float(_series_num(part, f"{platform_prefix}_impr").sum())
-    sessions = float(_series_num(part, "ga4_sessions").sum())
-    users = float(_series_num(part, "ga4_users").sum())
-    if kpi_key == "spend":
-        return spend
-    if kpi_key == "conv":
-        return conv
-    if kpi_key == "clicks":
-        return clicks
-    if kpi_key == "impr":
-        return impr
-    if kpi_key == "sessions":
-        return sessions
-    if kpi_key == "users":
-        return users
-    if kpi_key == "cpl":
-        return sdiv(spend, conv)
-    if kpi_key == "cpc":
-        return sdiv(spend, clicks)
-    if kpi_key == "cpm":
-        return (spend * 1000.0 / impr) if impr > 0 else None
-    if kpi_key == "ctr":
-        return sdiv(clicks, impr)
-    if kpi_key == "cvr":
-        return sdiv(conv, clicks)
-    if kpi_key == "avg_sess":
-        if sessions <= 0:
-            return None
-        weighted = float((_series_num(part, "ga4_avg_sess") * _series_num(part, "ga4_sessions")).sum())
-        return weighted / sessions
-    if kpi_key == "bounce":
-        if part.empty:
-            return None
-        bounce_series = _series_num(part, "ga4_bounce")
-        return float(bounce_series.mean()) if not bounce_series.empty else None
-    return None
-
-
-def _try_resolve_monthly_breakdown_question(
-    *,
-    question: str,
-    df_base: pd.DataFrame,
-    selected_platform: str,
-    ui_start: date,
-    ui_end: date,
-    include_actions: bool = True,
-) -> tuple[str, dict[str, str]]:
-    if not _is_monthly_breakdown_question(question):
-        return "", {}
-    if df_base.empty or "date" not in df_base.columns:
-        return "", {}
-
-    metric_key = _detect_monthly_metric(question)
-    if not metric_key:
-        return "", {}
-
-    data_min = df_base["date"].min()
-    data_max = df_base["date"].max()
-    if not isinstance(data_min, date) or not isinstance(data_max, date):
-        return "", {}
-
-    range_start, range_end, explicit_range = _resolve_question_range(
-        question,
-        data_min=data_min,
-        data_max=data_max,
-        ui_start=ui_start,
-        ui_end=ui_end,
-    )
-    cp = df_base[(df_base["date"] >= range_start) & (df_base["date"] <= range_end)].copy()
-    if cp.empty:
-        answer = _format_coco_structured_answer(
-            headline="No encontré datos para ese rango de fechas.",
-            findings=[f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}."],
-            actions=(
-                ["Ajusta el rango o valida que exista histórico para ese periodo."]
-                if include_actions
-                else []
-            ),
-        )
-        meta = {
-            "resolver": "deterministic_monthly_breakdown",
-            "metric_key": metric_key,
-            "range_start": range_start.isoformat(),
-            "range_end": range_end.isoformat(),
-            "range_source": "pregunta" if explicit_range else "selector",
-            "applied_platform": selected_platform,
-        }
-        return answer, meta
-
-    asked_platform = _platform_from_question(question)
-    both_platforms = _question_mentions_both_major_platforms(question)
-    if both_platforms:
-        platforms_to_use = ["Meta", "Google"]
-    elif asked_platform in {"Meta", "Google"}:
-        platforms_to_use = [asked_platform]
-    elif selected_platform in {"Meta", "Google"}:
-        platforms_to_use = [selected_platform]
-    else:
-        platforms_to_use = ["All"]
-    platform_prefix_map = {"All": "total", "Meta": "meta", "Google": "google"}
-
-    fmt_key = str(KPI_CATALOG.get(metric_key, {}).get("fmt", "int")).strip()
-    metric_label = str(KPI_CATALOG.get(metric_key, {}).get("label", metric_key)).strip()
-    additive_metrics = {"spend", "conv", "clicks", "impr", "sessions", "users"}
-    month_windows = _iter_month_windows(range_start, range_end)
-    month_lines: list[str] = []
-    for month_start, month_end in month_windows:
-        month_part = cp[(cp["date"] >= month_start) & (cp["date"] <= month_end)].copy()
-        month_name = MONTH_NAMES_ES.get(month_start.month, month_start.strftime("%B").lower()).capitalize()
-        month_tag = f"{month_name} {month_start.year}" if range_start.year != range_end.year else month_name
-        if len(platforms_to_use) == 2:
-            meta_value = _monthly_kpi_value(month_part, platform_prefix="meta", kpi_key=metric_key)
-            google_value = _monthly_kpi_value(month_part, platform_prefix="google", kpi_key=metric_key)
-            total_value = _monthly_kpi_value(month_part, platform_prefix="total", kpi_key=metric_key)
-            if metric_key in additive_metrics:
-                if meta_value is None:
-                    meta_value = 0.0
-                if google_value is None:
-                    google_value = 0.0
-                if total_value is None:
-                    total_value = 0.0
-            meta_text = _format_kpi_value(fmt_key, meta_value if meta_value is not None else None)
-            google_text = _format_kpi_value(fmt_key, google_value if google_value is not None else None)
-            total_text = _format_kpi_value(fmt_key, total_value if total_value is not None else None)
-            month_lines.append(f"{month_tag}: Meta {meta_text} | Google {google_text} | Total {total_text}")
-            continue
-
-        applied_platform = platforms_to_use[0]
-        platform_prefix = platform_prefix_map[applied_platform]
-        month_value = _monthly_kpi_value(month_part, platform_prefix=platform_prefix, kpi_key=metric_key)
-        if month_value is None and metric_key in additive_metrics:
-            month_value = 0.0
-        month_text = _format_kpi_value(fmt_key, month_value if month_value is not None else None)
-        month_lines.append(f"{month_tag}: {month_text}")
-
-    applied_platform = ", ".join(platforms_to_use)
-    full_year_mode = (
-        range_start.year == range_end.year
-        and range_start.month == 1
-        and range_start.day == 1
-        and range_end.month == 12
-        and range_end.day == 31
-    )
-    if full_year_mode:
-        headline = f"Aquí tienes {metric_label.lower()} por mes en el año {range_start.year}."
-    else:
-        headline = (
-            f"Aquí tienes {metric_label.lower()} por mes para el periodo "
-            f"{range_start.isoformat()} a {range_end.isoformat()}."
-        )
-
-    findings = list(month_lines)
-    if len(platforms_to_use) == 2:
-        total_meta = _monthly_kpi_value(cp, platform_prefix="meta", kpi_key=metric_key)
-        total_google = _monthly_kpi_value(cp, platform_prefix="google", kpi_key=metric_key)
-        total_all = _monthly_kpi_value(cp, platform_prefix="total", kpi_key=metric_key)
-        if metric_key in additive_metrics:
-            if total_meta is None:
-                total_meta = 0.0
-            if total_google is None:
-                total_google = 0.0
-            if total_all is None:
-                total_all = 0.0
-        findings.append(f"Total Meta: {_format_kpi_value(fmt_key, total_meta if total_meta is not None else None)}.")
-        findings.append(f"Total Google: {_format_kpi_value(fmt_key, total_google if total_google is not None else None)}.")
-        findings.append(f"Total combinado: {_format_kpi_value(fmt_key, total_all if total_all is not None else None)}.")
-        findings.append("Plataformas aplicadas: Meta, Google.")
-    else:
-        total_value = _monthly_kpi_value(
-            cp,
-            platform_prefix=platform_prefix_map[platforms_to_use[0]],
-            kpi_key=metric_key,
-        )
-        total_text = _format_kpi_value(fmt_key, total_value if total_value is not None else None)
-        findings.append(f"Total del periodo: {total_text}.")
-        findings.append(f"Plataforma aplicada: {applied_platform}.")
-    answer = _format_coco_structured_answer(
-        headline=headline,
-        findings=findings,
-        actions=(
-            [
-                "Si quieres, también te lo comparo mes contra mes vs el año anterior.",
-            ]
-            if include_actions
-            else []
-        ),
-    )
-    meta = {
-        "resolver": "deterministic_monthly_breakdown",
-        "metric_key": metric_key,
-        "range_start": range_start.isoformat(),
-        "range_end": range_end.isoformat(),
-        "range_source": "pregunta" if explicit_range else "selector",
-        "applied_platform": applied_platform,
-        "platforms": applied_platform,
-    }
-    return answer, meta
-
-
-def _try_resolve_peak_day_question(
-    *,
-    question: str,
-    df_base: pd.DataFrame,
-    selected_platform: str,
-    ui_start: date,
-    ui_end: date,
-    include_actions: bool = True,
-    include_platform_breakdown: bool = False,
-) -> tuple[str, dict[str, str]]:
-    metric_key = _detect_peak_day_metric(question)
-    if not metric_key:
-        return "", {}
-    if df_base.empty or "date" not in df_base.columns:
-        return "", {}
-
-    data_min = df_base["date"].min()
-    data_max = df_base["date"].max()
-    if not isinstance(data_min, date) or not isinstance(data_max, date):
-        return "", {}
-
-    range_start, range_end, explicit_range = _resolve_question_range(
-        question,
-        data_min=data_min,
-        data_max=data_max,
-        ui_start=ui_start,
-        ui_end=ui_end,
-    )
-    cp = df_base[(df_base["date"] >= range_start) & (df_base["date"] <= range_end)].copy().reset_index(drop=True)
-    if cp.empty:
-        answer = _format_coco_structured_answer(
-            headline="No encontré datos para ese rango de fechas.",
-            findings=[
-                f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}."
-            ],
-            actions=(
-                [
-                    "Ajusta el rango de fechas o valida que el tenant tenga histórico en ese periodo.",
-                ]
-                if include_actions
-                else []
-            ),
-        )
-        meta = {
-            "range_start": range_start.isoformat(),
-            "range_end": range_end.isoformat(),
-            "metric_key": metric_key,
-            "resolver": "deterministic_peak",
-            "range_source": "pregunta" if explicit_range else "selector",
-        }
-        return answer, meta
-
-    label = str(KPI_CATALOG.get(metric_key, {}).get("label", metric_key)).strip()
-    fmt_key = str(KPI_CATALOG.get(metric_key, {}).get("fmt", "int")).strip()
-    asked_platform = _platform_from_question(question)
-    effective_platform = asked_platform if asked_platform in {"Google", "Meta"} else selected_platform
-    tie_note = ""
-    applied_platform = effective_platform
-    breakdown_line = ""
-    total_series = _platform_kpi_series(cp, "total", metric_key)
-    meta_series = _platform_kpi_series(cp, "meta", metric_key)
-    google_series = _platform_kpi_series(cp, "google", metric_key)
-    if total_series is None or meta_series is None or google_series is None:
-        return "", {}
-
-    total_series = pd.to_numeric(total_series, errors="coerce").fillna(0.0)
-    meta_series = pd.to_numeric(meta_series, errors="coerce").fillna(0.0)
-    google_series = pd.to_numeric(google_series, errors="coerce").fillna(0.0)
-
-    def _peak_rows_for(series: pd.Series) -> pd.DataFrame:
-        if series.empty:
-            return cp.iloc[0:0].copy()
-        peak_val = float(series.max())
-        if not math.isfinite(peak_val):
-            return cp.iloc[0:0].copy()
-        series_num = pd.to_numeric(series, errors="coerce").fillna(0.0).astype(float)
-        tolerance = 1e-12 + (1e-9 * abs(peak_val))
-        peak_mask = (series_num - peak_val).abs() <= tolerance
-        return cp.loc[peak_mask].sort_values("date")
-
-    if effective_platform in {"Meta", "Google"}:
-        selected_series = meta_series if effective_platform == "Meta" else google_series
-        peak_rows = _peak_rows_for(selected_series)
-        if peak_rows.empty:
-            return "", {}
-        peak_row = peak_rows.iloc[0]
-        peak_idx = int(peak_row.name)
-        peak_day = peak_row["date"]
-        tie_days = int(len(peak_rows))
-        if tie_days > 1:
-            tie_note = f"Hubo empate en {tie_days} días; reporto el primero cronológico."
-        platform_value = float(selected_series.iloc[peak_idx])
-        total_value = platform_value
-        platform_label = effective_platform
-        if include_platform_breakdown:
-            counterpart = "Google" if effective_platform == "Meta" else "Meta"
-            counterpart_series = google_series if counterpart == "Google" else meta_series
-            counterpart_value = float(counterpart_series.iloc[peak_idx])
-            breakdown_line = (
-                f"Desglose por plataforma ese día: {effective_platform} ({_format_kpi_value(fmt_key, platform_value)}) "
-                f"| {counterpart} ({_format_kpi_value(fmt_key, counterpart_value)})."
-            )
-    else:
-        peak_rows = _peak_rows_for(total_series)
-        if peak_rows.empty:
-            return "", {}
-        peak_row = peak_rows.iloc[0]
-        peak_idx = int(peak_row.name)
-        peak_day = peak_row["date"]
-        tie_days = int(len(peak_rows))
-        if tie_days > 1:
-            tie_note = f"Hubo empate en {tie_days} días; reporto el primero cronológico."
-        total_value = float(total_series.iloc[peak_idx])
-        meta_value = float(meta_series.iloc[peak_idx])
-        google_value = float(google_series.iloc[peak_idx])
-        if meta_value > google_value:
-            platform_label = "Meta"
-            platform_value = meta_value
-        elif google_value > meta_value:
-            platform_label = "Google"
-            platform_value = google_value
-        else:
-            platform_label = "Empate Meta/Google"
-            platform_value = meta_value
-        applied_platform = "All"
-        if include_platform_breakdown:
-            breakdown_line = (
-                f"Desglose por plataforma ese día: Meta ({_format_kpi_value(fmt_key, meta_value)}) "
-                f"| Google ({_format_kpi_value(fmt_key, google_value)})."
-            )
-
-    peak_total_txt = _format_kpi_value(fmt_key, total_value)
-    platform_value_txt = _format_kpi_value(fmt_key, platform_value)
-    findings_lines = [
-        f"Plataforma líder ese día: {platform_label} ({platform_value_txt}).",
-        breakdown_line,
-        f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}.",
-        tie_note,
-    ]
-    answer = _format_coco_structured_answer(
-        headline=f"Día pico de {label}: {peak_day.isoformat()} ({peak_total_txt}).",
-        findings=findings_lines,
-        actions=(
-            [
-                f"Revisa creativos y campañas activas en {platform_label} durante {peak_day.isoformat()}.",
-                "Compara ese pico contra el promedio semanal para validar sostenibilidad.",
-            ]
-            if include_actions
-            else []
-        ),
-    )
-    meta = {
-        "range_start": range_start.isoformat(),
-        "range_end": range_end.isoformat(),
-        "metric_key": metric_key,
-        "resolver": "deterministic_peak",
-        "range_source": "pregunta" if explicit_range else "selector",
-        "applied_platform": applied_platform,
-        "peak_day": peak_day.isoformat(),
-        "leader_platform": platform_label,
-    }
-    return answer, meta
-
-
-def _coco_scope_guard_message(question: str) -> str:
-    q = str(question or "").strip().lower()
-    if not q:
-        return "Escribe una pregunta para continuar."
-    if len(q) > 800:
-        return "La pregunta es muy larga. Intenta con un máximo de 800 caracteres."
-    restricted_terms = [
-        "password",
-        "contrase",
-        "api key",
-        "secret",
-        "token de acceso",
-        "access token",
-        "users.json",
-        "dashboard_settings.json",
-        "config/",
-        "credencial",
-    ]
-    for term in restricted_terms:
-        if term in q:
-            return (
-                "COCO IA solo responde sobre métricas analíticas agregadas del tenant "
-                "(por defecto en alcance total/histórico o en el filtro si se solicita explícitamente). "
-                "No puede exponer configuración sensible o credenciales."
-            )
-    return ""
-
-
-def _question_requests_actions(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    action_terms = (
-        "recomienda",
-        "recomendacion",
-        "recomendaciones",
-        "accion",
-        "acciones",
-        "sugerencia",
-        "sugerencias",
-        "sugerir",
-        "que hago",
-        "que hacemos",
-        "como mejorar",
-        "como optimizar",
-        "plan",
-        "pasos",
-        "prioriza",
-        "estrategia",
-        "next step",
-        "siguiente paso",
-    )
-    return any(term in q for term in action_terms)
-
-
-def _question_requests_platform_breakdown(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    breakdown_terms = (
-        "desglose",
-        "desglosa",
-        "desglosalas",
-        "desglosalo",
-        "desglosar",
-        "por plataforma",
-        "por canal",
-        "breakdown",
-    )
-    return any(term in q for term in breakdown_terms)
-
-
-def _question_requests_total_scope(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    if _question_has_last_year_intent(q):
-        return True
-    year_current_tokens = ("este ano", "este a?o", "este anio", "ano actual", "a?o actual", "anio actual")
-    if any(token in q for token in year_current_tokens):
-        return True
-    if re.search(r"\b20\d{2}\b", q):
-        return True
-    total_terms = (
-        "total",
-        "totales",
-        "historico",
-        "historica",
-        "acumulado",
-        "acumulada",
-        "global",
-        "todo el periodo",
-        "todo el rango",
-        "todos los datos",
-        "sin filtro",
-        "desde el inicio",
-        "desde que inicio",
-    )
-    return any(term in q for term in total_terms)
-
-
-def _question_requests_filter_scope(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    filter_terms = (
-        "filtro",
-        "filtros",
-        "rango activo",
-        "periodo activo",
-        "periodo seleccionado",
-        "seleccion actual",
-        "este rango",
-        "estas fechas",
-        "hoy",
-        "ayer",
-        "ultimos 7 dias",
-        "ultimos 30 dias",
-        "mes actual",
-    )
-    return any(term in q for term in filter_terms)
-
-
-def _resolve_coco_scope_mode(
-    question: str,
-    *,
-    last_context: dict[str, Any] | None = None,
-    default_mode: str = COCO_DEFAULT_SCOPE_MODE,
-) -> tuple[str, str]:
-    preferred = str(default_mode).strip().lower()
-    if preferred not in {"total", "filter"}:
-        preferred = COCO_DEFAULT_SCOPE_MODE
-    ctx = last_context if isinstance(last_context, dict) else {}
-    last_scope = str(ctx.get("preferred_scope", "")).strip().lower()
-    if _question_requests_total_scope(question):
-        return "total", "explicit_question"
-    if _question_requests_filter_scope(question):
-        return "filter", "explicit_question"
-    if last_scope in {"total", "filter"}:
-        return last_scope, "conversation_memory"
-    return preferred, "default"
-
-
-def _question_mentions_both_major_platforms(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    mentions_google = "google" in q
-    mentions_meta = any(token in q for token in ("meta", "facebook", "instagram", "fb"))
-    return bool(mentions_google and mentions_meta)
-
-
-def _detect_piece_metric(question: str) -> str:
-    q = _normalize_question_text(question)
-    if not q:
-        return ""
-    if any(token in q for token in ("conversion", "conv")):
-        return "conversions"
-    if any(token in q for token in ("resultado", "resultados", "rendimiento", "performance", "desempeno")):
-        return "conversions"
-    if any(token in q for token in ("inversion", "gasto", "spend", "costo")):
-        return "spend"
-    if any(token in q for token in ("impresion", "impr")):
-        return "impressions"
-    if any(token in q for token in ("click", "clic")):
-        return "clicks"
-    return ""
-
-
-def _is_piece_top_question(question: str) -> bool:
-    q = _normalize_question_text(question)
-    if not q:
-        return False
-    mentions_piece = any(token in q for token in ("pieza", "piezas", "campana", "campanas", "anuncio", "creative"))
-    mentions_rank = any(token in q for token in ("mayor", "maximo", "maxima", "mas", "top", "mejor"))
-    return bool(mentions_piece and mentions_rank and _detect_piece_metric(q))
-
-
-def _piece_metric_label(metric_key: str) -> str:
-    mapping = {
-        "conversions": "conversiones",
-        "spend": "inversión",
-        "impressions": "impresiones",
-        "clicks": "clics",
-    }
-    return mapping.get(metric_key, metric_key)
-
-
-def _piece_metric_fmt(metric_key: str, value: float | None) -> str:
-    if metric_key == "spend":
-        return fmt_money(value)
-    if metric_key == "impressions":
-        return fmt_compact(value)
-    if metric_key == "clicks":
-        return f"{int(round(sf(value))):,}" if value is not None else "N/A"
-    return f"{int(round(sf(value))):,}" if value is not None else "N/A"
-
-
-def _top_piece_for_platform(
-    cp: pd.DataFrame,
-    *,
-    platform_name: str,
-    metric_key: str,
-    id_col: str = "campaign_id",
-    name_col: str = "campaign_name",
-) -> dict[str, Any] | None:
-    if cp.empty:
-        return None
-    part = cp[cp["platform"] == platform_name].copy()
-    if part.empty:
-        return None
-    agg = (
-        part.groupby([id_col, name_col], as_index=False)
-        .agg(
-            conversions=("conversions", "sum"),
-            spend=("spend", "sum"),
-            impressions=("impressions", "sum"),
-            clicks=("clicks", "sum"),
-        )
-        .sort_values([metric_key, "conversions", "clicks"], ascending=[False, False, False], na_position="last")
-    )
-    if agg.empty:
-        return None
-    row = agg.iloc[0]
-    return {
-        "piece_id": str(row.get(id_col, "")).strip(),
-        "piece_name": str(row.get(name_col, "")).strip() or "Sin nombre",
-        "metric_value": float(row.get(metric_key, 0.0)),
-        "conversions": float(row.get("conversions", 0.0)),
-        "spend": float(row.get("spend", 0.0)),
-        "impressions": float(row.get("impressions", 0.0)),
-        "clicks": float(row.get("clicks", 0.0)),
-    }
-
-
-def _try_resolve_top_piece_question(
-    *,
-    question: str,
-    camp_df: pd.DataFrame,
-    piece_df: pd.DataFrame | None = None,
-    selected_platform: str,
-    ui_start: date,
-    ui_end: date,
-    include_actions: bool = True,
-) -> tuple[str, dict[str, str]]:
-    if not _is_piece_top_question(question):
-        return "", {}
-
-    use_piece_data = bool(
-        isinstance(piece_df, pd.DataFrame)
-        and not piece_df.empty
-        and "date" in piece_df.columns
-    )
-    source_df = piece_df if use_piece_data else camp_df
-    if source_df is None or source_df.empty or "date" not in source_df.columns:
-        return "", {}
-
-    metric_key = _detect_piece_metric(question)
-    if not metric_key:
-        metric_key = "conversions"
-
-    cp = source_df.copy()
-    cp["date"] = pd.to_datetime(cp["date"], errors="coerce").dt.date
-    cp = cp.dropna(subset=["date"])
-    required_defaults: dict[str, Any] = {
-        "platform": "",
-        "spend": 0.0,
-        "impressions": 0.0,
-        "clicks": 0.0,
-        "conversions": 0.0,
-    }
-    if use_piece_data:
-        required_defaults.update(
-            {
-                "piece_id": "",
-                "piece_name": "",
-                "ad_id": "",
-                "ad_name": "",
-                "campaign_id": "",
-                "campaign_name": "",
-            }
-        )
-    else:
-        required_defaults.update(
-            {
-                "campaign_id": "",
-                "campaign_name": "",
-            }
-        )
-    for col, default in required_defaults.items():
-        if col not in cp.columns:
-            cp[col] = default
-    if use_piece_data:
-        cp = cp.reset_index(drop=True)
-        cp["piece_id"] = cp.apply(
-            lambda r: (
-                str(r.get("piece_id", "")).strip()
-                or str(r.get("ad_id", "")).strip()
-                or f"piece::{str(r.get('campaign_id', '')).strip() or 'na'}::{r.name}"
-            ),
-            axis=1,
-        )
-        cp["piece_name"] = cp.apply(
-            lambda r: (
-                str(r.get("piece_name", "")).strip()
-                or str(r.get("ad_name", "")).strip()
-                or str(r.get("campaign_name", "")).strip()
-                or "Sin nombre"
-            ),
-            axis=1,
-        )
-        fallback_cp = pd.DataFrame()
-        if isinstance(camp_df, pd.DataFrame) and not camp_df.empty and "date" in camp_df.columns:
-            fallback_cp = camp_df.copy()
-            for col, default in required_defaults.items():
-                if col not in fallback_cp.columns:
-                    fallback_cp[col] = default
-            piece_platforms = (
-                set(cp["platform"].astype(str).str.strip())
-                if "platform" in cp.columns
-                else set()
-            )
-            if "platform" in fallback_cp.columns:
-                fallback_cp = fallback_cp[
-                    ~fallback_cp["platform"].astype(str).str.strip().isin(piece_platforms)
-                ]
-            fallback_cp = fallback_cp.reset_index(drop=True)
-            if not fallback_cp.empty:
-                fallback_cp["piece_id"] = fallback_cp.apply(
-                    lambda r: (
-                        str(r.get("campaign_id", "")).strip()
-                        or f"piece::{str(r.get('platform', '')).strip() or 'na'}::{r.name}"
-                    ),
-                    axis=1,
-                )
-                fallback_cp["piece_name"] = fallback_cp.apply(
-                    lambda r: (
-                        str(r.get("campaign_name", "")).strip()
-                        or "Sin nombre"
-                    ),
-                    axis=1,
-                )
-                for col in cp.columns:
-                    if col not in fallback_cp.columns:
-                        fallback_cp[col] = ""
-                cp = pd.concat([cp, fallback_cp[cp.columns]], ignore_index=True)
-        id_col = "piece_id"
-        name_col = "piece_name"
-    else:
-        cp["piece_id"] = cp["campaign_id"].astype(str)
-        cp["piece_name"] = cp["campaign_name"].astype(str)
-        id_col = "piece_id"
-        name_col = "piece_name"
-    cp["platform"] = cp["platform"].astype(str).str.strip().replace({"": "N/A"})
-    for num_col in ("spend", "impressions", "clicks", "conversions"):
-        cp[num_col] = pd.to_numeric(cp[num_col], errors="coerce").fillna(0.0)
-    if cp.empty:
-        return "", {}
-
-    data_min = cp["date"].min()
-    data_max = cp["date"].max()
-    if not isinstance(data_min, date) or not isinstance(data_max, date):
-        return "", {}
-    range_start, range_end, explicit_range = _resolve_question_range(
-        question,
-        data_min=data_min,
-        data_max=data_max,
-        ui_start=ui_start,
-        ui_end=ui_end,
-    )
-    cp = cp[(cp["date"] >= range_start) & (cp["date"] <= range_end)].copy()
-    if cp.empty:
-        return "", {}
-
-    asked_platform = _platform_from_question(question)
-    both_platforms = _question_mentions_both_major_platforms(question)
-
-    platforms_to_use: list[str]
-    if both_platforms:
-        platforms_to_use = ["Meta", "Google"]
-    elif asked_platform in {"Meta", "Google"}:
-        platforms_to_use = [asked_platform]
-    elif selected_platform in {"Meta", "Google"}:
-        platforms_to_use = [selected_platform]
-    else:
-        platforms_to_use = ["Meta", "Google"]
-
-    metric_label = _piece_metric_label(metric_key)
-    findings: list[str] = []
-    top_rows: dict[str, dict[str, Any] | None] = {}
-    for platform_name in platforms_to_use:
-        top_rows[platform_name] = _top_piece_for_platform(
-            cp,
-            platform_name=platform_name,
-            metric_key=metric_key,
-            id_col=id_col,
-            name_col=name_col,
-        )
-        row = top_rows[platform_name]
-        if row is None:
-            findings.append(f"{platform_name}: sin piezas/campañas con datos para el rango.")
-            continue
-        findings.append(
-            f"{platform_name}: {row.get('piece_name')} "
-            f"({_piece_metric_fmt(metric_key, float(row.get('metric_value', 0.0)))} {metric_label})."
-        )
-
-    if not findings:
-        return "", {}
-
-    overall_row: dict[str, Any] | None = None
-    if len(platforms_to_use) == 1:
-        overall_row = top_rows.get(platforms_to_use[0])
-    else:
-        valid_rows = [row for row in top_rows.values() if isinstance(row, dict)]
-        if valid_rows:
-            overall_row = sorted(valid_rows, key=lambda row: float(row.get("metric_value", 0.0)), reverse=True)[0]
-    if overall_row is None:
-        return "", {}
-
-    headline = (
-        f"Top pieza/campaña por {metric_label}: {overall_row.get('piece_name')} "
-        f"({_piece_metric_fmt(metric_key, float(overall_row.get('metric_value', 0.0)))})."
-    )
-    findings.append(f"Rango aplicado: {range_start.isoformat()} a {range_end.isoformat()}.")
-    answer = _format_coco_structured_answer(
-        headline=headline,
-        findings=findings,
-        actions=(
-            [
-                "Compara el top creativo/campaña con el segundo lugar para validar concentración de resultados.",
-            ]
-            if include_actions
-            else []
-        ),
-    )
-    meta = {
-        "resolver": "deterministic_top_piece",
-        "metric_key": metric_key,
-        "range_start": range_start.isoformat(),
-        "range_end": range_end.isoformat(),
-        "range_source": "pregunta" if explicit_range else "selector",
-        "platforms": ",".join(platforms_to_use),
-        "top_piece_name": str(overall_row.get("piece_name", "")).strip(),
-        "entity_source": "paid_piece_daily" if use_piece_data else "campaign_daily_fallback",
-    }
-    return answer, meta
-
+# Deterministic resolver/scope helpers moved to coco_agent.deterministic_resolvers.
 
 def _format_coco_structured_answer(
     *,
@@ -9257,100 +7565,34 @@ def _call_openai_coco(
     api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
     if not api_key:
         return "", 0, 0, "OPENAI_API_KEY no está configurada."
-
-    scope_mode = str(context.get("scope", {}).get("mode", COCO_DEFAULT_SCOPE_MODE)).strip().lower()
-    system_prompt = (
-        "Eres COCO IA, analista senior de performance marketing multi-tenant. "
-        "Responde en español con tono natural y conversacional, manteniendo el hilo de la conversación. "
-        "Usa SOLO el contexto analítico entregado y el historial de chat de este tenant. "
-        "Por defecto, cuando sea ambiguo, prioriza datos totales/históricos del tenant (scope total). "
-        "Si el usuario pide explícitamente filtro/rango activo, usa ese alcance. "
-        "Si la pregunta incluye un año o fechas explícitas, responde estrictamente sobre context.date_range "
-        "sin mezclar periodos por fuera de ese rango. "
-        "Si context.data_coverage.has_data_in_requested_range es false, responde explícitamente que no hay datos "
-        "en ese periodo y no extrapoles con otros años/rangos. "
-        "Si falta dato, dilo explícitamente sin inventar."
-    )
-    if not include_actions:
-        system_prompt += " No incluyas recomendaciones, acciones sugeridas ni próximos pasos."
     context_json = json.dumps(context, ensure_ascii=False)
-    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    memory_text = _coco_trim_text(memory_summary, max_chars=COCO_MEMORY_SUMMARY_MAX_CHARS)
-    if memory_text:
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "Resumen de conversación previa en este hilo:\n"
-                    f"{memory_text}"
-                ),
-            }
-        )
-    history_payload = _coco_history_for_model(conversation_history or [])
-    if history_payload:
-        messages.extend(history_payload)
-    messages.append(
-        {
-            "role": "user",
-            "content": (
-                f"Alcance activo para esta respuesta: {scope_mode or COCO_DEFAULT_SCOPE_MODE}.\n"
-                "Contexto analítico (JSON):\n"
-                f"{context_json}\n\n"
-                f"Pregunta del usuario:\n{question}"
-            ),
-        }
+    answer, prompt_tokens_raw, completion_tokens_raw, err = run_coco_agent_turn(
+        api_key=api_key,
+        model=model,
+        question=question,
+        context=context,
+        conversation_history=conversation_history,
+        memory_summary=memory_summary,
+        include_actions=include_actions,
+        max_tool_rounds=6,
+        temperature=0.2,
+        timeout_seconds=45,
     )
-    payload = {
-        "model": model,
-        "temperature": 0.3,
-        "messages": messages,
-    }
-    req = urllib.request.Request(
-        url="https://api.openai.com/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
+    prompt_tokens = _normalize_non_negative_int(
+        prompt_tokens_raw,
+        _estimate_token_count(question + context_json),
+        minimum=0,
+        maximum=5_000_000,
     )
-    parsed: dict[str, Any] = {}
-    last_error = ""
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw) if raw else {}
-            last_error = ""
-            break
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            last_error = f"OpenAI HTTP {exc.code}: {body[:260]}"
-            if exc.code in {429, 500, 502, 503, 504} and attempt < 2:
-                time.sleep(1.1 * (attempt + 1))
-                continue
-            return "", 0, 0, last_error
-        except Exception as exc:
-            last_error = f"No se pudo consultar OpenAI: {exc}"
-            if attempt < 2:
-                time.sleep(1.1 * (attempt + 1))
-                continue
-            return "", 0, 0, last_error
-
-    if not parsed:
-        return "", 0, 0, last_error or "OpenAI no devolvió respuesta."
-
-    answer = ""
-    try:
-        answer = str(parsed.get("choices", [])[0].get("message", {}).get("content", "")).strip()
-    except Exception:
-        answer = ""
-    usage = parsed.get("usage", {}) if isinstance(parsed, dict) else {}
-    prompt_tokens = _normalize_non_negative_int(usage.get("prompt_tokens"), _estimate_token_count(question + context_json), minimum=0, maximum=5_000_000)
-    completion_tokens = _normalize_non_negative_int(usage.get("completion_tokens"), _estimate_token_count(answer), minimum=0, maximum=5_000_000)
-    if not answer:
-        return "", prompt_tokens, completion_tokens, "OpenAI no devolvió contenido en la respuesta."
-    return answer, prompt_tokens, completion_tokens, ""
+    completion_tokens = _normalize_non_negative_int(
+        completion_tokens_raw,
+        _estimate_token_count(answer),
+        minimum=0,
+        maximum=5_000_000,
+    )
+    if answer:
+        return answer, prompt_tokens, completion_tokens, ""
+    return "", prompt_tokens, completion_tokens, (err or "OpenAI no devolvió contenido en la respuesta.")
 
 
 def _generate_coco_answer(
@@ -9577,7 +7819,7 @@ def render_coco_ia_widget(
 
     with st.container(key=f"coco-fab-{tenant_id}"):
         if st.button(
-            "💬",
+            COCO_CHAT_ICON,
             key=f"coco_toggle_panel_{tenant_id}_{username}",
             help="Abrir/Cerrar COCO IA",
             width="content",
@@ -9588,7 +7830,7 @@ def render_coco_ia_widget(
     with st.container(key=f"coco-panel-{tenant_id}"):
         head_col_1, head_col_2 = st.columns([0.72, 0.28])
         with head_col_1:
-            st.markdown("**💬 COCO IA**")
+            st.markdown(f"**{COCO_CHAT_ICON} COCO IA**")
         with head_col_2:
             if st.button("Cerrar", key=f"coco_close_panel_{tenant_id}_{username}", width="stretch"):
                 st.session_state[panel_state_key] = False
@@ -9662,9 +7904,9 @@ def render_coco_ia_widget(
 
         if submit_question:
             clean_question = str(user_question).strip()
-            include_actions = _question_requests_actions(clean_question)
-            include_platform_breakdown = _question_requests_platform_breakdown(clean_question)
-            scope_guard = _coco_scope_guard_message(clean_question)
+            include_actions = coco_det._question_requests_actions(clean_question)
+            include_platform_breakdown = coco_det._question_requests_platform_breakdown(clean_question)
+            scope_guard = coco_det._coco_scope_guard_message(clean_question)
             if scope_guard:
                 st.warning(scope_guard)
             else:
@@ -9673,12 +7915,12 @@ def render_coco_ia_widget(
                     if isinstance(st.session_state.get(context_key), dict)
                     else {}
                 )
-                scope_mode, scope_source = _resolve_coco_scope_mode(
+                scope_mode, scope_source = coco_det._resolve_coco_scope_mode(
                     clean_question,
                     last_context=conversation_ctx,
                     default_mode=COCO_DEFAULT_SCOPE_MODE,
                 )
-                asked_platform = _platform_from_question(clean_question)
+                asked_platform = coco_det._platform_from_question(clean_question)
                 if scope_mode == "total":
                     query_platform = asked_platform if asked_platform in {"Meta", "Google"} else "All"
                 else:
@@ -9752,18 +7994,22 @@ def render_coco_ia_widget(
                     err = ""
                     context_note = ""
 
-                    deterministic_answer, deterministic_meta = _try_resolve_top_piece_question(
+                    deterministic_answer, deterministic_model_used, deterministic_meta, deterministic_context_note = coco_workflow.run_deterministic_resolver_chain(
                         question=clean_question,
+                        tenant_id=tenant_id,
                         camp_df=camp_df,
                         piece_df=piece_df,
-                        selected_platform=query_platform,
-                        ui_start=default_start,
-                        ui_end=default_end,
+                        df_base=df_base,
+                        query_platform=query_platform,
+                        default_start=default_start,
+                        default_end=default_end,
                         include_actions=include_actions,
+                        include_platform_breakdown=include_platform_breakdown,
+                        last_context=st.session_state.get(context_key, {}),
                     )
                     if deterministic_answer:
                         answer = deterministic_answer
-                        model_used = "deterministic-top-piece"
+                        model_used = deterministic_model_used
                         if deterministic_meta:
                             merged_ctx = dict(st.session_state.get(context_key, {}))
                             merged_ctx.update(deterministic_meta)
@@ -9777,224 +8023,108 @@ def render_coco_ia_widget(
                                     "last_context": merged_ctx,
                                 },
                             )
-                            context_note = (
-                                f"Contexto aplicado: tenant `{tenant_id}`, rango "
-                                f"`{deterministic_meta.get('range_start')}` a `{deterministic_meta.get('range_end')}`, "
-                                f"plataformas `{deterministic_meta.get('platforms', query_platform)}`, "
-                                f"resolver `{deterministic_meta.get('resolver', 'deterministic')}`."
-                            )
+                            context_note = deterministic_context_note
                     else:
-                        followup_answer, followup_meta = _try_resolve_top_piece_period_followup_question(
-                            question=clean_question,
-                            last_context=st.session_state.get(context_key, {}),
-                            include_actions=include_actions,
-                        )
-                        if followup_answer:
-                            answer = followup_answer
-                            model_used = "deterministic-top-piece-followup-range"
-                            if followup_meta:
-                                merged_ctx = dict(st.session_state.get(context_key, {}))
-                                merged_ctx.update(followup_meta)
-                                merged_ctx["preferred_scope"] = scope_mode
-                                merged_ctx["scope_source"] = scope_source
-                                st.session_state[context_key] = merged_ctx
-                                write_coco_chat_state(
-                                    thread_key,
-                                    {
-                                        "preferred_scope": scope_mode,
-                                        "last_context": merged_ctx,
-                                    },
-                                )
-                                context_note = (
-                                    f"Contexto aplicado: tenant `{tenant_id}`, rango "
-                                    f"`{followup_meta.get('range_start')}` a `{followup_meta.get('range_end')}`, "
-                                    f"resolver `{followup_meta.get('resolver', 'deterministic')}`, "
-                                    f"fuente `{followup_meta.get('source', 'contexto_previo')}`."
-                                )
+                        context_start = default_start
+                        context_end = default_end
+                        if has_base_dates:
+                            context_start, context_end, explicit_time_range = coco_det._resolve_question_range(
+                                clean_question,
+                                data_min=data_min,
+                                data_max=data_max,
+                                ui_start=default_start,
+                                ui_end=default_end,
+                            )
+                            scoped_df = df_base[
+                                (df_base["date"] >= context_start) & (df_base["date"] <= context_end)
+                            ].copy()
+                            scope_days = max((context_end - context_start).days + 1, 1)
+                            prev_end = context_start - timedelta(days=1)
+                            prev_start = prev_end - timedelta(days=scope_days - 1)
+                            scoped_prev_df = df_base[
+                                (df_base["date"] >= prev_start) & (df_base["date"] <= prev_end)
+                            ].copy()
+                            total_source_df = scoped_df if explicit_time_range else df_base
                         else:
-                            comparison_answer, comparison_meta = _try_resolve_year_period_comparison_question(
+                            scoped_df = df_sel.copy()
+                            scoped_prev_df = df_prev.copy()
+                            total_source_df = df_sel.copy()
+                            explicit_time_range = False
+                        cur_summary = summary(scoped_df, query_platform)
+                        prev_summary = summary(scoped_prev_df, query_platform)
+                        active_cur_summary = summary(df_sel, platform)
+                        active_prev_summary = summary(df_prev, platform)
+                        total_all_summary = summary(total_source_df, "All")
+                        total_selected_summary = summary(total_source_df, query_platform)
+                        has_data_in_requested_range = bool(not scoped_df.empty)
+                        conversation_history = list(history)
+                        memory_summary = _summarize_coco_history(conversation_history)
+                        raw_context = coco_context.build_coco_metrics_context(
+                            tenant_name=tenant_name,
+                            tenant_id=tenant_id,
+                            platform=query_platform,
+                            s=context_start,
+                            e=context_end,
+                            cur_summary=cur_summary,
+                            prev_summary=prev_summary,
+                            scope_mode=scope_mode,
+                            scope_source=scope_source,
+                            total_start=data_min,
+                            total_end=data_max,
+                            active_start=s,
+                            active_end=e,
+                            total_summary_all=total_all_summary,
+                            total_summary_selected=total_selected_summary,
+                            active_summary=active_cur_summary,
+                            active_prev_summary=active_prev_summary,
+                            requested_range_explicit=bool(explicit_time_range),
+                            has_data_in_requested_range=has_data_in_requested_range,
+                        )
+                        raw_context["conversation_memory"] = {
+                            "summary": memory_summary,
+                            "turn_count": len(conversation_history),
+                        }
+                        safe_context = coco_context.sanitize_coco_context(
+                            raw_context,
+                            tenant_id=tenant_id,
+                            platform=query_platform,
+                            start_day=context_start,
+                            end_day=context_end,
+                        )
+                        with st.spinner("COCO IA analizando datos del tenant..."):
+                            answer, in_tokens, out_tokens, provider_used, model_used, err = _generate_coco_answer(
                                 question=clean_question,
-                                df_base=df_base,
-                                selected_platform=query_platform,
+                                context=safe_context,
+                                coco_cfg=coco_cfg,
+                                conversation_history=conversation_history,
+                                memory_summary=memory_summary,
                                 include_actions=include_actions,
                             )
-                            if comparison_answer:
-                                deterministic_answer = comparison_answer
-                                deterministic_meta = comparison_meta
-                                model_used = "deterministic-year-period-comparison"
-                            else:
-                                monthly_answer, monthly_meta = _try_resolve_monthly_breakdown_question(
-                                    question=clean_question,
-                                    df_base=df_base,
-                                    selected_platform=query_platform,
-                                    ui_start=default_start,
-                                    ui_end=default_end,
-                                    include_actions=include_actions,
-                                )
-                                if monthly_answer:
-                                    deterministic_answer = monthly_answer
-                                    deterministic_meta = monthly_meta
-                                    model_used = "deterministic-monthly-breakdown"
-                                else:
-                                    deterministic_answer, deterministic_meta = _try_resolve_peak_day_question(
-                                        question=clean_question,
-                                        df_base=df_base,
-                                        selected_platform=query_platform,
-                                        ui_start=default_start,
-                                        ui_end=default_end,
-                                        include_actions=include_actions,
-                                        include_platform_breakdown=include_platform_breakdown,
-                                    )
-                                    model_used = "deterministic-peak"
-                            if deterministic_answer:
-                                answer = deterministic_answer
-                                if deterministic_meta:
-                                    merged_ctx = dict(st.session_state.get(context_key, {}))
-                                    merged_ctx.update(deterministic_meta)
-                                    merged_ctx["preferred_scope"] = scope_mode
-                                    merged_ctx["scope_source"] = scope_source
-                                    st.session_state[context_key] = merged_ctx
-                                    write_coco_chat_state(
-                                        thread_key,
-                                        {
-                                            "preferred_scope": scope_mode,
-                                            "last_context": merged_ctx,
-                                        },
-                                    )
-                                    context_note = (
-                                        f"Contexto aplicado: tenant `{tenant_id}`, rango "
-                                        f"`{deterministic_meta.get('range_start')}` a `{deterministic_meta.get('range_end')}`, "
-                                        f"plataforma `{deterministic_meta.get('applied_platform', query_platform)}`, "
-                                        f"resolver `{deterministic_meta.get('resolver', 'deterministic')}`."
-                                    )
-                            else:
-                                weekday_answer, weekday_meta = _try_resolve_weekday_followup_question(
-                                    question=clean_question,
-                                    last_context=st.session_state.get(context_key, {}),
-                                    include_actions=include_actions,
-                                )
-                                if weekday_answer:
-                                    answer = weekday_answer
-                                    model_used = "deterministic-weekday"
-                                    if weekday_meta:
-                                        merged_ctx = dict(st.session_state.get(context_key, {}))
-                                        merged_ctx.update(weekday_meta)
-                                        merged_ctx["preferred_scope"] = scope_mode
-                                        merged_ctx["scope_source"] = scope_source
-                                        st.session_state[context_key] = merged_ctx
-                                        write_coco_chat_state(
-                                            thread_key,
-                                            {
-                                                "preferred_scope": scope_mode,
-                                                "last_context": merged_ctx,
-                                            },
-                                        )
-                                        context_note = (
-                                            f"Contexto aplicado: tenant `{tenant_id}`, fecha `{weekday_meta.get('target_date')}`, "
-                                            f"resolver `{weekday_meta.get('resolver', 'deterministic')}`, "
-                                            f"fuente `{weekday_meta.get('source', 'pregunta')}`."
-                                        )
-                                else:
-                                    context_start = default_start
-                                    context_end = default_end
-                                    if has_base_dates:
-                                        context_start, context_end, explicit_time_range = _resolve_question_range(
-                                            clean_question,
-                                            data_min=data_min,
-                                            data_max=data_max,
-                                            ui_start=default_start,
-                                            ui_end=default_end,
-                                        )
-                                        scoped_df = df_base[
-                                            (df_base["date"] >= context_start) & (df_base["date"] <= context_end)
-                                        ].copy()
-                                        scope_days = max((context_end - context_start).days + 1, 1)
-                                        prev_end = context_start - timedelta(days=1)
-                                        prev_start = prev_end - timedelta(days=scope_days - 1)
-                                        scoped_prev_df = df_base[
-                                            (df_base["date"] >= prev_start) & (df_base["date"] <= prev_end)
-                                        ].copy()
-                                        total_source_df = scoped_df if explicit_time_range else df_base
-                                    else:
-                                        scoped_df = df_sel.copy()
-                                        scoped_prev_df = df_prev.copy()
-                                        total_source_df = df_sel.copy()
-                                        explicit_time_range = False
-                                    cur_summary = summary(scoped_df, query_platform)
-                                    prev_summary = summary(scoped_prev_df, query_platform)
-                                    active_cur_summary = summary(df_sel, platform)
-                                    active_prev_summary = summary(df_prev, platform)
-                                    total_all_summary = summary(total_source_df, "All")
-                                    total_selected_summary = summary(total_source_df, query_platform)
-                                    has_data_in_requested_range = bool(not scoped_df.empty)
-                                    conversation_history = list(history)
-                                    memory_summary = _summarize_coco_history(conversation_history)
-                                    raw_context = _build_coco_metrics_context(
-                                        tenant_name=tenant_name,
-                                        tenant_id=tenant_id,
-                                        platform=query_platform,
-                                        s=context_start,
-                                        e=context_end,
-                                        cur_summary=cur_summary,
-                                        prev_summary=prev_summary,
-                                        scope_mode=scope_mode,
-                                        scope_source=scope_source,
-                                        total_start=data_min,
-                                        total_end=data_max,
-                                        active_start=s,
-                                        active_end=e,
-                                        total_summary_all=total_all_summary,
-                                        total_summary_selected=total_selected_summary,
-                                        active_summary=active_cur_summary,
-                                        active_prev_summary=active_prev_summary,
-                                        requested_range_explicit=bool(explicit_time_range),
-                                        has_data_in_requested_range=has_data_in_requested_range,
-                                    )
-                                    raw_context["conversation_memory"] = {
-                                        "summary": memory_summary,
-                                        "turn_count": len(conversation_history),
-                                    }
-                                    safe_context = _sanitize_coco_context(
-                                        raw_context,
-                                        tenant_id=tenant_id,
-                                        platform=query_platform,
-                                        start_day=context_start,
-                                        end_day=context_end,
-                                    )
-                                    with st.spinner("COCO IA analizando datos del tenant..."):
-                                        answer, in_tokens, out_tokens, provider_used, model_used, err = _generate_coco_answer(
-                                            question=clean_question,
-                                            context=safe_context,
-                                            coco_cfg=coco_cfg,
-                                            conversation_history=conversation_history,
-                                            memory_summary=memory_summary,
-                                            include_actions=include_actions,
-                                        )
-                                    merged_ctx = dict(st.session_state.get(context_key, {}))
-                                    merged_ctx.update(
-                                        {
-                                            "preferred_scope": scope_mode,
-                                            "scope_source": scope_source,
-                                            "resolver": "llm_context",
-                                            "last_scope_range_start": context_start.isoformat(),
-                                            "last_scope_range_end": context_end.isoformat(),
-                                            "last_scope_platform": query_platform,
-                                        }
-                                    )
-                                    st.session_state[context_key] = merged_ctx
-                                    write_coco_chat_state(
-                                        thread_key,
-                                        {
-                                            "preferred_scope": scope_mode,
-                                            "last_context": merged_ctx,
-                                        },
-                                    )
-                                    context_note = (
-                                        f"Contexto aplicado: tenant `{safe_context.get('tenant_id')}`, "
-                                        f"rango `{safe_context.get('date_range', {}).get('start')}` a "
-                                        f"`{safe_context.get('date_range', {}).get('end')}`, plataforma `{safe_context.get('platform')}`, "
-                                        f"scope `{safe_context.get('scope', {}).get('mode', COCO_DEFAULT_SCOPE_MODE)}`."
-                                    )
+                        merged_ctx = dict(st.session_state.get(context_key, {}))
+                        merged_ctx.update(
+                            {
+                                "preferred_scope": scope_mode,
+                                "scope_source": scope_source,
+                                "resolver": "llm_context",
+                                "last_scope_range_start": context_start.isoformat(),
+                                "last_scope_range_end": context_end.isoformat(),
+                                "last_scope_platform": query_platform,
+                            }
+                        )
+                        st.session_state[context_key] = merged_ctx
+                        write_coco_chat_state(
+                            thread_key,
+                            {
+                                "preferred_scope": scope_mode,
+                                "last_context": merged_ctx,
+                            },
+                        )
+                        context_note = (
+                            f"Contexto aplicado: tenant `{safe_context.get('tenant_id')}`, "
+                            f"rango `{safe_context.get('date_range', {}).get('start')}` a "
+                            f"`{safe_context.get('date_range', {}).get('end')}`, plataforma `{safe_context.get('platform')}`, "
+                            f"scope `{safe_context.get('scope', {}).get('mode', COCO_DEFAULT_SCOPE_MODE)}`."
+                        )
                     if answer and "**Resumen**" not in answer and provider_used != "openai":
                         answer = _format_coco_structured_answer(
                             headline="Respuesta de COCO IA generada con el contexto actual.",
