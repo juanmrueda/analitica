@@ -27,6 +27,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
+import dashboard_data
+import dashboard_filters
 from coco_agent import run_coco_agent_turn
 from coco_agent import deterministic_resolvers as coco_det
 from coco_agent import workflow as coco_workflow
@@ -75,6 +77,64 @@ ACTIVE_THEME_COLORS: dict[str, str] = dict(DEFAULT_THEME_COLORS)
 
 VIEW_MODE_OPTIONS = ("Overview", "Tráfico y Adquisición")
 PLATFORM_OPTIONS = ("All", "Google", "Meta")
+REPORT_PARQUET_DIRNAME = "dashboard"
+PARQUET_DAILY_DATASET = "daily"
+PARQUET_HOURLY_DATASET = "hourly"
+PARQUET_ACQ_DATASETS: tuple[str, ...] = (
+    "ga4_channel_daily",
+    "ga4_top_pages_daily",
+    "ga4_event_daily",
+    "meta_campaign_daily",
+    "google_campaign_daily",
+    "paid_piece_daily",
+    "paid_device_daily",
+    "paid_lead_demographics_daily",
+    "paid_lead_geo_daily",
+)
+PARQUET_CAMPAIGN_UNIFIED_DATASET = "campaign_unified_daily"
+PARQUET_PIECE_ENRICHED_DATASET = "paid_piece_enriched_daily"
+PARQUET_DERIVED_DATASETS: tuple[str, ...] = (
+    PARQUET_CAMPAIGN_UNIFIED_DATASET,
+    PARQUET_PIECE_ENRICHED_DATASET,
+)
+PARQUET_CORE_DATASETS: tuple[str, ...] = (
+    PARQUET_DAILY_DATASET,
+    PARQUET_HOURLY_DATASET,
+    *PARQUET_ACQ_DATASETS,
+    *PARQUET_DERIVED_DATASETS,
+)
+# Grace period between JSON mtime and parquet mtime before marking stale.
+PARQUET_STALE_TOLERANCE_NS = int(5 * 60 * 1_000_000_000)
+DATE_PRESET_OPTIONS = (
+    "custom",
+    "today",
+    "yesterday",
+    "this_week_to_date",
+    "last_7_days",
+    "last_30_days",
+    "this_month_to_date",
+    "last_month",
+    "year_to_date",
+    "last_calendar_year",
+)
+DATE_PRESET_LABELS: dict[str, str] = {
+    "custom": "Personalizado",
+    "today": "Hoy",
+    "yesterday": "Ayer",
+    "this_week_to_date": "Esta semana (De dom. a hoy)",
+    "last_7_days": "Los ultimos 7 dias",
+    "last_30_days": "Los ultimos 30 dias",
+    "this_month_to_date": "Este mes",
+    "last_month": "El mes pasado",
+    "year_to_date": "Este año hasta hoy",
+    "last_calendar_year": "El año pasado",
+}
+COMPARE_MODE_OPTIONS = ("previous_period", "year_over_year", "custom")
+COMPARE_MODE_LABELS: dict[str, str] = {
+    "previous_period": "Periodo anterior",
+    "year_over_year": "Mismo periodo año anterior",
+    "custom": "Personalizado",
+}
 DEFAULT_OVERVIEW_KPI_KEYS = ["spend", "conv", "cpl", "cvr", "cpm", "cpc"]
 DEFAULT_TRAFFIC_KPI_KEYS = ["sessions", "users", "avg_sess", "bounce"]
 DEFAULT_OVERVIEW_SECTION_KEYS = [
@@ -587,6 +647,192 @@ def apply_theme() -> None:
           }
           [data-testid="stMain"] .stDateInput [data-baseweb="input"] {
             min-height: 2.55rem !important;
+          }
+          [data-testid="stMain"] [data-testid="stPopover"] button {
+            white-space: nowrap !important;
+            min-height: 2.55rem !important;
+            border-radius: 14px !important;
+            border: 1px solid rgba(32,29,29,0.12) !important;
+            background: rgba(246,248,252,0.96) !important;
+            color: #3d4f67 !important;
+            font-size: 0.92rem !important;
+            font-weight: 700 !important;
+            box-shadow: 0 7px 18px rgba(15,23,42,0.06) !important;
+          }
+          [data-testid="stMain"] [data-testid="stPopover"] button p {
+            white-space: nowrap !important;
+            color: #3d4f67 !important;
+            font-size: 0.92rem !important;
+            font-weight: 700 !important;
+          }
+          [data-baseweb="popover"] [data-testid="stPopoverContent"] {
+            border-radius: 24px !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            background: linear-gradient(180deg, #F7F8FB 0%, #F3F5F9 100%) !important;
+            box-shadow: 0 26px 44px rgba(15,23,42,0.16) !important;
+            padding: 0.95rem 1rem 1rem 1rem !important;
+            min-width: min(360px, calc(100vw - 1.4rem)) !important;
+          }
+          [data-baseweb="popover"] .range-modal-header {
+            margin-bottom: 0.45rem;
+          }
+          [data-baseweb="popover"] .range-modal-kicker {
+            font-size: 0.62rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            font-weight: 800;
+            color: #94a3b8;
+            margin-bottom: 0.4rem;
+          }
+          [data-baseweb="popover"] .range-modal-selected {
+            border: 1px solid rgba(32,29,29,0.10);
+            border-radius: 13px;
+            background: rgba(240,243,248,0.96);
+            padding: 0.62rem 0.8rem;
+            color: #344a64;
+            font-size: 0.92rem;
+            font-weight: 800;
+            line-height: 1.25;
+          }
+          [data-baseweb="popover"] .range-modal-hint {
+            margin-top: 0.42rem;
+            color: #9ba8ba;
+            font-size: 0.74rem;
+            font-style: italic;
+            font-weight: 600;
+          }
+          [data-baseweb="popover"] .stRadio > label {
+            display: none !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] {
+            display: grid !important;
+            grid-template-columns: 1fr !important;
+            gap: 0.14rem !important;
+            background: transparent !important;
+            border: none !important;
+            border-radius: 0 !important;
+            min-height: auto !important;
+            padding: 0.08rem 0 0.36rem 0 !important;
+            width: 100% !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label {
+            margin: 0 !important;
+            padding: 0.36rem 0.12rem !important;
+            border: none !important;
+            border-radius: 12px !important;
+            min-height: 1.8rem !important;
+            justify-content: flex-start !important;
+            color: #5a6d86 !important;
+            font-weight: 600 !important;
+            background: transparent !important;
+            display: flex !important;
+            gap: 0.54rem !important;
+            align-items: center !important;
+            transition: background 0.18s ease !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label::before,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label::before {
+            content: "";
+            width: 1.03rem;
+            height: 1.03rem;
+            border-radius: 999px;
+            border: 1.8px solid rgba(122,135,157,0.38);
+            background: #f9fbff;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label > div:first-child,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label > div:first-child {
+            position: absolute !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            width: 1px !important;
+            height: 1px !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label [data-testid="stMarkdownContainer"],
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label [data-testid="stMarkdownContainer"] {
+            width: auto !important;
+            text-align: left !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label [data-testid="stMarkdownContainer"] p,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label [data-testid="stMarkdownContainer"] p {
+            margin: 0 !important;
+            color: #5a6d86 !important;
+            font-size: 0.9rem !important;
+            font-weight: 600 !important;
+            line-height: 1.25 !important;
+            text-align: left !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[data-checked="true"],
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[aria-checked="true"],
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label:has(input:checked),
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label[data-checked="true"],
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label[aria-checked="true"],
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label:has(input:checked) {
+            background: rgba(123,204,53,0.10) !important;
+            color: #1f4d0a !important;
+            font-weight: 800 !important;
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[data-checked="true"]::before,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[aria-checked="true"]::before,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label:has(input:checked)::before,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label[data-checked="true"]::before,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label[aria-checked="true"]::before,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label:has(input:checked)::before {
+            border-color: rgba(103,178,45,0.95) !important;
+            background: radial-gradient(circle at center, #7bcc35 46%, #ffffff 48%);
+          }
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[data-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[aria-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > label:has(input:checked) [data-testid="stMarkdownContainer"] p,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label[data-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label[aria-checked="true"] [data-testid="stMarkdownContainer"] p,
+          [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label:has(input:checked) [data-testid="stMarkdownContainer"] p {
+            color: #2a3a52 !important;
+            font-weight: 800 !important;
+          }
+          [data-baseweb="popover"] .stDateInput > label,
+          [data-baseweb="popover"] .stSelectbox > label {
+            font-size: 0.66rem !important;
+            letter-spacing: 0.11em !important;
+            text-transform: uppercase !important;
+            font-weight: 800 !important;
+            color: #9aa9be !important;
+            margin-top: 0.38rem !important;
+            margin-bottom: 0.24rem !important;
+          }
+          [data-baseweb="popover"] .stDateInput [data-baseweb="input"],
+          [data-baseweb="popover"] .stSelectbox [data-baseweb="select"] > div {
+            min-height: 2.55rem !important;
+            border-radius: 13px !important;
+            border: 1px solid rgba(32,29,29,0.10) !important;
+            background: rgba(240,243,248,0.98) !important;
+            box-shadow: none !important;
+          }
+          [data-baseweb="popover"] .stDateInput input,
+          [data-baseweb="popover"] .stSelectbox [data-baseweb="select"] span {
+            color: #3e526d !important;
+            font-size: 0.92rem !important;
+            font-weight: 700 !important;
+          }
+          [data-baseweb="popover"] hr {
+            margin: 0.72rem 0 0.58rem 0 !important;
+            border-top: 1px solid rgba(122,135,157,0.20) !important;
+          }
+          [data-baseweb="popover"] [data-testid="stButton"] button {
+            min-height: 2.65rem !important;
+            border-radius: 14px !important;
+            border: 1px solid rgba(32,29,29,0.10) !important;
+            background: rgba(255,255,255,0.86) !important;
+            color: #6b7d96 !important;
+            font-weight: 800 !important;
+          }
+          [data-baseweb="popover"] [data-testid="stButton"] button[kind="primary"] {
+            border-color: rgba(103,178,45,0.72) !important;
+            background: linear-gradient(180deg, #7bcc35 0%, #67b22d 100%) !important;
+            color: #ffffff !important;
+            box-shadow: 0 9px 18px rgba(103,178,45,0.34) !important;
           }
           [data-testid="stMain"] div[data-testid="stPlotlyChart"] {
             border: 1px solid rgba(226, 232, 240, 0.95);
@@ -1768,10 +2014,162 @@ def render_daily_fact(df: pd.DataFrame, platform: str) -> None:
     )
 
 
+def _report_cache_signature(path: Path) -> tuple[str, int, int]:
+    return dashboard_data.report_cache_signature(path)
+
+
+def _report_parquet_dataset_path(report_path: Path, dataset_key: str) -> Path:
+    return dashboard_data.report_parquet_dataset_path(
+        report_path,
+        dataset_key,
+        REPORT_PARQUET_DIRNAME,
+    )
+
+
+def _parquet_cache_signature(report_path: Path, dataset_key: str) -> tuple[str, int, int] | None:
+    return dashboard_data.parquet_cache_signature(
+        report_path,
+        dataset_key,
+        REPORT_PARQUET_DIRNAME,
+    )
+
+
+def _parquet_bundle_health(report_path: Path) -> dict[str, Any]:
+    return dashboard_data.parquet_bundle_health(
+        report_path,
+        parquet_dirname=REPORT_PARQUET_DIRNAME,
+        core_datasets=PARQUET_CORE_DATASETS,
+        stale_tolerance_ns=PARQUET_STALE_TOLERANCE_NS,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _load_report_cached(path_str: str, modified_ns: int, size_bytes: int) -> dict[str, Any]:
+    _ = modified_ns
+    _ = size_bytes
+    return dashboard_data.load_report_json(path_str)
+
+
+@st.cache_data(show_spinner=False)
+def _load_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    _ = modified_ns
+    _ = size_bytes
+    return dashboard_data.load_parquet_df(path_str)
+
+
+@st.cache_data(show_spinner=False)
+def _load_daily_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    report = _load_report_cached(path_str, modified_ns, size_bytes)
+    return dashboard_data.daily_df(report)
+
+
+@st.cache_data(show_spinner=False)
+def _load_hourly_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    report = _load_report_cached(path_str, modified_ns, size_bytes)
+    return dashboard_data.hourly_df(report)
+
+
+@st.cache_data(show_spinner=False)
+def _load_acq_df_cached(path_str: str, modified_ns: int, size_bytes: int, key: str) -> pd.DataFrame:
+    report = _load_report_cached(path_str, modified_ns, size_bytes)
+    return dashboard_data.acq_df(report, key)
+
+
+@st.cache_data(show_spinner=False)
+def _load_campaign_unified_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    report_path = Path(path_str)
+    pq_sig = _parquet_cache_signature(report_path, PARQUET_CAMPAIGN_UNIFIED_DATASET)
+    if pq_sig is not None:
+        return dashboard_data.normalize_campaign_unified_table(_load_parquet_df_cached(*pq_sig))
+
+    meta_df = _load_acq_df_cached(path_str, modified_ns, size_bytes, "meta_campaign_daily")
+    google_df = _load_acq_df_cached(path_str, modified_ns, size_bytes, "google_campaign_daily")
+    merged = dashboard_data.build_campaign_unified_from_raw_tables(meta_df, google_df)
+    return dashboard_data.normalize_campaign_unified_table(merged)
+
+
+@st.cache_data(show_spinner=False)
+def _load_piece_enriched_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    report_path = Path(path_str)
+    pq_sig = _parquet_cache_signature(report_path, PARQUET_PIECE_ENRICHED_DATASET)
+    if pq_sig is not None:
+        return dashboard_data.normalize_paid_piece_enriched_table(_load_parquet_df_cached(*pq_sig))
+
+    piece_df = _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_piece_daily")
+    return dashboard_data.normalize_paid_piece_enriched_table(piece_df)
+
+
 def load_report(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"No se encontro: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return _load_report_cached(path_str, modified_ns, size_bytes)
+
+
+def load_daily_df_from_report_path(path: Path) -> pd.DataFrame:
+    pq_sig = _parquet_cache_signature(path, PARQUET_DAILY_DATASET)
+    if pq_sig is not None:
+        return dashboard_data.normalize_daily_table(_load_parquet_df_cached(*pq_sig))
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return _load_daily_df_cached(path_str, modified_ns, size_bytes)
+
+
+def load_hourly_df_from_report_path(path: Path) -> pd.DataFrame:
+    pq_sig = _parquet_cache_signature(path, PARQUET_HOURLY_DATASET)
+    if pq_sig is not None:
+        return dashboard_data.normalize_hourly_table(_load_parquet_df_cached(*pq_sig))
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return _load_hourly_df_cached(path_str, modified_ns, size_bytes)
+
+
+def load_acq_df_from_report_path(path: Path, key: str) -> pd.DataFrame:
+    pq_sig = _parquet_cache_signature(path, key)
+    if pq_sig is not None:
+        return dashboard_data.normalize_acq_table(_load_parquet_df_cached(*pq_sig))
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return _load_acq_df_cached(path_str, modified_ns, size_bytes, key)
+
+
+def load_campaign_unified_df_from_report_path(path: Path) -> pd.DataFrame:
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return _load_campaign_unified_df_cached(path_str, modified_ns, size_bytes)
+
+
+def load_piece_enriched_df_from_report_path(path: Path) -> pd.DataFrame:
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return _load_piece_enriched_df_cached(path_str, modified_ns, size_bytes)
+
+
+def load_paid_device_df_from_report_path(path: Path) -> pd.DataFrame:
+    pq_sig = _parquet_cache_signature(path, "paid_device_daily")
+    if pq_sig is not None:
+        return dashboard_data.normalize_paid_device_table(_load_parquet_df_cached(*pq_sig))
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return dashboard_data.normalize_paid_device_table(
+        _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_device_daily")
+    )
+
+
+def load_paid_lead_demographics_df_from_report_path(path: Path) -> pd.DataFrame:
+    pq_sig = _parquet_cache_signature(path, "paid_lead_demographics_daily")
+    if pq_sig is not None:
+        return dashboard_data.normalize_paid_lead_demographics_table(_load_parquet_df_cached(*pq_sig))
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return dashboard_data.normalize_paid_lead_demographics_table(
+        _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_lead_demographics_daily")
+    )
+
+
+def load_paid_lead_geo_df_from_report_path(path: Path) -> pd.DataFrame:
+    pq_sig = _parquet_cache_signature(path, "paid_lead_geo_daily")
+    if pq_sig is not None:
+        return dashboard_data.normalize_paid_lead_geo_table(
+            _load_parquet_df_cached(*pq_sig),
+            COUNTRY_CODE_TO_NAME,
+        )
+    path_str, modified_ns, size_bytes = _report_cache_signature(path)
+    return dashboard_data.normalize_paid_lead_geo_table(
+        _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_lead_geo_daily"),
+        COUNTRY_CODE_TO_NAME,
+    )
 
 
 def default_tenants_config() -> dict[str, dict[str, Any]]:
@@ -4484,6 +4882,284 @@ def _apply_campaign_filters(camp_df: pd.DataFrame, campaign_filters: dict[str, s
     return cp
 
 
+def _campaign_filters_cache_key(campaign_filters: dict[str, str]) -> str:
+    if not isinstance(campaign_filters, dict) or not campaign_filters:
+        return ""
+    clean: dict[str, str] = {}
+    for field in sorted(campaign_filters.keys()):
+        key = str(field or "").strip()
+        value = str(campaign_filters.get(field, "")).strip()
+        if key and value:
+            clean[key] = value
+    return json.dumps(clean, sort_keys=True, ensure_ascii=False) if clean else ""
+
+
+def _campaign_filters_from_cache_key(filter_key: str) -> dict[str, str]:
+    text = str(filter_key or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, str] = {}
+    for raw_key, raw_value in parsed.items():
+        key = str(raw_key or "").strip()
+        value = str(raw_value or "").strip()
+        if key and value:
+            out[key] = value
+    return out
+
+
+def _parse_iso_day(raw: Any, fallback: date) -> date:
+    text = str(raw or "").strip()
+    if not text:
+        return fallback
+    try:
+        return date.fromisoformat(text)
+    except Exception:
+        return fallback
+
+
+def _resolve_cached_range(start_iso: str, end_iso: str) -> tuple[date, date]:
+    fallback = date(1970, 1, 1)
+    start_day = _parse_iso_day(start_iso, fallback)
+    end_day = _parse_iso_day(end_iso, fallback)
+    if start_day > end_day:
+        start_day, end_day = end_day, start_day
+    return start_day, end_day
+
+
+@st.cache_data(show_spinner=False)
+def _cached_campaign_filter_values_from_report(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    field: str,
+    platform: str,
+    start_iso: str,
+    end_iso: str,
+) -> list[str]:
+    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
+    camp_df = _load_campaign_unified_df_cached(path_str, modified_ns, size_bytes)
+    return _campaign_filter_values(
+        camp_df,
+        field=str(field or "").strip(),
+        platform=str(platform or "All"),
+        start_day=start_day,
+        end_day=end_day,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_channels_roll_from_report(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    start_iso: str,
+    end_iso: str,
+) -> pd.DataFrame:
+    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
+    ch = _load_acq_df_cached(path_str, modified_ns, size_bytes, "ga4_channel_daily")
+    if ch.empty:
+        return pd.DataFrame(columns=["sessionDefaultChannelGroup", "sessions", "conversions"])
+    if "date" in ch.columns:
+        ch = ch[(ch["date"] >= start_day) & (ch["date"] <= end_day)]
+    if ch.empty:
+        return pd.DataFrame(columns=["sessionDefaultChannelGroup", "sessions", "conversions"])
+    if "sessionDefaultChannelGroup" not in ch.columns:
+        ch["sessionDefaultChannelGroup"] = ""
+    if "sessions" not in ch.columns:
+        ch["sessions"] = 0.0
+    if "conversions" not in ch.columns:
+        ch["conversions"] = 0.0
+    roll = (
+        ch.groupby("sessionDefaultChannelGroup", as_index=False)
+        .agg(sessions=("sessions", "sum"), conversions=("conversions", "sum"))
+        .sort_values("sessions", ascending=False)
+    )
+    return roll.reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_top_pages_roll_from_report(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    start_iso: str,
+    end_iso: str,
+) -> pd.DataFrame:
+    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
+    pg = _load_acq_df_cached(path_str, modified_ns, size_bytes, "ga4_top_pages_daily")
+    if pg.empty:
+        return pd.DataFrame(columns=["pagePath", "pageTitle", "views", "sessions", "avg_session"])
+    if "date" in pg.columns:
+        pg = pg[(pg["date"] >= start_day) & (pg["date"] <= end_day)]
+    if pg.empty:
+        return pd.DataFrame(columns=["pagePath", "pageTitle", "views", "sessions", "avg_session"])
+    if "pagePath" not in pg.columns:
+        pg["pagePath"] = ""
+    if "pageTitle" not in pg.columns:
+        pg["pageTitle"] = ""
+    if "screenPageViews" not in pg.columns:
+        pg["screenPageViews"] = 0.0
+    if "sessions" not in pg.columns:
+        pg["sessions"] = 0.0
+    if "averageSessionDuration" not in pg.columns:
+        pg["averageSessionDuration"] = 0.0
+    roll = (
+        pg.groupby(["pagePath", "pageTitle"], as_index=False)
+        .agg(
+            views=("screenPageViews", "sum"),
+            sessions=("sessions", "sum"),
+            avg_session=("averageSessionDuration", "mean"),
+        )
+        .sort_values("views", ascending=False)
+    )
+    return roll.reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_campaign_roll_from_report(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    start_iso: str,
+    end_iso: str,
+    platform: str,
+    filter_key: str,
+) -> pd.DataFrame:
+    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
+    cp = _load_campaign_unified_df_cached(path_str, modified_ns, size_bytes)
+    if cp.empty:
+        return pd.DataFrame(columns=["platform", "campaign_id", "campaign_name", "spend", "conversions", "cpl"])
+    cp = cp[(cp["date"] >= start_day) & (cp["date"] <= end_day)]
+    selected_platform = str(platform or "All")
+    if selected_platform in {"Google", "Meta"} and "platform" in cp.columns:
+        cp = cp[cp["platform"] == selected_platform]
+    cp = _apply_campaign_filters(cp, _campaign_filters_from_cache_key(filter_key))
+    if cp.empty:
+        return pd.DataFrame(columns=["platform", "campaign_id", "campaign_name", "spend", "conversions", "cpl"])
+
+    required_defaults: dict[str, Any] = {
+        "platform": "",
+        "campaign_id": "",
+        "campaign_name": "",
+        "spend": 0.0,
+        "impressions": 0.0,
+        "clicks": 0.0,
+        "conversions": 0.0,
+        "ctr": 0.0,
+        "cpc": 0.0,
+        "reach": 0.0,
+        "frequency": 0.0,
+    }
+    for col, default in required_defaults.items():
+        if col not in cp.columns:
+            cp[col] = default
+
+    roll = (
+        cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False)
+        .agg(
+            spend=("spend", "sum"),
+            impressions=("impressions", "sum"),
+            clicks=("clicks", "sum"),
+            conversions=("conversions", "sum"),
+            ctr=("ctr", "mean"),
+            cpc=("cpc", "mean"),
+            reach=("reach", "max"),
+            frequency=("frequency", "mean"),
+        )
+        .sort_values("spend", ascending=False)
+        .reset_index(drop=True)
+    )
+    roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
+    return roll
+
+
+@st.cache_data(show_spinner=False)
+def _cached_top_pieces_roll_from_report(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    start_iso: str,
+    end_iso: str,
+    platform: str,
+    filter_key: str,
+) -> pd.DataFrame:
+    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
+    selected_platform = str(platform or "All")
+    filters = _campaign_filters_from_cache_key(filter_key)
+
+    piece_df = _load_piece_enriched_df_cached(path_str, modified_ns, size_bytes)
+    cp = piece_df.copy()
+    if not cp.empty and "date" in cp.columns:
+        cp["date"] = pd.to_datetime(cp["date"], errors="coerce").dt.date
+        cp = cp.dropna(subset=["date"])
+        cp = cp[(cp["date"] >= start_day) & (cp["date"] <= end_day)]
+        if selected_platform in {"Google", "Meta"} and "platform" in cp.columns:
+            cp = cp[cp["platform"] == selected_platform]
+        cp = _apply_campaign_filters(cp, filters)
+
+    if cp.empty:
+        campaign_roll = _cached_campaign_roll_from_report(
+            path_str,
+            modified_ns,
+            size_bytes,
+            start_iso,
+            end_iso,
+            selected_platform,
+            filter_key,
+        )
+        if campaign_roll.empty:
+            return pd.DataFrame(columns=["platform", "piece_id", "piece_name", "inversion", "conversiones", "cpl"])
+        out = campaign_roll.copy()
+        out["piece_id"] = out["campaign_id"].astype(str)
+        out["piece_name"] = out["campaign_name"].astype(str)
+        out["inversion"] = pd.to_numeric(out["spend"], errors="coerce").fillna(0.0)
+        out["conversiones"] = pd.to_numeric(out["conversions"], errors="coerce").fillna(0.0)
+        out["clics"] = pd.to_numeric(out["clicks"], errors="coerce").fillna(0.0)
+        out = out.sort_values(["conversiones", "clics"], ascending=[False, False], na_position="last").head(10)
+        return out.reset_index(drop=True)
+
+    required_defaults: dict[str, Any] = {
+        "platform": "",
+        "campaign_id": "",
+        "campaign_name": "",
+        "piece_id": "",
+        "piece_name": "",
+        "spend": 0.0,
+        "clicks": 0.0,
+        "conversions": 0.0,
+    }
+    for col, default in required_defaults.items():
+        if col not in cp.columns:
+            cp[col] = default
+    for num_col in ("spend", "clicks", "conversions"):
+        cp[num_col] = pd.to_numeric(cp[num_col], errors="coerce").fillna(0.0)
+    cp["piece_id"] = cp["piece_id"].astype(str).str.strip()
+    cp["piece_name"] = cp["piece_name"].astype(str).str.strip()
+    cp["piece_id"] = cp["piece_id"].mask(cp["piece_id"] == "", cp["campaign_id"].astype(str))
+    cp["piece_name"] = cp["piece_name"].mask(cp["piece_name"] == "", cp["campaign_name"].astype(str))
+    cp["piece_name"] = cp["piece_name"].replace({"": "Sin nombre"})
+
+    roll = (
+        cp.groupby(["platform", "piece_id", "piece_name"], as_index=False)
+        .agg(
+            inversion=("spend", "sum"),
+            conversiones=("conversions", "sum"),
+            clics=("clicks", "sum"),
+        )
+        .sort_values(["conversiones", "clics"], ascending=[False, False], na_position="last")
+        .head(10)
+        .reset_index(drop=True)
+    )
+    roll["cpl"] = roll.apply(lambda r: sdiv(float(r["inversion"]), float(r["conversiones"])), axis=1)
+    return roll
+
+
 def paid_device_df(report: dict[str, Any]) -> pd.DataFrame:
     df = acq_df(report, "paid_device_daily")
     if df.empty:
@@ -5003,79 +5679,30 @@ def render_top_filters(
     tenant_logo_source: str,
     camp_df: pd.DataFrame,
     campaign_filter_keys: list[str],
-) -> tuple[date, date, str, dict[str, str]]:
-    default_platform_value = _normalize_platform_option(default_platform)
-    last_tenant = str(st.session_state.get("platform_filter_tenant_id", ""))
-    if last_tenant != tenant_id or st.session_state.get("platform_filter_radio_v2") not in PLATFORM_OPTIONS:
-        st.session_state["platform_filter_radio_v2"] = default_platform_value
-        st.session_state["platform_filter_tenant_id"] = tenant_id
-    wrapper_left, wrapper_right = st.columns([2.2, 1.8], gap="large")
-    with wrapper_left:
-        st.markdown(
-            f"""
-            <div class='hero'>
-              <div class='hero-kicker'>iPalmera IA Analítica</div>
-              <div class='hero-sub'><span class='hero-tenant-name'>{html.escape(tenant_name)}</span> Marketing Performance</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with wrapper_right:
-        pcol, dcol = st.columns([1.65, 0.95], gap="small")
-        with pcol:
-            platform = st.radio(
-                "Plataforma",
-                list(PLATFORM_OPTIONS),
-                key="platform_filter_radio_v2",
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-            if platform not in PLATFORM_OPTIONS:
-                platform = default_platform_value
-        with dcol:
-            st.markdown("<div class='app-filter-title' style='margin-top:0.1rem;'>Rango</div>", unsafe_allow_html=True)
-            default_start, default_end = _default_business_date_range(min_d, max_d)
-            sel = st.date_input(
-                "Rango",
-                value=(default_start, default_end),
-                min_value=min_d,
-                max_value=max_d,
-                key="top_date_range",
-                label_visibility="collapsed",
-            )
-    s, e = _normalize_date_range(sel, min_d, max_d)
-    campaign_filters: dict[str, str] = {}
-    filter_keys = _normalize_campaign_filter_keys(campaign_filter_keys, [])
-    available_filters: list[tuple[str, list[str]]] = []
-    for filter_key in filter_keys:
-        values = _campaign_filter_values(
-            camp_df,
-            field=filter_key,
-            platform=platform,
-            start_day=s,
-            end_day=e,
-        )
-        if len(values) > 1:
-            available_filters.append((filter_key, values))
-    if available_filters:
-        st.markdown("<div class='app-filter-title'>Filtros de Campaña</div>", unsafe_allow_html=True)
-        filter_cols = st.columns(len(available_filters), gap="small")
-        for idx, (filter_key, values) in enumerate(available_filters):
-            options = ["Todos"] + values
-            session_key = f"campaign_filter_{tenant_id}_{filter_key}"
-            current = str(st.session_state.get(session_key, "Todos")).strip() or "Todos"
-            if current not in options:
-                current = "Todos"
-            selected = filter_cols[idx].selectbox(
-                str(CAMPAIGN_FILTER_OPTIONS.get(filter_key, filter_key)),
-                options=options,
-                index=options.index(current),
-                key=session_key,
-            )
-            if selected != "Todos":
-                campaign_filters[filter_key] = selected
-
-    return s, e, platform, campaign_filters
+    report_cache_sig: tuple[str, int, int] | None = None,
+) -> tuple[date, date, str, dict[str, str], str, date, date, str]:
+    return dashboard_filters.render_top_filters(
+        min_d=min_d,
+        max_d=max_d,
+        tenant_name=tenant_name,
+        tenant_id=tenant_id,
+        default_platform=default_platform,
+        tenant_logo_source=tenant_logo_source,
+        camp_df=camp_df,
+        campaign_filter_keys=campaign_filter_keys,
+        report_cache_sig=report_cache_sig,
+        platform_options=PLATFORM_OPTIONS,
+        date_preset_options=DATE_PRESET_OPTIONS,
+        date_preset_labels=DATE_PRESET_LABELS,
+        date_preset_all_options=DATE_PRESET_OPTIONS,
+        compare_mode_options=COMPARE_MODE_OPTIONS,
+        compare_mode_labels=COMPARE_MODE_LABELS,
+        campaign_filter_options=CAMPAIGN_FILTER_OPTIONS,
+        normalize_platform_option=_normalize_platform_option,
+        normalize_campaign_filter_keys=_normalize_campaign_filter_keys,
+        campaign_filter_values=_campaign_filter_values,
+        cached_campaign_filter_values_from_report=_cached_campaign_filter_values_from_report,
+    )
 
 
 def render_exec(
@@ -9571,41 +10198,20 @@ def main() -> None:
 
     report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
     try:
-        report = load_report(report_path)
+        report_cache_sig = _report_cache_signature(report_path)
     except Exception as exc:
         st.error(f"No se pudo cargar el reporte para '{tenant_name}': {exc}")
         st.stop()
-    df = daily_df(report)
+    try:
+        df = load_daily_df_from_report_path(report_path)
+    except Exception as exc:
+        st.error(f"No se pudo cargar los datos diarios para '{tenant_name}': {exc}")
+        st.stop()
     if df.empty:
         st.warning("No hay datos diarios en el JSON.")
         st.stop()
-    hourly = hourly_df(report)
-
-    ch = acq_df(report, "ga4_channel_daily")
-    ga4_event_daily = acq_df(report, "ga4_event_daily")
-    pg = acq_df(report, "ga4_top_pages_daily")
-    paid_dev = paid_device_df(report)
-    lead_demo = paid_lead_demographics_df(report)
-    lead_geo = paid_lead_geo_df(report)
-    piece = acq_df(report, "paid_piece_daily")
-    if not piece.empty and "platform" not in piece.columns:
-        piece["platform"] = "Meta"
-    camp = acq_df(report, "meta_campaign_daily")
-    if not camp.empty:
-        camp["platform"] = "Meta"
-    gcamp = acq_df(report, "google_campaign_daily")
-    if not gcamp.empty:
-        gcamp["platform"] = "Google"
-        if "cost" in gcamp.columns:
-            gcamp["spend"] = pd.to_numeric(gcamp["cost"], errors="coerce").fillna(0.0)
-    if camp.empty and gcamp.empty:
-        camp_all = pd.DataFrame()
-    elif camp.empty:
-        camp_all = gcamp
-    elif gcamp.empty:
-        camp_all = camp
-    else:
-        camp_all = pd.concat([camp, gcamp], ignore_index=True)
+    hourly = load_hourly_df_from_report_path(report_path)
+    camp_all = load_campaign_unified_df_from_report_path(report_path)
 
     min_d, max_d = df["date"].min(), df["date"].max()
     tenant_logo_source = _resolve_logo_image_source(
@@ -9615,7 +10221,7 @@ def main() -> None:
         tenant_dash_cfg.get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
         DEFAULT_CAMPAIGN_FILTER_KEYS,
     )
-    s, e, platform, campaign_filters = render_top_filters(
+    s, e, platform, campaign_filters, _compare_mode, prev_s, prev_e, _compare_label = render_top_filters(
         min_d,
         max_d,
         tenant_name,
@@ -9624,6 +10230,7 @@ def main() -> None:
         tenant_logo_source,
         camp_all,
         campaign_filter_keys,
+        report_cache_sig=report_cache_sig,
     )
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
@@ -9631,9 +10238,6 @@ def main() -> None:
         hourly_sel = hourly.copy()
     else:
         hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
-    period_days = max((e - s).days + 1, 1)
-    prev_e = s - timedelta(days=1)
-    prev_s = prev_e - timedelta(days=period_days - 1)
     df_prev = df[(df["date"] >= prev_s) & (df["date"] <= prev_e)].copy()
     overview_sections = _normalize_section_keys(
         tenant_dash_cfg.get("overview_sections", DEFAULT_OVERVIEW_SECTION_KEYS),
@@ -9646,7 +10250,10 @@ def main() -> None:
         DEFAULT_TRAFFIC_SECTION_KEYS,
     )
 
-    if view_mode == "Tráfico y Adquisición":
+    if view_mode == VIEW_MODE_OPTIONS[1]:
+        piece = load_piece_enriched_df_from_report_path(report_path)
+        ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily")
+        pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
         render_coco_ia_widget(
             df_base=df,
             camp_df=camp_all,
@@ -9678,6 +10285,11 @@ def main() -> None:
             traffic_sections,
         )
     else:
+        piece = load_piece_enriched_df_from_report_path(report_path)
+        ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily")
+        paid_dev = load_paid_device_df_from_report_path(report_path)
+        lead_demo = load_paid_lead_demographics_df_from_report_path(report_path)
+        lead_geo = load_paid_lead_geo_df_from_report_path(report_path)
         render_coco_ia_widget(
             df_base=df,
             camp_df=camp_all,
