@@ -10210,8 +10210,6 @@ def main() -> None:
     if df.empty:
         st.warning("No hay datos diarios en el JSON.")
         st.stop()
-    hourly = load_hourly_df_from_report_path(report_path)
-    camp_all = load_campaign_unified_df_from_report_path(report_path)
 
     min_d, max_d = df["date"].min(), df["date"].max()
     tenant_logo_source = _resolve_logo_image_source(
@@ -10228,17 +10226,14 @@ def main() -> None:
         tenant_id,
         str(tenant_dash_cfg.get("default_platform", "All")),
         tenant_logo_source,
-        camp_all,
+        pd.DataFrame(),
         campaign_filter_keys,
         report_cache_sig=report_cache_sig,
     )
 
     df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
-    if hourly.empty:
-        hourly_sel = hourly.copy()
-    else:
-        hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
     df_prev = df[(df["date"] >= prev_s) & (df["date"] <= prev_e)].copy()
+    coco_enabled_for_tenant = _is_coco_enabled_for_tenant(coco_cfg, tenant_id)
     overview_sections = _normalize_section_keys(
         tenant_dash_cfg.get("overview_sections", DEFAULT_OVERVIEW_SECTION_KEYS),
         OVERVIEW_SECTION_OPTIONS,
@@ -10251,9 +10246,16 @@ def main() -> None:
     )
 
     if view_mode == VIEW_MODE_OPTIONS[1]:
-        piece = load_piece_enriched_df_from_report_path(report_path)
-        ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily")
-        pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
+        traffic_section_set = set(traffic_sections)
+        needs_channels = "channels" in traffic_section_set
+        needs_top_pages = "top_pages" in traffic_section_set
+        needs_campaigns = "campaigns" in traffic_section_set
+        needs_campaign_data = bool(needs_campaigns or coco_enabled_for_tenant)
+        needs_piece_data = bool(coco_enabled_for_tenant)
+        camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
+        piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
+        ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily") if needs_channels else pd.DataFrame()
+        pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily") if needs_top_pages else pd.DataFrame()
         render_coco_ia_widget(
             df_base=df,
             camp_df=camp_all,
@@ -10285,11 +10287,28 @@ def main() -> None:
             traffic_sections,
         )
     else:
-        piece = load_piece_enriched_df_from_report_path(report_path)
-        ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily")
-        paid_dev = load_paid_device_df_from_report_path(report_path)
-        lead_demo = load_paid_lead_demographics_df_from_report_path(report_path)
-        lead_geo = load_paid_lead_geo_df_from_report_path(report_path)
+        overview_section_set = set(overview_sections)
+        needs_trend_hourly = "trend_chart" in overview_section_set
+        needs_piece_data = bool("top_pieces" in overview_section_set or coco_enabled_for_tenant)
+        needs_campaign_data = bool("top_pieces" in overview_section_set or coco_enabled_for_tenant)
+        needs_ga4_event = "ga4_conversion" in overview_section_set
+        needs_paid_device = "device_breakdown" in overview_section_set
+        needs_lead_demo = "lead_demographics" in overview_section_set
+        needs_lead_geo = "lead_geo_map" in overview_section_set
+        camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
+        piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
+        ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily") if needs_ga4_event else pd.DataFrame()
+        paid_dev = load_paid_device_df_from_report_path(report_path) if needs_paid_device else pd.DataFrame()
+        lead_demo = load_paid_lead_demographics_df_from_report_path(report_path) if needs_lead_demo else pd.DataFrame()
+        lead_geo = load_paid_lead_geo_df_from_report_path(report_path) if needs_lead_geo else pd.DataFrame()
+        if needs_trend_hourly:
+            hourly = load_hourly_df_from_report_path(report_path)
+            if hourly.empty:
+                hourly_sel = hourly.copy()
+            else:
+                hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
+        else:
+            hourly_sel = pd.DataFrame()
         render_coco_ia_widget(
             df_base=df,
             camp_df=camp_all,
