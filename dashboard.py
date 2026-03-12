@@ -5114,14 +5114,37 @@ def _cached_top_pieces_roll_from_report(
             filter_key,
         )
         if campaign_roll.empty:
-            return pd.DataFrame(columns=["platform", "piece_id", "piece_name", "inversion", "conversiones", "cpl"])
+            return pd.DataFrame(
+                columns=[
+                    "platform",
+                    "campaign_id",
+                    "campaign_name",
+                    "piece_id",
+                    "piece_name",
+                    "inversion",
+                    "conversiones",
+                    "clics",
+                    "vista_previa",
+                    "cpl",
+                ]
+            )
         out = campaign_roll.copy()
+        if "campaign_id" in out.columns:
+            out["campaign_id"] = out["campaign_id"].astype(str)
+        else:
+            out["campaign_id"] = ""
+        if "campaign_name" in out.columns:
+            out["campaign_name"] = out["campaign_name"].astype(str)
+        else:
+            out["campaign_name"] = ""
         out["piece_id"] = out["campaign_id"].astype(str)
         out["piece_name"] = out["campaign_name"].astype(str)
         out["inversion"] = pd.to_numeric(out["spend"], errors="coerce").fillna(0.0)
         out["conversiones"] = pd.to_numeric(out["conversions"], errors="coerce").fillna(0.0)
         out["clics"] = pd.to_numeric(out["clicks"], errors="coerce").fillna(0.0)
+        out["vista_previa"] = ""
         out = out.sort_values(["conversiones", "clics"], ascending=[False, False], na_position="last").head(10)
+        out["cpl"] = out.apply(lambda r: sdiv(float(r["inversion"]), float(r["conversiones"])), axis=1)
         return out.reset_index(drop=True)
 
     required_defaults: dict[str, Any] = {
@@ -5130,6 +5153,9 @@ def _cached_top_pieces_roll_from_report(
         "campaign_name": "",
         "piece_id": "",
         "piece_name": "",
+        "preview_url": "",
+        "image_url": "",
+        "thumbnail_url": "",
         "spend": 0.0,
         "clicks": 0.0,
         "conversions": 0.0,
@@ -5144,13 +5170,38 @@ def _cached_top_pieces_roll_from_report(
     cp["piece_id"] = cp["piece_id"].mask(cp["piece_id"] == "", cp["campaign_id"].astype(str))
     cp["piece_name"] = cp["piece_name"].mask(cp["piece_name"] == "", cp["campaign_name"].astype(str))
     cp["piece_name"] = cp["piece_name"].replace({"": "Sin nombre"})
+    for col in ("preview_url", "image_url", "thumbnail_url"):
+        cp[col] = (
+            cp[col]
+            .astype(str)
+            .str.strip()
+            .replace({"nan": "", "none": "", "None": "", "null": "", "NULL": ""})
+        )
+    cp["vista_previa"] = (
+        cp[["preview_url", "image_url", "thumbnail_url"]]
+        .replace({"": pd.NA})
+        .bfill(axis=1)
+        .iloc[:, 0]
+        .fillna("")
+    )
+
+    def _first_non_empty_value(series: pd.Series) -> str:
+        for raw in series.tolist():
+            txt = str(raw or "").strip()
+            if txt and txt.lower() not in {"nan", "none", "null"}:
+                return txt
+        return ""
 
     roll = (
-        cp.groupby(["platform", "piece_id", "piece_name"], as_index=False)
+        cp.groupby(
+            ["platform", "piece_id", "piece_name", "campaign_id", "campaign_name"],
+            as_index=False,
+        )
         .agg(
             inversion=("spend", "sum"),
             conversiones=("conversions", "sum"),
             clics=("clicks", "sum"),
+            vista_previa=("vista_previa", _first_non_empty_value),
         )
         .sort_values(["conversiones", "clics"], ascending=[False, False], na_position="last")
         .head(10)
@@ -5727,6 +5778,7 @@ def render_exec(
     prev_e,
     overview_chart_state_key: str,
     hourly_sel: pd.DataFrame | None = None,
+    report_cache_sig: tuple[str, int, int] | None = None,
 ):
     selected_sections = _normalize_section_keys(
         overview_section_keys,
@@ -6827,6 +6879,7 @@ def render_exec(
             tenant_meta_account_id=tenant_meta_account_id,
             tenant_google_customer_id=tenant_google_customer_id,
             campaign_filters=campaign_filters,
+            report_cache_sig=report_cache_sig,
         )
 
 def render_top_pieces_range(
@@ -6839,7 +6892,100 @@ def render_top_pieces_range(
     tenant_meta_account_id: str = "",
     tenant_google_customer_id: str = "",
     campaign_filters: dict[str, str] | None = None,
+    report_cache_sig: tuple[str, int, int] | None = None,
 ):
+    if report_cache_sig is not None:
+        path_str, modified_ns, size_bytes = report_cache_sig
+        filter_key = _campaign_filters_cache_key(campaign_filters or {})
+        top = _cached_top_pieces_roll_from_report(
+            path_str,
+            modified_ns,
+            size_bytes,
+            str(start_ref.isoformat()),
+            str(end_ref.isoformat()),
+            str(platform or "All"),
+            filter_key,
+        )
+        if top.empty:
+            st.info("No hay piezas/campañas para el rango seleccionado.")
+            return
+        top = top.copy()
+        if "campaign_id" not in top.columns:
+            top["campaign_id"] = ""
+        if "piece_id" not in top.columns:
+            top["piece_id"] = ""
+        if "piece_name" not in top.columns:
+            top["piece_name"] = "Sin nombre"
+        if "platform" not in top.columns:
+            top["platform"] = ""
+        if "inversion" not in top.columns:
+            top["inversion"] = 0.0
+        if "conversiones" not in top.columns:
+            top["conversiones"] = 0.0
+        if "cpl" not in top.columns:
+            top["cpl"] = top.apply(
+                lambda r: sdiv(float(r.get("inversion", 0.0)), float(r.get("conversiones", 0.0))),
+                axis=1,
+            )
+        if "vista_previa" not in top.columns:
+            top["vista_previa"] = ""
+        top["Ver"] = top.apply(
+            lambda r: piece_platform_link(
+                r.get("platform"),
+                piece_id=r.get("piece_id"),
+                campaign_id=r.get("campaign_id"),
+                meta_account_id=tenant_meta_account_id,
+                google_customer_id=tenant_google_customer_id,
+            ),
+            axis=1,
+        )
+        top["Campaña / Pieza"] = top["piece_name"].astype(str).replace({"": "Sin nombre"})
+        top["Vista"] = top["vista_previa"].astype(str).replace({"nan": "", "None": ""})
+        top["Plataforma"] = top["platform"].astype(str).replace({"": "N/A"})
+        top["Gasto"] = pd.to_numeric(top["inversion"], errors="coerce")
+        top["Conversiones"] = pd.to_numeric(top["conversiones"], errors="coerce")
+        top["CPL"] = pd.to_numeric(top["cpl"], errors="coerce")
+        top_view = top[["Vista", "Ver", "Campaña / Pieza", "Plataforma", "Gasto", "Conversiones", "CPL"]].copy()
+        top_view["Vista"] = top_view["Vista"].fillna("")
+        top_view["Ver"] = top_view["Ver"].fillna("")
+
+        st.markdown("<div class='top-pieces-card'>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class='top-pieces-head'>
+              <h3 class='top-pieces-title'>Top 10 Piezas</h3>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if campaign_filters:
+            active_labels = [
+                f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                for k, v in campaign_filters.items()
+                if str(v).strip()
+            ]
+            if active_labels:
+                st.caption(" | ".join(active_labels))
+        st.dataframe(
+            top_view,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Vista": st.column_config.ImageColumn(
+                    "Vista",
+                    help="Vista previa de la pieza (si está disponible).",
+                ),
+                "Ver": st.column_config.LinkColumn("Ver", help="Abrir campaña/pieza", display_text="Abrir"),
+                "Campaña / Pieza": st.column_config.TextColumn("Campaña / Pieza"),
+                "Plataforma": st.column_config.TextColumn("Plataforma"),
+                "Gasto": st.column_config.NumberColumn("Gasto", format="$%.2f"),
+                "Conversiones": st.column_config.NumberColumn("Conversiones", format="%.0f"),
+                "CPL": st.column_config.NumberColumn("CPL", format="$%.2f"),
+            },
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
     has_piece_data = bool(
         isinstance(piece_df, pd.DataFrame)
         and not piece_df.empty
@@ -7093,6 +7239,7 @@ def render_traffic(
     campaign_filters: dict[str, str],
     traffic_kpi_keys: list[str],
     traffic_section_keys: list[str],
+    report_cache_sig: tuple[str, int, int] | None = None,
 ):
     section_title("03 > Rendimiento de Trafico y Adquisicion")
     selected_sections = _normalize_section_keys(
@@ -7106,10 +7253,34 @@ def render_traffic(
     kpi_payload = build_kpi_payload(sm, sm_prev, max(len(df_sel), 1), len(df_prev))
     if "kpis" in section_set:
         render_kpi_cards(traffic_kpi_keys, kpi_payload, DEFAULT_TRAFFIC_KPI_KEYS)
+    cache_path_str = ""
+    cache_modified_ns = 0
+    cache_size_bytes = 0
+    if report_cache_sig is not None:
+        cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
+    start_iso = s.isoformat()
+    end_iso = e.isoformat()
+    campaign_filter_key = _campaign_filters_cache_key(campaign_filters)
 
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
-        if ch_df.empty:
+        if report_cache_sig is not None:
+            b = _cached_channels_roll_from_report(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                start_iso,
+                end_iso,
+            ).head(10)
+            if b.empty:
+                st.info("Sin datos para el rango seleccionado.")
+            else:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=b["sessionDefaultChannelGroup"], y=b["sessions"], name="Sessions", marker={"color": C_ACCENT}))
+                fig.add_trace(go.Scatter(x=b["sessionDefaultChannelGroup"], y=b["conversions"], name="Conversions", mode="lines+markers", line={"color": C_META, "width": 2}, yaxis="y2"))
+                pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
+                st.plotly_chart(fig, width="stretch")
+        elif ch_df.empty:
             st.info("No hay datos de canales en JSON.")
         else:
             ch = ch_df[(ch_df["date"] >= s) & (ch_df["date"] <= e)].copy()
@@ -7130,7 +7301,19 @@ def render_traffic(
 
     def _render_top_pages() -> None:
         section_title("Paginas Mas Visitadas")
-        if pg_df.empty:
+        if report_cache_sig is not None:
+            top_p = _cached_top_pages_roll_from_report(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                start_iso,
+                end_iso,
+            ).head(10)
+            if top_p.empty:
+                st.info("Sin datos para el rango seleccionado.")
+            else:
+                st.dataframe(top_p, width="stretch", hide_index=True)
+        elif pg_df.empty:
             st.info("No hay datos de paginas en JSON.")
         else:
             pg = pg_df[(pg_df["date"] >= s) & (pg_df["date"] <= e)].copy()
@@ -7160,7 +7343,29 @@ def render_traffic(
 
     if "campaigns" in section_set:
         section_title("Rendimiento de Campanas (Paid Media)")
-        if camp_df.empty:
+        if report_cache_sig is not None:
+            roll = _cached_campaign_roll_from_report(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                start_iso,
+                end_iso,
+                platform,
+                campaign_filter_key,
+            ).head(20)
+            if roll.empty:
+                st.info("Sin datos de campanas para filtros actuales.")
+            else:
+                if campaign_filters:
+                    active_labels = [
+                        f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                        for k, v in campaign_filters.items()
+                        if str(v).strip()
+                    ]
+                    if active_labels:
+                        st.caption(" | ".join(active_labels))
+                st.dataframe(roll, width="stretch", hide_index=True)
+        elif camp_df.empty:
             st.info("No hay datos de campanas en JSON.")
         else:
             cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
@@ -8307,44 +8512,8 @@ def render_coco_ia_widget(
 
     username = str(auth_user.get("username", "unknown")).strip().lower() or "unknown"
     thread_key = _coco_thread_key(username, tenant_id)
-    persisted_context = read_coco_chat_state(thread_key)
-    usage_rows = read_coco_usage(limit=10_000)
-    max_queries = _resolve_coco_daily_limit(coco_cfg, username, tenant_id)
-    used_today = _count_coco_queries_today(usage_rows, username, tenant_id)
-    query_blocked = max_queries > 0 and used_today >= max_queries
-    tenant_budget_usd = _resolve_coco_daily_budget_usd(coco_cfg, tenant_id)
-    tenant_cost_today_usd = _coco_tenant_cost_today_usd(usage_rows, tenant_id)
-    budget_blocked = tenant_budget_usd > 0 and tenant_cost_today_usd >= tenant_budget_usd
-    budget_usage_ratio = (
-        (tenant_cost_today_usd / tenant_budget_usd)
-        if tenant_budget_usd > 0
-        else 0.0
-    )
-    blocked = bool(query_blocked or budget_blocked)
-    remaining_queries = max(max_queries - used_today, 0) if max_queries > 0 else None
-    remaining_budget_usd = max(tenant_budget_usd - tenant_cost_today_usd, 0.0) if tenant_budget_usd > 0 else None
-    query_usage_ratio = (used_today / max_queries) if max_queries > 0 else 0.0
-
-    history_key = f"coco_chat_history::{tenant_id}::{username}"
-    if history_key not in st.session_state or not isinstance(st.session_state.get(history_key), list):
-        st.session_state[history_key] = []
-    if not st.session_state[history_key]:
-        persisted_history = read_coco_chat_events(thread_key, limit=COCO_HISTORY_PERSIST_LIMIT)
-        if persisted_history:
-            st.session_state[history_key] = persisted_history
-    history: list[dict[str, str]] = st.session_state.get(history_key, [])
     context_key = f"coco_chat_context::{tenant_id}::{username}"
-    if context_key not in st.session_state or not isinstance(st.session_state.get(context_key), dict):
-        st.session_state[context_key] = {}
-    if isinstance(persisted_context, dict):
-        last_context = persisted_context.get("last_context", {})
-        if isinstance(last_context, dict):
-            merged_context = dict(st.session_state.get(context_key, {}))
-            merged_context.update(last_context)
-            if str(persisted_context.get("preferred_scope", "")).strip().lower() in {"total", "filter"}:
-                merged_context["preferred_scope"] = str(persisted_context.get("preferred_scope")).strip().lower()
-            st.session_state[context_key] = merged_context
-
+    history_key = f"coco_chat_history::{tenant_id}::{username}"
     panel_state_key = f"coco_panel_open::{tenant_id}::{username}"
     if panel_state_key not in st.session_state:
         st.session_state[panel_state_key] = False
@@ -8453,6 +8622,45 @@ def render_coco_ia_widget(
         ):
             panel_open = not panel_open
             st.session_state[panel_state_key] = panel_open
+
+    if not panel_open:
+        return
+
+    persisted_context = read_coco_chat_state(thread_key)
+    usage_rows = read_coco_usage(limit=10_000)
+    max_queries = _resolve_coco_daily_limit(coco_cfg, username, tenant_id)
+    used_today = _count_coco_queries_today(usage_rows, username, tenant_id)
+    query_blocked = max_queries > 0 and used_today >= max_queries
+    tenant_budget_usd = _resolve_coco_daily_budget_usd(coco_cfg, tenant_id)
+    tenant_cost_today_usd = _coco_tenant_cost_today_usd(usage_rows, tenant_id)
+    budget_blocked = tenant_budget_usd > 0 and tenant_cost_today_usd >= tenant_budget_usd
+    budget_usage_ratio = (
+        (tenant_cost_today_usd / tenant_budget_usd)
+        if tenant_budget_usd > 0
+        else 0.0
+    )
+    blocked = bool(query_blocked or budget_blocked)
+    remaining_queries = max(max_queries - used_today, 0) if max_queries > 0 else None
+    remaining_budget_usd = max(tenant_budget_usd - tenant_cost_today_usd, 0.0) if tenant_budget_usd > 0 else None
+    query_usage_ratio = (used_today / max_queries) if max_queries > 0 else 0.0
+
+    if history_key not in st.session_state or not isinstance(st.session_state.get(history_key), list):
+        st.session_state[history_key] = []
+    if not st.session_state[history_key]:
+        persisted_history = read_coco_chat_events(thread_key, limit=COCO_HISTORY_PERSIST_LIMIT)
+        if persisted_history:
+            st.session_state[history_key] = persisted_history
+    history: list[dict[str, str]] = st.session_state.get(history_key, [])
+    if context_key not in st.session_state or not isinstance(st.session_state.get(context_key), dict):
+        st.session_state[context_key] = {}
+    if isinstance(persisted_context, dict):
+        last_context = persisted_context.get("last_context", {})
+        if isinstance(last_context, dict):
+            merged_context = dict(st.session_state.get(context_key, {}))
+            merged_context.update(last_context)
+            if str(persisted_context.get("preferred_scope", "")).strip().lower() in {"total", "filter"}:
+                merged_context["preferred_scope"] = str(persisted_context.get("preferred_scope")).strip().lower()
+            st.session_state[context_key] = merged_context
 
     with st.container(key=f"coco-panel-{tenant_id}"):
         head_col_1, head_col_2 = st.columns([0.72, 0.28])
@@ -10247,15 +10455,20 @@ def main() -> None:
 
     if view_mode == VIEW_MODE_OPTIONS[1]:
         traffic_section_set = set(traffic_sections)
-        needs_channels = "channels" in traffic_section_set
-        needs_top_pages = "top_pages" in traffic_section_set
-        needs_campaigns = "campaigns" in traffic_section_set
-        needs_campaign_data = bool(needs_campaigns or coco_enabled_for_tenant)
+        _needs_channels = "channels" in traffic_section_set
+        _needs_top_pages = "top_pages" in traffic_section_set
+        _needs_campaigns = "campaigns" in traffic_section_set
+        needs_campaign_data = bool(coco_enabled_for_tenant)
         needs_piece_data = bool(coco_enabled_for_tenant)
         camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
         piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
-        ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily") if needs_channels else pd.DataFrame()
-        pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily") if needs_top_pages else pd.DataFrame()
+        ch = pd.DataFrame()
+        pg = pd.DataFrame()
+        if report_cache_sig is None:
+            if _needs_channels:
+                ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily")
+            if _needs_top_pages:
+                pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
         render_coco_ia_widget(
             df_base=df,
             camp_df=camp_all,
@@ -10285,12 +10498,15 @@ def main() -> None:
                 DEFAULT_TRAFFIC_KPI_KEYS,
             ),
             traffic_sections,
+            report_cache_sig=report_cache_sig,
         )
     else:
         overview_section_set = set(overview_sections)
+        has_report_cache = report_cache_sig is not None
+        needs_top_pieces_source = bool("top_pieces" in overview_section_set and not has_report_cache)
         needs_trend_hourly = "trend_chart" in overview_section_set
-        needs_piece_data = bool("top_pieces" in overview_section_set or coco_enabled_for_tenant)
-        needs_campaign_data = bool("top_pieces" in overview_section_set or coco_enabled_for_tenant)
+        needs_piece_data = bool(coco_enabled_for_tenant or needs_top_pieces_source)
+        needs_campaign_data = bool(coco_enabled_for_tenant or needs_top_pieces_source)
         needs_ga4_event = "ga4_conversion" in overview_section_set
         needs_paid_device = "device_breakdown" in overview_section_set
         needs_lead_demo = "lead_demographics" in overview_section_set
@@ -10350,6 +10566,7 @@ def main() -> None:
             prev_e,
             f"overview_chart_metric_{tenant_id}",
             hourly_sel,
+            report_cache_sig=report_cache_sig,
         )
 
     render_sidebar_logout_button()
