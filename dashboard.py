@@ -15,6 +15,7 @@ import base64
 import textwrap
 import time
 import unicodedata
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -257,6 +258,36 @@ MONTH_NAMES_ES: dict[int, str] = {
     11: "noviembre",
     12: "diciembre",
 }
+
+
+class DashboardProfiler:
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = bool(enabled)
+        self._rows: list[dict[str, Any]] = []
+
+    @contextmanager
+    def span(self, name: str):
+        if not self.enabled:
+            yield
+            return
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self._rows.append({"span": str(name), "ms": float(elapsed_ms)})
+
+    def report(self, *, top_n: int = 50) -> list[dict[str, Any]]:
+        if not self.enabled:
+            return []
+        rows = sorted(self._rows, key=lambda item: float(item.get("ms", 0.0)), reverse=True)
+        return rows[: max(int(top_n), 0)]
+
+
+def _profile_span(profiler: DashboardProfiler | None, name: str):
+    if profiler is None:
+        return nullcontext()
+    return profiler.span(name)
 
 
 def sf(v: Any) -> float:
@@ -5779,6 +5810,7 @@ def render_exec(
     overview_chart_state_key: str,
     hourly_sel: pd.DataFrame | None = None,
     report_cache_sig: tuple[str, int, int] | None = None,
+    profiler: DashboardProfiler | None = None,
 ):
     selected_sections = _normalize_section_keys(
         overview_section_keys,
@@ -5786,23 +5818,25 @@ def render_exec(
         DEFAULT_OVERVIEW_SECTION_KEYS,
     )
     section_set = set(selected_sections)
-    cur, prev = summary(df_sel, platform), summary(df_prev, platform)
-    cur_days, prev_days = max(len(df_sel), 1), len(df_prev)
-    kpi_payload = build_kpi_payload(cur, prev, cur_days, prev_days)
+    with _profile_span(profiler, "render_exec:kpi_payload"):
+        cur, prev = summary(df_sel, platform), summary(df_prev, platform)
+        cur_days, prev_days = max(len(df_sel), 1), len(df_prev)
+        kpi_payload = build_kpi_payload(cur, prev, cur_days, prev_days)
     valid_overview_kpis = _resolve_kpi_keys(overview_kpi_keys, kpi_payload, DEFAULT_OVERVIEW_KPI_KEYS)
     active_overview_kpi = str(st.session_state.get(overview_chart_state_key, "")).strip()
     if active_overview_kpi not in valid_overview_kpis:
         active_overview_kpi = "spend" if "spend" in valid_overview_kpis else (valid_overview_kpis[0] if valid_overview_kpis else "spend")
         st.session_state[overview_chart_state_key] = active_overview_kpi
     if "kpis" in section_set:
-        active_overview_kpi = render_kpi_cards(
-            overview_kpi_keys,
-            kpi_payload,
-            DEFAULT_OVERVIEW_KPI_KEYS,
-            interactive=True,
-            state_key=overview_chart_state_key,
-            preferred_active_key=active_overview_kpi,
-        )
+        with _profile_span(profiler, "render_exec:section:kpis"):
+            active_overview_kpi = render_kpi_cards(
+                overview_kpi_keys,
+                kpi_payload,
+                DEFAULT_OVERVIEW_KPI_KEYS,
+                interactive=True,
+                state_key=overview_chart_state_key,
+                preferred_active_key=active_overview_kpi,
+            )
 
     c = metric_cols(platform)
 
@@ -6674,213 +6708,227 @@ def render_exec(
     if show_trend and show_right_stack:
         chart_col, funnel_col = st.columns([3.1, 1.2], gap="large")
         with chart_col:
-            _render_trend_chart()
+            with _profile_span(profiler, "render_exec:section:trend_chart"):
+                _render_trend_chart()
         with funnel_col:
-            _render_funnel_and_ga4()
+            with _profile_span(profiler, "render_exec:section:funnel_ga4"):
+                _render_funnel_and_ga4()
     elif show_trend:
-        _render_trend_chart()
+        with _profile_span(profiler, "render_exec:section:trend_chart"):
+            _render_trend_chart()
     elif show_right_stack:
-        _render_funnel_and_ga4()
+        with _profile_span(profiler, "render_exec:section:funnel_ga4"):
+            _render_funnel_and_ga4()
 
     if "media_mix" in section_set:
         st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        _render_media_mix()
+        with _profile_span(profiler, "render_exec:section:media_mix"):
+            _render_media_mix()
 
     if "lead_demographics" in section_set:
         st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        _render_lead_demographics()
+        with _profile_span(profiler, "render_exec:section:lead_demographics"):
+            _render_lead_demographics()
 
     if "lead_geo_map" in section_set:
         st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        _render_lead_geo_map()
+        with _profile_span(profiler, "render_exec:section:lead_geo_map"):
+            _render_lead_geo_map()
 
     if "device_breakdown" in section_set:
-        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
-            unsafe_allow_html=True,
-        )
+        with _profile_span(profiler, "render_exec:section:device_breakdown"):
+            st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
+                unsafe_allow_html=True,
+            )
 
-        pcur = paid_dev_df[
-            (paid_dev_df["date"] >= s) & (paid_dev_df["date"] <= e)
-        ].copy() if not paid_dev_df.empty else pd.DataFrame()
-        pprev = paid_dev_df[
-            (paid_dev_df["date"] >= prev_s) & (paid_dev_df["date"] <= prev_e)
-        ].copy() if not paid_dev_df.empty else pd.DataFrame()
-        if platform in ("Google", "Meta"):
-            pcur = pcur[pcur["platform"] == platform]
-            pprev = pprev[pprev["platform"] == platform]
+            dev_src = paid_dev_df.copy() if not paid_dev_df.empty else pd.DataFrame()
+            if not dev_src.empty and "date" in dev_src.columns:
+                dev_src["date"] = pd.to_datetime(dev_src["date"], errors="coerce").dt.date
+                dev_src = dev_src.dropna(subset=["date"])
+            pcur = dev_src[
+                (dev_src["date"] >= s) & (dev_src["date"] <= e)
+            ].copy() if not dev_src.empty else pd.DataFrame()
+            pprev = dev_src[
+                (dev_src["date"] >= prev_s) & (dev_src["date"] <= prev_e)
+            ].copy() if not dev_src.empty else pd.DataFrame()
+            if platform in ("Google", "Meta"):
+                pcur = pcur[pcur["platform"] == platform]
+                pprev = pprev[pprev["platform"] == platform]
 
-        if pcur.empty:
-            st.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
-        else:
-            cur_roll = (
-                pcur.groupby("device", as_index=False)
-                .agg(
-                    spend=("spend", "sum"),
-                    impressions=("impressions", "sum"),
-                    clicks=("clicks", "sum"),
-                    conversions=("conversions", "sum"),
-                )
-            )
-            prev_roll = (
-                pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
-                if not pprev.empty
-                else pd.DataFrame(columns=["device", "impressions_prev"])
-            )
-            cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
-            cur_roll["ctr"] = cur_roll.apply(
-                lambda r: sdiv(float(r["clicks"]), float(r["impressions"])),
-                axis=1,
-            )
-            cur_roll["cpl"] = cur_roll.apply(
-                lambda r: sdiv(float(r["spend"]), float(r["conversions"])),
-                axis=1,
-            )
-            cur_roll["delta_impressions"] = cur_roll.apply(
-                lambda r: pct_delta(float(r["impressions"]), float(r["impressions_prev"])),
-                axis=1,
-            )
-            order = ["Desktop", "Mobile", "Other"]
-            roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
-
-            m1, m2, m3 = st.columns(3)
-            for idx, dname in enumerate(order):
-                row = roll[roll["device"] == dname].iloc[0]
-                target_col = [m1, m2, m3][idx]
-                target_col.metric(
-                    f"{dname} Impresiones",
-                    f"{float(row['impressions']):,.0f}",
-                    fmt_delta_compact(row["delta_impressions"]),
-                )
-
-            st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
-            total_impressions = float(pd.to_numeric(roll["impressions"], errors="coerce").fillna(0.0).sum())
-            if total_impressions <= 0:
-                st.info("Sin impresiones para graficar distribución por dispositivo.")
+            if pcur.empty:
+                st.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
             else:
-                pie = go.Figure(
-                    go.Pie(
-                        labels=roll["device"],
-                        values=roll["impressions"],
-                        hole=0.56,
-                        marker={
-                            "colors": [C_GOOGLE, C_META, C_MUTE],
-                            "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
-                        },
-                        texttemplate="%{label}<br>%{percent}",
-                        hovertemplate="%{label}: %{value:,.0f} impresiones<extra></extra>",
-                        sort=False,
+                cur_roll = (
+                    pcur.groupby("device", as_index=False)
+                    .agg(
+                        spend=("spend", "sum"),
+                        impressions=("impressions", "sum"),
+                        clicks=("clicks", "sum"),
+                        conversions=("conversions", "sum"),
                     )
                 )
-                pie.update_layout(
-                    height=300,
-                    margin={"l": 10, "r": 10, "t": 8, "b": 8},
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    showlegend=False,
+                prev_roll = (
+                    pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
+                    if not pprev.empty
+                    else pd.DataFrame(columns=["device", "impressions_prev"])
                 )
-                st.plotly_chart(pie, width="stretch")
-            st.markdown("</div>", unsafe_allow_html=True)
+                cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
+                cur_roll["ctr"] = cur_roll.apply(
+                    lambda r: sdiv(float(r["clicks"]), float(r["impressions"])),
+                    axis=1,
+                )
+                cur_roll["cpl"] = cur_roll.apply(
+                    lambda r: sdiv(float(r["spend"]), float(r["conversions"])),
+                    axis=1,
+                )
+                cur_roll["delta_impressions"] = cur_roll.apply(
+                    lambda r: pct_delta(float(r["impressions"]), float(r["impressions_prev"])),
+                    axis=1,
+                )
+                order = ["Desktop", "Mobile", "Other"]
+                roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
 
-            table = roll.rename(
-                columns={
-                    "device": "Device",
-                    "spend": "Spend",
-                    "impressions": "Impressions",
-                    "clicks": "Clicks",
-                    "conversions": "Conversions",
-                    "ctr": "CTR",
-                    "cpl": "CPL",
-                }
-            )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
+                m1, m2, m3 = st.columns(3)
+                for idx, dname in enumerate(order):
+                    row = roll[roll["device"] == dname].iloc[0]
+                    target_col = [m1, m2, m3][idx]
+                    target_col.metric(
+                        f"{dname} Impresiones",
+                        f"{float(row['impressions']):,.0f}",
+                        fmt_delta_compact(row["delta_impressions"]),
+                    )
 
-            st.dataframe(
-                table.style.format(
-                    {
-                        "Spend": lambda v: fmt_money(float(v)),
-                        "Impressions": "{:.0f}",
-                        "Clicks": "{:.0f}",
-                        "Conversions": "{:.2f}",
-                        "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-                        "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+                st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
+                total_impressions = float(pd.to_numeric(roll["impressions"], errors="coerce").fillna(0.0).sum())
+                if total_impressions <= 0:
+                    st.info("Sin impresiones para graficar distribución por dispositivo.")
+                else:
+                    pie = go.Figure(
+                        go.Pie(
+                            labels=roll["device"],
+                            values=roll["impressions"],
+                            hole=0.56,
+                            marker={
+                                "colors": [C_GOOGLE, C_META, C_MUTE],
+                                "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
+                            },
+                            texttemplate="%{label}<br>%{percent}",
+                            hovertemplate="%{label}: %{value:,.0f} impresiones<extra></extra>",
+                            sort=False,
+                        )
+                    )
+                    pie.update_layout(
+                        height=300,
+                        margin={"l": 10, "r": 10, "t": 8, "b": 8},
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        showlegend=False,
+                    )
+                    st.plotly_chart(pie, width="stretch")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                table = roll.rename(
+                    columns={
+                        "device": "Device",
+                        "spend": "Spend",
+                        "impressions": "Impressions",
+                        "clicks": "Clicks",
+                        "conversions": "Conversions",
+                        "ctr": "CTR",
+                        "cpl": "CPL",
                     }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
+                )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
+
+                st.dataframe(
+                    table.style.format(
+                        {
+                            "Spend": lambda v: fmt_money(float(v)),
+                            "Impressions": "{:.0f}",
+                            "Clicks": "{:.0f}",
+                            "Conversions": "{:.2f}",
+                            "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
+                            "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
 
     if "audit_table" in section_set:
-        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>8) Tabla Maestra de Auditoria</div>",
-            unsafe_allow_html=True,
-        )
-        t = df_sel[
-            [
-                "date",
-                "meta_spend",
-                "google_spend",
-                c["spend"],
-                c["clicks"],
-                c["impr"],
-                c["conv"],
-                "ga4_sessions",
-                "ga4_avg_sess",
-                "ga4_bounce",
-            ]
-        ].copy()
-        t.columns = [
-            "Date",
-            "Meta Spend",
-            "Google Spend",
-            "Spend",
-            "Clicks",
-            "Impressions",
-            "Conversions",
-            "Sessions",
-            "Avg Session (s)",
-            "Bounce Rate",
-        ]
-        t["CPL"] = t.apply(lambda r: sdiv(float(r["Spend"]), float(r["Conversions"])), axis=1)
-        t["CTR"] = t.apply(lambda r: sdiv(float(r["Clicks"]), float(r["Impressions"])), axis=1)
-        t = t.sort_values("Date", ascending=False)
-        sty = (
-            t.style.format(
-                {
-                    "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
-                    "Meta Spend": lambda v: fmt_money(float(v)),
-                    "Google Spend": lambda v: fmt_money(float(v)),
-                    "Spend": lambda v: fmt_money(float(v)),
-                    "Clicks": "{:.0f}",
-                    "Impressions": "{:.0f}",
-                    "Conversions": "{:.2f}",
-                    "Sessions": "{:.0f}",
-                    "Avg Session (s)": "{:.1f}",
-                    "Bounce Rate": lambda v: fmt_pct(float(v)),
-                    "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
-                    "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-                }
+        with _profile_span(profiler, "render_exec:section:audit_table"):
+            st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='viz-title' style='margin-bottom:0.35rem;'>8) Tabla Maestra de Auditoria</div>",
+                unsafe_allow_html=True,
             )
-            .background_gradient(subset=["Spend"], cmap="Blues")
-            .background_gradient(subset=["Conversions"], cmap="Greens")
-            .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
-            .background_gradient(subset=["CTR"], cmap="PuBu")
-        )
-        st.dataframe(sty, width="stretch", hide_index=True)
+            t = df_sel[
+                [
+                    "date",
+                    "meta_spend",
+                    "google_spend",
+                    c["spend"],
+                    c["clicks"],
+                    c["impr"],
+                    c["conv"],
+                    "ga4_sessions",
+                    "ga4_avg_sess",
+                    "ga4_bounce",
+                ]
+            ].copy()
+            t.columns = [
+                "Date",
+                "Meta Spend",
+                "Google Spend",
+                "Spend",
+                "Clicks",
+                "Impressions",
+                "Conversions",
+                "Sessions",
+                "Avg Session (s)",
+                "Bounce Rate",
+            ]
+            t["CPL"] = t.apply(lambda r: sdiv(float(r["Spend"]), float(r["Conversions"])), axis=1)
+            t["CTR"] = t.apply(lambda r: sdiv(float(r["Clicks"]), float(r["Impressions"])), axis=1)
+            t = t.sort_values("Date", ascending=False)
+            sty = (
+                t.style.format(
+                    {
+                        "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
+                        "Meta Spend": lambda v: fmt_money(float(v)),
+                        "Google Spend": lambda v: fmt_money(float(v)),
+                        "Spend": lambda v: fmt_money(float(v)),
+                        "Clicks": "{:.0f}",
+                        "Impressions": "{:.0f}",
+                        "Conversions": "{:.2f}",
+                        "Sessions": "{:.0f}",
+                        "Avg Session (s)": "{:.1f}",
+                        "Bounce Rate": lambda v: fmt_pct(float(v)),
+                        "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
+                        "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
+                    }
+                )
+                .background_gradient(subset=["Spend"], cmap="Blues")
+                .background_gradient(subset=["Conversions"], cmap="Greens")
+                .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
+                .background_gradient(subset=["CTR"], cmap="PuBu")
+            )
+            st.dataframe(sty, width="stretch", hide_index=True)
 
     if "top_pieces" in section_set:
-        render_top_pieces_range(
-            camp_df,
-            piece_df,
-            platform,
-            s,
-            e,
-            tenant_meta_account_id=tenant_meta_account_id,
-            tenant_google_customer_id=tenant_google_customer_id,
-            campaign_filters=campaign_filters,
-            report_cache_sig=report_cache_sig,
-        )
+        with _profile_span(profiler, "render_exec:section:top_pieces"):
+            render_top_pieces_range(
+                camp_df,
+                piece_df,
+                platform,
+                s,
+                e,
+                tenant_meta_account_id=tenant_meta_account_id,
+                tenant_google_customer_id=tenant_google_customer_id,
+                campaign_filters=campaign_filters,
+                report_cache_sig=report_cache_sig,
+            )
 
 def render_top_pieces_range(
     camp_df: pd.DataFrame,
@@ -7240,19 +7288,22 @@ def render_traffic(
     traffic_kpi_keys: list[str],
     traffic_section_keys: list[str],
     report_cache_sig: tuple[str, int, int] | None = None,
+    profiler: DashboardProfiler | None = None,
 ):
-    section_title("03 > Rendimiento de Trafico y Adquisicion")
-    selected_sections = _normalize_section_keys(
-        traffic_section_keys,
-        TRAFFIC_SECTION_OPTIONS,
-        DEFAULT_TRAFFIC_SECTION_KEYS,
-    )
-    section_set = set(selected_sections)
-    sm = summary(df_sel, platform)
-    sm_prev = summary(df_prev, platform)
-    kpi_payload = build_kpi_payload(sm, sm_prev, max(len(df_sel), 1), len(df_prev))
+    with _profile_span(profiler, "render_traffic:prepare"):
+        section_title("03 > Rendimiento de Trafico y Adquisicion")
+        selected_sections = _normalize_section_keys(
+            traffic_section_keys,
+            TRAFFIC_SECTION_OPTIONS,
+            DEFAULT_TRAFFIC_SECTION_KEYS,
+        )
+        section_set = set(selected_sections)
+        sm = summary(df_sel, platform)
+        sm_prev = summary(df_prev, platform)
+        kpi_payload = build_kpi_payload(sm, sm_prev, max(len(df_sel), 1), len(df_prev))
     if "kpis" in section_set:
-        render_kpi_cards(traffic_kpi_keys, kpi_payload, DEFAULT_TRAFFIC_KPI_KEYS)
+        with _profile_span(profiler, "render_traffic:section:kpis"):
+            render_kpi_cards(traffic_kpi_keys, kpi_payload, DEFAULT_TRAFFIC_KPI_KEYS)
     cache_path_str = ""
     cache_modified_ns = 0
     cache_size_bytes = 0
@@ -7333,85 +7384,90 @@ def render_traffic(
     if show_channels and show_top_pages:
         c1, c2 = st.columns(2)
         with c1:
-            _render_channels()
+            with _profile_span(profiler, "render_traffic:section:channels"):
+                _render_channels()
         with c2:
-            _render_top_pages()
+            with _profile_span(profiler, "render_traffic:section:top_pages"):
+                _render_top_pages()
     elif show_channels:
-        _render_channels()
+        with _profile_span(profiler, "render_traffic:section:channels"):
+            _render_channels()
     elif show_top_pages:
-        _render_top_pages()
+        with _profile_span(profiler, "render_traffic:section:top_pages"):
+            _render_top_pages()
 
     if "campaigns" in section_set:
-        section_title("Rendimiento de Campanas (Paid Media)")
-        if report_cache_sig is not None:
-            roll = _cached_campaign_roll_from_report(
-                cache_path_str,
-                cache_modified_ns,
-                cache_size_bytes,
-                start_iso,
-                end_iso,
-                platform,
-                campaign_filter_key,
-            ).head(20)
-            if roll.empty:
-                st.info("Sin datos de campanas para filtros actuales.")
+        with _profile_span(profiler, "render_traffic:section:campaigns"):
+            section_title("Rendimiento de Campanas (Paid Media)")
+            if report_cache_sig is not None:
+                roll = _cached_campaign_roll_from_report(
+                    cache_path_str,
+                    cache_modified_ns,
+                    cache_size_bytes,
+                    start_iso,
+                    end_iso,
+                    platform,
+                    campaign_filter_key,
+                ).head(20)
+                if roll.empty:
+                    st.info("Sin datos de campanas para filtros actuales.")
+                else:
+                    if campaign_filters:
+                        active_labels = [
+                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                            for k, v in campaign_filters.items()
+                            if str(v).strip()
+                        ]
+                        if active_labels:
+                            st.caption(" | ".join(active_labels))
+                    st.dataframe(roll, width="stretch", hide_index=True)
+            elif camp_df.empty:
+                st.info("No hay datos de campanas en JSON.")
             else:
-                if campaign_filters:
-                    active_labels = [
-                        f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
-                        for k, v in campaign_filters.items()
-                        if str(v).strip()
-                    ]
-                    if active_labels:
-                        st.caption(" | ".join(active_labels))
-                st.dataframe(roll, width="stretch", hide_index=True)
-        elif camp_df.empty:
-            st.info("No hay datos de campanas en JSON.")
-        else:
-            cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
-            if platform in ("Google", "Meta"):
-                cp = cp[cp["platform"] == platform]
-            cp = _apply_campaign_filters(cp, campaign_filters)
-            required_defaults: dict[str, Any] = {
-                "platform": "",
-                "campaign_id": "",
-                "campaign_name": "",
-                "spend": 0.0,
-                "impressions": 0.0,
-                "clicks": 0.0,
-                "conversions": 0.0,
-                "ctr": 0.0,
-                "cpc": 0.0,
-                "reach": 0.0,
-                "frequency": 0.0,
-            }
-            for col, default in required_defaults.items():
-                if col not in cp.columns:
-                    cp[col] = default
-            if cp.empty:
-                st.info("Sin datos de campanas para filtros actuales.")
-            else:
-                agg_map: dict[str, tuple[str, str]] = {
-                    "spend": ("spend", "sum"),
-                    "impressions": ("impressions", "sum"),
-                    "clicks": ("clicks", "sum"),
-                    "conversions": ("conversions", "sum"),
-                    "ctr": ("ctr", "mean"),
-                    "cpc": ("cpc", "mean"),
-                    "reach": ("reach", "max"),
-                    "frequency": ("frequency", "mean"),
+                cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
+                if platform in ("Google", "Meta"):
+                    cp = cp[cp["platform"] == platform]
+                cp = _apply_campaign_filters(cp, campaign_filters)
+                required_defaults: dict[str, Any] = {
+                    "platform": "",
+                    "campaign_id": "",
+                    "campaign_name": "",
+                    "spend": 0.0,
+                    "impressions": 0.0,
+                    "clicks": 0.0,
+                    "conversions": 0.0,
+                    "ctr": 0.0,
+                    "cpc": 0.0,
+                    "reach": 0.0,
+                    "frequency": 0.0,
                 }
-                roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(**agg_map).sort_values("spend", ascending=False)
-                roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
-                if campaign_filters:
-                    active_labels = [
-                        f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
-                        for k, v in campaign_filters.items()
-                        if str(v).strip()
-                    ]
-                    if active_labels:
-                        st.caption(" | ".join(active_labels))
-                st.dataframe(roll.head(20), width="stretch", hide_index=True)
+                for col, default in required_defaults.items():
+                    if col not in cp.columns:
+                        cp[col] = default
+                if cp.empty:
+                    st.info("Sin datos de campanas para filtros actuales.")
+                else:
+                    agg_map: dict[str, tuple[str, str]] = {
+                        "spend": ("spend", "sum"),
+                        "impressions": ("impressions", "sum"),
+                        "clicks": ("clicks", "sum"),
+                        "conversions": ("conversions", "sum"),
+                        "ctr": ("ctr", "mean"),
+                        "cpc": ("cpc", "mean"),
+                        "reach": ("reach", "max"),
+                        "frequency": ("frequency", "mean"),
+                    }
+                    roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(**agg_map).sort_values("spend", ascending=False)
+                    roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
+                    if campaign_filters:
+                        active_labels = [
+                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                            for k, v in campaign_filters.items()
+                            if str(v).strip()
+                        ]
+                        if active_labels:
+                            st.caption(" | ".join(active_labels))
+                    st.dataframe(roll.head(20), width="stretch", hide_index=True)
 
 
 def _render_admin_user_create_panel(
@@ -10302,15 +10358,20 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     apply_theme()
+    profiler = DashboardProfiler(enabled=_coerce_bool(os.environ.get("DASHBOARD_PROFILE", ""), False))
 
-    users = load_users_config(USERS_CONFIG_PATH)
+    with _profile_span(profiler, "main:load_users"):
+        users = load_users_config(USERS_CONFIG_PATH)
     auth_user = _ensure_authenticated(users)
 
-    tenants = load_tenants_config(TENANTS_CONFIG_PATH)
-    ensure_dashboard_settings_runtime_file(DASHBOARD_SETTINGS_PATH, DASHBOARD_SETTINGS_TEMPLATE_PATH)
-    dashboard_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
+    with _profile_span(profiler, "main:load_tenants"):
+        tenants = load_tenants_config(TENANTS_CONFIG_PATH)
+    with _profile_span(profiler, "main:load_dashboard_settings"):
+        ensure_dashboard_settings_runtime_file(DASHBOARD_SETTINGS_PATH, DASHBOARD_SETTINGS_TEMPLATE_PATH)
+        dashboard_settings = load_dashboard_settings(DASHBOARD_SETTINGS_PATH, tenants)
     coco_cfg = _normalize_coco_ia_settings(dashboard_settings.get("coco_ia", {}), tenants)
-    tenant_id, view_mode, admin_section = render_sidebar(tenants, dashboard_settings)
+    with _profile_span(profiler, "main:render_sidebar"):
+        tenant_id, view_mode, admin_section = render_sidebar(tenants, dashboard_settings)
     tenant_cfg = tenants.get(tenant_id) or next(iter(tenants.values()))
     tenant_dash_cfg = tenant_dashboard_settings(dashboard_settings, tenant_id)
     tenant_theme_colors = _apply_theme_palette(tenant_dash_cfg.get("theme_colors", DEFAULT_THEME_COLORS))
@@ -10406,12 +10467,14 @@ def main() -> None:
 
     report_path = Path(str(tenant_cfg.get("report_path", REPORT_PATH)))
     try:
-        report_cache_sig = _report_cache_signature(report_path)
+        with _profile_span(profiler, "main:report_cache_signature"):
+            report_cache_sig = _report_cache_signature(report_path)
     except Exception as exc:
         st.error(f"No se pudo cargar el reporte para '{tenant_name}': {exc}")
         st.stop()
     try:
-        df = load_daily_df_from_report_path(report_path)
+        with _profile_span(profiler, "main:load_daily_df"):
+            df = load_daily_df_from_report_path(report_path)
     except Exception as exc:
         st.error(f"No se pudo cargar los datos diarios para '{tenant_name}': {exc}")
         st.stop()
@@ -10427,20 +10490,22 @@ def main() -> None:
         tenant_dash_cfg.get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
         DEFAULT_CAMPAIGN_FILTER_KEYS,
     )
-    s, e, platform, campaign_filters, _compare_mode, prev_s, prev_e, _compare_label = render_top_filters(
-        min_d,
-        max_d,
-        tenant_name,
-        tenant_id,
-        str(tenant_dash_cfg.get("default_platform", "All")),
-        tenant_logo_source,
-        pd.DataFrame(),
-        campaign_filter_keys,
-        report_cache_sig=report_cache_sig,
-    )
+    with _profile_span(profiler, "main:render_top_filters"):
+        s, e, platform, campaign_filters, _compare_mode, prev_s, prev_e, _compare_label = render_top_filters(
+            min_d,
+            max_d,
+            tenant_name,
+            tenant_id,
+            str(tenant_dash_cfg.get("default_platform", "All")),
+            tenant_logo_source,
+            pd.DataFrame(),
+            campaign_filter_keys,
+            report_cache_sig=report_cache_sig,
+        )
 
-    df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
-    df_prev = df[(df["date"] >= prev_s) & (df["date"] <= prev_e)].copy()
+    with _profile_span(profiler, "main:prepare_range_frames"):
+        df_sel = df[(df["date"] >= s) & (df["date"] <= e)].copy()
+        df_prev = df[(df["date"] >= prev_s) & (df["date"] <= prev_e)].copy()
     coco_enabled_for_tenant = _is_coco_enabled_for_tenant(coco_cfg, tenant_id)
     overview_sections = _normalize_section_keys(
         tenant_dash_cfg.get("overview_sections", DEFAULT_OVERVIEW_SECTION_KEYS),
@@ -10460,46 +10525,50 @@ def main() -> None:
         _needs_campaigns = "campaigns" in traffic_section_set
         needs_campaign_data = bool(coco_enabled_for_tenant)
         needs_piece_data = bool(coco_enabled_for_tenant)
-        camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
-        piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
-        ch = pd.DataFrame()
-        pg = pd.DataFrame()
-        if report_cache_sig is None:
-            if _needs_channels:
-                ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily")
-            if _needs_top_pages:
-                pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
-        render_coco_ia_widget(
-            df_base=df,
-            camp_df=camp_all,
-            piece_df=piece,
-            df_sel=df_sel,
-            df_prev=df_prev,
-            platform=platform,
-            s=s,
-            e=e,
-            tenant_id=tenant_id,
-            tenant_name=tenant_name,
-            auth_user=auth_user,
-            coco_cfg=coco_cfg,
-        )
-        render_traffic(
-            df_sel,
-            df_prev,
-            ch,
-            pg,
-            camp_all,
-            platform,
-            s,
-            e,
-            campaign_filters,
-            _normalize_kpi_keys(
-                tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
-                DEFAULT_TRAFFIC_KPI_KEYS,
-            ),
-            traffic_sections,
-            report_cache_sig=report_cache_sig,
-        )
+        with _profile_span(profiler, "main:traffic:load_datasets"):
+            camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
+            piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
+            ch = pd.DataFrame()
+            pg = pd.DataFrame()
+            if report_cache_sig is None:
+                if _needs_channels:
+                    ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily")
+                if _needs_top_pages:
+                    pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
+        with _profile_span(profiler, "main:traffic:render_coco"):
+            render_coco_ia_widget(
+                df_base=df,
+                camp_df=camp_all,
+                piece_df=piece,
+                df_sel=df_sel,
+                df_prev=df_prev,
+                platform=platform,
+                s=s,
+                e=e,
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                auth_user=auth_user,
+                coco_cfg=coco_cfg,
+            )
+        with _profile_span(profiler, "main:traffic:render_page"):
+            render_traffic(
+                df_sel,
+                df_prev,
+                ch,
+                pg,
+                camp_all,
+                platform,
+                s,
+                e,
+                campaign_filters,
+                _normalize_kpi_keys(
+                    tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
+                    DEFAULT_TRAFFIC_KPI_KEYS,
+                ),
+                traffic_sections,
+                report_cache_sig=report_cache_sig,
+                profiler=profiler,
+            )
     else:
         overview_section_set = set(overview_sections)
         has_report_cache = report_cache_sig is not None
@@ -10511,63 +10580,80 @@ def main() -> None:
         needs_paid_device = "device_breakdown" in overview_section_set
         needs_lead_demo = "lead_demographics" in overview_section_set
         needs_lead_geo = "lead_geo_map" in overview_section_set
-        camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
-        piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
-        ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily") if needs_ga4_event else pd.DataFrame()
-        paid_dev = load_paid_device_df_from_report_path(report_path) if needs_paid_device else pd.DataFrame()
-        lead_demo = load_paid_lead_demographics_df_from_report_path(report_path) if needs_lead_demo else pd.DataFrame()
-        lead_geo = load_paid_lead_geo_df_from_report_path(report_path) if needs_lead_geo else pd.DataFrame()
-        if needs_trend_hourly:
-            hourly = load_hourly_df_from_report_path(report_path)
-            if hourly.empty:
-                hourly_sel = hourly.copy()
+        with _profile_span(profiler, "main:overview:load_datasets"):
+            camp_all = load_campaign_unified_df_from_report_path(report_path) if needs_campaign_data else pd.DataFrame()
+            piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
+            ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily") if needs_ga4_event else pd.DataFrame()
+            paid_dev = load_paid_device_df_from_report_path(report_path) if needs_paid_device else pd.DataFrame()
+            lead_demo = load_paid_lead_demographics_df_from_report_path(report_path) if needs_lead_demo else pd.DataFrame()
+            lead_geo = load_paid_lead_geo_df_from_report_path(report_path) if needs_lead_geo else pd.DataFrame()
+            if needs_trend_hourly:
+                hourly = load_hourly_df_from_report_path(report_path)
+                if hourly.empty:
+                    hourly_sel = hourly.copy()
+                else:
+                    hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
             else:
-                hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
-        else:
-            hourly_sel = pd.DataFrame()
-        render_coco_ia_widget(
-            df_base=df,
-            camp_df=camp_all,
-            piece_df=piece,
-            df_sel=df_sel,
-            df_prev=df_prev,
-            platform=platform,
-            s=s,
-            e=e,
-            tenant_id=tenant_id,
-            tenant_name=tenant_name,
-            auth_user=auth_user,
-            coco_cfg=coco_cfg,
-        )
+                hourly_sel = pd.DataFrame()
+        with _profile_span(profiler, "main:overview:render_coco"):
+            render_coco_ia_widget(
+                df_base=df,
+                camp_df=camp_all,
+                piece_df=piece,
+                df_sel=df_sel,
+                df_prev=df_prev,
+                platform=platform,
+                s=s,
+                e=e,
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                auth_user=auth_user,
+                coco_cfg=coco_cfg,
+            )
         if "daily_fact" in set(overview_sections):
-            render_daily_fact(df_sel, platform)
-        render_exec(
-            df_sel,
-            df_prev,
-            platform,
-            _normalize_kpi_keys(
-                tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
-                DEFAULT_OVERVIEW_KPI_KEYS,
-            ),
-            overview_sections,
-            paid_dev,
-            lead_demo,
-            lead_geo,
-            camp_all,
-            piece,
-            ga4_event_daily,
-            ga4_conversion_event_name,
-            tenant_meta_account_id,
-            tenant_google_customer_id,
-            campaign_filters,
-            s,
-            e,
-            prev_s,
-            prev_e,
-            f"overview_chart_metric_{tenant_id}",
-            hourly_sel,
-            report_cache_sig=report_cache_sig,
-        )
+            with _profile_span(profiler, "main:overview:section:daily_fact"):
+                render_daily_fact(df_sel, platform)
+        with _profile_span(profiler, "main:overview:render_page"):
+            render_exec(
+                df_sel,
+                df_prev,
+                platform,
+                _normalize_kpi_keys(
+                    tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
+                    DEFAULT_OVERVIEW_KPI_KEYS,
+                ),
+                overview_sections,
+                paid_dev,
+                lead_demo,
+                lead_geo,
+                camp_all,
+                piece,
+                ga4_event_daily,
+                ga4_conversion_event_name,
+                tenant_meta_account_id,
+                tenant_google_customer_id,
+                campaign_filters,
+                s,
+                e,
+                prev_s,
+                prev_e,
+                f"overview_chart_metric_{tenant_id}",
+                hourly_sel,
+                report_cache_sig=report_cache_sig,
+                profiler=profiler,
+            )
+
+    if profiler.enabled:
+        profile_rows = profiler.report(top_n=50)
+        st.session_state["dashboard_profile_last"] = profile_rows
+        st.session_state["dashboard_profile_top3"] = profile_rows[:3]
+        if profile_rows:
+            top3_text = " | ".join(
+                f"{row.get('span')}: {float(row.get('ms', 0.0)):.1f} ms"
+                for row in profile_rows[:3]
+            )
+            st.caption(f"[PROFILE] Top 3: {top3_text}")
+            print(f"[dashboard-profile] top3={top3_text}")
 
     render_sidebar_logout_button()
 
