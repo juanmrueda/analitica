@@ -930,35 +930,69 @@ def render_device_breakdown(
             f"{float(row['impressions']):,.0f}",
             fmt_delta_compact_fn(row["delta_impressions"]),
         )
-
-    st_module.markdown("<div class='viz-card'>", unsafe_allow_html=True)
     total_impressions = float(pd.to_numeric(roll["impressions"], errors="coerce").fillna(0.0).sum())
     if total_impressions <= 0:
         st_module.info("Sin impresiones para graficar distribuci\u00f3n por dispositivo.")
     else:
-        pie = go.Figure(
-            go.Pie(
-                labels=roll["device"],
-                values=roll["impressions"],
-                hole=0.56,
-                marker={
-                    "colors": [c_google, c_meta, c_mute],
-                    "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
-                },
-                texttemplate="%{label}<br>%{percent}",
-                hovertemplate="%{label}: %{value:,.0f} impresiones<extra></extra>",
-                sort=False,
+        color_by_device = {"Desktop": c_google, "Mobile": c_meta, "Other": c_mute}
+        rows_html: list[str] = []
+        for dname in order:
+            row = roll[roll["device"] == dname].iloc[0]
+            impressions_value = float(row["impressions"])
+            share_pct = max(min((impressions_value / total_impressions) * 100.0, 100.0), 0.0)
+            rows_html.append(
+                "<div class='device-dist-row'>"
+                f"<div class='device-dist-head'><span class='device-dist-name'>{html.escape(dname)}</span>"
+                f"<span class='device-dist-metric'>{impressions_value:,.0f} · {share_pct:.1f}%</span></div>"
+                "<div class='device-dist-track'>"
+                f"<div class='device-dist-fill' style='width:{share_pct:.2f}%; background:{color_by_device.get(dname, c_mute)};'></div>"
+                "</div>"
+                "</div>"
             )
+        st_module.markdown(
+            f"""
+            <style>
+              .device-dist-card {{
+                border: 1px solid rgba(32,29,29,0.08);
+                border-radius: 14px;
+                padding: 0.7rem 0.9rem 0.78rem 0.9rem;
+                background: rgba(255,255,255,0.62);
+                margin-bottom: 0.5rem;
+              }}
+              .device-dist-row + .device-dist-row {{
+                margin-top: 0.62rem;
+              }}
+              .device-dist-head {{
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 0.5rem;
+                margin-bottom: 0.22rem;
+              }}
+              .device-dist-name {{
+                font-weight: 700;
+                color: #201D1D;
+              }}
+              .device-dist-metric {{
+                font-size: 0.84rem;
+                color: #7A879D;
+              }}
+              .device-dist-track {{
+                width: 100%;
+                height: 8px;
+                border-radius: 999px;
+                background: rgba(32,29,29,0.10);
+                overflow: hidden;
+              }}
+              .device-dist-fill {{
+                height: 100%;
+                border-radius: 999px;
+              }}
+            </style>
+            <div class="device-dist-card">{''.join(rows_html)}</div>
+            """,
+            unsafe_allow_html=True,
         )
-        pie.update_layout(
-            height=300,
-            margin={"l": 10, "r": 10, "t": 8, "b": 8},
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            showlegend=False,
-        )
-        st_module.plotly_chart(pie, width="stretch")
-    st_module.markdown("</div>", unsafe_allow_html=True)
 
     table = roll.rename(
         columns={
@@ -979,11 +1013,7 @@ def render_device_breakdown(
     table_display["Conversions"] = table_display["Conversions"].map(lambda v: f"{float(v):,.2f}")
     table_display["CTR"] = table_display["CTR"].map(lambda v: fmt_pct_fn(v if pd.notna(v) else None))
     table_display["CPL"] = table_display["CPL"].map(lambda v: fmt_money_fn(v if pd.notna(v) else None))
-    st_module.dataframe(
-        table_display,
-        width="stretch",
-        hide_index=True,
-    )
+    st_module.table(table_display.set_index("Device"))
 
 
 def render_audit_table(
