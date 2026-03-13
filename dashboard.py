@@ -32,10 +32,6 @@ import dashboard_data
 import dashboard_filters
 import dashboard_overview_sections
 import dashboard_trends
-from coco_agent import run_coco_agent_turn
-from coco_agent import deterministic_resolvers as coco_det
-from coco_agent import workflow as coco_workflow
-from coco_agent import context_builder as coco_context
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
@@ -284,6 +280,18 @@ class DashboardProfiler:
             return []
         rows = sorted(self._rows, key=lambda item: float(item.get("ms", 0.0)), reverse=True)
         return rows[: max(int(top_n), 0)]
+
+
+@st.cache_resource(show_spinner=False)
+def _load_coco_agent_modules() -> tuple[Any, Any, Any, Any, str]:
+    try:
+        from coco_agent import run_coco_agent_turn as run_turn
+        from coco_agent import deterministic_resolvers as det_mod
+        from coco_agent import workflow as workflow_mod
+        from coco_agent import context_builder as context_mod
+        return run_turn, det_mod, workflow_mod, context_mod, ""
+    except Exception as exc:
+        return None, None, None, None, str(exc)
 
 
 def _profile_span(profiler: DashboardProfiler | None, name: str):
@@ -7526,8 +7534,11 @@ def _call_openai_coco(
     api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
     if not api_key:
         return "", 0, 0, "OPENAI_API_KEY no está configurada."
+    run_turn, _, _, _, import_err = _load_coco_agent_modules()
+    if run_turn is None:
+        return "", 0, 0, (import_err or "No fue posible cargar modulos de COCO IA.")
     context_json = json.dumps(context, ensure_ascii=False)
-    answer, prompt_tokens_raw, completion_tokens_raw, err = run_coco_agent_turn(
+    answer, prompt_tokens_raw, completion_tokens_raw, err = run_turn(
         api_key=api_key,
         model=model,
         question=question,
@@ -7637,6 +7648,12 @@ def render_coco_ia_widget(
     coco_cfg: dict[str, Any],
 ) -> None:
     if not _is_coco_enabled_for_tenant(coco_cfg, tenant_id):
+        return
+    _, coco_det, coco_workflow, coco_context, coco_import_err = _load_coco_agent_modules()
+    if coco_det is None or coco_workflow is None or coco_context is None:
+        st.error(
+            f"COCO IA no está disponible por un error de inicialización del módulo: {coco_import_err or 'desconocido'}"
+        )
         return
 
     username = str(auth_user.get("username", "unknown")).strip().lower() or "unknown"
