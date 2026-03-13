@@ -2502,7 +2502,7 @@ def _prewarm_cross_view_caches(
         if current_view == VIEW_MODE_OPTIONS[1]:
             overview_set = set(_normalize_section_keys(overview_sections, OVERVIEW_SECTION_OPTIONS, DEFAULT_OVERVIEW_SECTION_KEYS))
             if "trend_chart" in overview_set:
-                _cached_hourly_ranges_from_report(
+                _cached_overview_trend_payload_from_report(
                     path_str,
                     modified_ns,
                     size_bytes,
@@ -2510,6 +2510,7 @@ def _prewarm_cross_view_caches(
                     end_iso,
                     prev_start_iso,
                     prev_end_iso,
+                    "spend",
                     compare_active,
                 )
             if "top_pieces" in overview_set:
@@ -6334,21 +6335,9 @@ def render_exec(
 
     def _render_trend_chart() -> None:
         compare_active = bool(str(compare_label or "").strip())
-        ld_local = df_sel.sort_values("date").copy()
-        ld_prev_local = df_prev.sort_values("date").copy() if compare_active else pd.DataFrame()
-        hourly_local = hourly_sel if isinstance(hourly_sel, pd.DataFrame) else pd.DataFrame()
-        hourly_prev_local = hourly_prev_sel if isinstance(hourly_prev_sel, pd.DataFrame) else pd.DataFrame()
-
-        needs_hourly_lazy_load = bool(
-            report_cache_sig is not None
-            and active_overview_kpi in PAID_TREND_KPI_KEYS
-            and not ld_local.empty
-            and ld_local["date"].nunique() == 1
-            and hourly_local.empty
-        )
-        if needs_hourly_lazy_load:
+        if report_cache_sig is not None:
             path_str, modified_ns, size_bytes = report_cache_sig
-            hourly_local, hourly_prev_local = _cached_hourly_ranges_from_report(
+            payload = _cached_overview_trend_payload_from_report(
                 path_str,
                 modified_ns,
                 size_bytes,
@@ -6356,19 +6345,26 @@ def render_exec(
                 e.isoformat(),
                 prev_s.isoformat(),
                 prev_e.isoformat(),
+                active_overview_kpi,
                 compare_active,
             )
-        if not compare_active:
-            hourly_prev_local = pd.DataFrame()
+        else:
+            ld_local = df_sel.sort_values("date").copy()
+            ld_prev_local = df_prev.sort_values("date").copy() if compare_active else pd.DataFrame()
+            hourly_local = hourly_sel if isinstance(hourly_sel, pd.DataFrame) else pd.DataFrame()
+            hourly_prev_local = hourly_prev_sel if isinstance(hourly_prev_sel, pd.DataFrame) else pd.DataFrame()
 
-        payload = _build_overview_trend_payload_from_frames(
-            ld_local,
-            ld_prev_local,
-            hourly_local,
-            hourly_prev_local,
-            active_overview_kpi,
-            compare_active,
-        )
+            if not compare_active:
+                hourly_prev_local = pd.DataFrame()
+
+            payload = _build_overview_trend_payload_from_frames(
+                ld_local,
+                ld_prev_local,
+                hourly_local,
+                hourly_prev_local,
+                active_overview_kpi,
+                compare_active,
+            )
 
         dashboard_trends.render_overview_trend_chart(
             st_module=st,
