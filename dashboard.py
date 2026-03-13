@@ -2419,6 +2419,131 @@ def load_paid_lead_geo_df_from_report_path(path: Path) -> pd.DataFrame:
     )
 
 
+def _prewarm_enabled() -> bool:
+    return _coerce_bool(os.environ.get("DASHBOARD_PREWARM", "1"), True)
+
+
+def _cross_view_prewarm_signature(
+    report_cache_sig: tuple[str, int, int],
+    view_mode: str,
+    platform: str,
+    campaign_filters: dict[str, str],
+    start_day: date,
+    end_day: date,
+    prev_start_day: date,
+    prev_end_day: date,
+    compare_label: str,
+    overview_sections: list[str],
+    traffic_sections: list[str],
+) -> str:
+    path_str, modified_ns, size_bytes = report_cache_sig
+    payload = {
+        "path": path_str,
+        "modified_ns": int(modified_ns),
+        "size_bytes": int(size_bytes),
+        "view_mode": str(view_mode or ""),
+        "platform": str(platform or "All"),
+        "campaign_filters": _campaign_filters_cache_key(campaign_filters),
+        "start": start_day.isoformat(),
+        "end": end_day.isoformat(),
+        "prev_start": prev_start_day.isoformat(),
+        "prev_end": prev_end_day.isoformat(),
+        "compare_active": bool(str(compare_label or "").strip()),
+        "overview_sections": sorted({str(key or "").strip() for key in overview_sections}),
+        "traffic_sections": sorted({str(key or "").strip() for key in traffic_sections}),
+    }
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return digest
+
+
+def _prewarm_cross_view_caches(
+    report_cache_sig: tuple[str, int, int] | None,
+    view_mode: str,
+    platform: str,
+    campaign_filters: dict[str, str],
+    start_day: date,
+    end_day: date,
+    prev_start_day: date,
+    prev_end_day: date,
+    compare_label: str,
+    overview_sections: list[str],
+    traffic_sections: list[str],
+) -> None:
+    if report_cache_sig is None or not _prewarm_enabled():
+        return
+
+    signature = _cross_view_prewarm_signature(
+        report_cache_sig,
+        view_mode,
+        platform,
+        campaign_filters,
+        start_day,
+        end_day,
+        prev_start_day,
+        prev_end_day,
+        compare_label,
+        overview_sections,
+        traffic_sections,
+    )
+    if str(st.session_state.get("cross_view_prewarm_signature", "")) == signature:
+        return
+
+    path_str, modified_ns, size_bytes = report_cache_sig
+    start_iso = start_day.isoformat()
+    end_iso = end_day.isoformat()
+    prev_start_iso = prev_start_day.isoformat()
+    prev_end_iso = prev_end_day.isoformat()
+    filter_key = _campaign_filters_cache_key(campaign_filters)
+    selected_platform = str(platform or "All")
+    compare_active = bool(str(compare_label or "").strip())
+    current_view = str(view_mode or "Overview")
+
+    try:
+        if current_view == VIEW_MODE_OPTIONS[1]:
+            overview_set = set(_normalize_section_keys(overview_sections, OVERVIEW_SECTION_OPTIONS, DEFAULT_OVERVIEW_SECTION_KEYS))
+            if "trend_chart" in overview_set:
+                _cached_hourly_ranges_from_report(
+                    path_str,
+                    modified_ns,
+                    size_bytes,
+                    start_iso,
+                    end_iso,
+                    prev_start_iso,
+                    prev_end_iso,
+                    compare_active,
+                )
+            if "top_pieces" in overview_set:
+                _cached_top_pieces_roll_from_report(
+                    path_str,
+                    modified_ns,
+                    size_bytes,
+                    start_iso,
+                    end_iso,
+                    selected_platform,
+                    filter_key,
+                )
+        else:
+            traffic_set = set(_normalize_section_keys(traffic_sections, TRAFFIC_SECTION_OPTIONS, DEFAULT_TRAFFIC_SECTION_KEYS))
+            if "channels" in traffic_set:
+                _cached_channels_roll_from_report(path_str, modified_ns, size_bytes, start_iso, end_iso)
+            if "top_pages" in traffic_set:
+                _cached_top_pages_roll_from_report(path_str, modified_ns, size_bytes, start_iso, end_iso)
+            if "campaigns" in traffic_set:
+                _cached_campaign_roll_from_report(
+                    path_str,
+                    modified_ns,
+                    size_bytes,
+                    start_iso,
+                    end_iso,
+                    selected_platform,
+                    filter_key,
+                )
+    except Exception:
+        return
+
+    st.session_state["cross_view_prewarm_signature"] = signature
+
+
 def default_tenants_config() -> dict[str, dict[str, Any]]:
     return {
         DEFAULT_TENANT_ID: {
@@ -9728,6 +9853,20 @@ def main() -> None:
         TRAFFIC_SECTION_OPTIONS,
         DEFAULT_TRAFFIC_SECTION_KEYS,
     )
+    with _profile_span(profiler, "main:prewarm:cross_view"):
+        _prewarm_cross_view_caches(
+            report_cache_sig,
+            view_mode,
+            platform,
+            campaign_filters,
+            s,
+            e,
+            prev_s,
+            prev_e,
+            compare_label,
+            overview_sections,
+            traffic_sections,
+        )
 
     if view_mode == VIEW_MODE_OPTIONS[1]:
         traffic_section_set = set(traffic_sections)
