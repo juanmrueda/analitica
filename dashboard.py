@@ -616,6 +616,10 @@ def apply_theme() -> None:
             font-weight: 800;
             color: #4B5563;
           }
+          .app-filter-title-range {
+            margin-top: -0.42rem !important;
+            margin-bottom: 0.08rem !important;
+          }
           .app-filter-helper {
             margin-top: 0.08rem;
             margin-bottom: 0.35rem;
@@ -702,7 +706,42 @@ def apply_theme() -> None:
             background: linear-gradient(180deg, #F7F8FB 0%, #F3F5F9 100%) !important;
             box-shadow: 0 26px 44px rgba(15,23,42,0.16) !important;
             padding: 0.95rem 1rem 1rem 1rem !important;
-            min-width: min(360px, calc(100vw - 1.4rem)) !important;
+            width: min(500px, calc(100vw - 1.2rem)) !important;
+            min-width: min(500px, calc(100vw - 1.2rem)) !important;
+            max-width: min(500px, calc(100vw - 1.2rem)) !important;
+            min-height: 0 !important;
+            max-height: calc(100vh - 0.4rem) !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+          }
+          [data-baseweb="popover"] [data-testid="stPopoverBody"] {
+            flex: 1 1 auto !important;
+            max-height: none !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            scrollbar-gutter: stable both-edges !important;
+            padding-right: 0.18rem !important;
+            padding-bottom: 0.3rem !important;
+          }
+          [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] {
+            position: sticky !important;
+            bottom: 0 !important;
+            padding-top: 0.5rem !important;
+            padding-bottom: 0.22rem !important;
+            margin-top: 0.55rem !important;
+            margin-bottom: 0 !important;
+            background: linear-gradient(180deg, rgba(243,245,249,0) 0%, rgba(243,245,249,0.95) 22%, rgba(243,245,249,1) 100%) !important;
+            z-index: 6 !important;
+          }
+          [data-baseweb="popover"] div[class*="st-key-top_compare_custom_range_"] {
+            margin-bottom: 4.4rem !important;
+          }
+          [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] [data-testid="stButton"] {
+            margin-bottom: 0 !important;
+          }
+          [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] [data-testid="stButton"] button {
+            margin-bottom: 0 !important;
           }
           [data-baseweb="popover"] .range-modal-header {
             margin-bottom: 0.45rem;
@@ -738,21 +777,21 @@ def apply_theme() -> None:
           [data-baseweb="popover"] .stRadio [role="radiogroup"] {
             display: grid !important;
             grid-template-columns: 1fr !important;
-            gap: 0.14rem !important;
+            gap: 0.08rem !important;
             background: transparent !important;
             border: none !important;
             border-radius: 0 !important;
             min-height: auto !important;
-            padding: 0.08rem 0 0.36rem 0 !important;
+            padding: 0.04rem 0 0.22rem 0 !important;
             width: 100% !important;
           }
           [data-baseweb="popover"] .stRadio [role="radiogroup"] > label,
           [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label {
             margin: 0 !important;
-            padding: 0.36rem 0.12rem !important;
+            padding: 0.24rem 0.08rem !important;
             border: none !important;
             border-radius: 12px !important;
-            min-height: 1.8rem !important;
+            min-height: 1.58rem !important;
             justify-content: flex-start !important;
             color: #5a6d86 !important;
             font-weight: 600 !important;
@@ -790,9 +829,9 @@ def apply_theme() -> None:
           [data-baseweb="popover"] .stRadio [role="radiogroup"] > div > label [data-testid="stMarkdownContainer"] p {
             margin: 0 !important;
             color: #5a6d86 !important;
-            font-size: 0.9rem !important;
+            font-size: 0.86rem !important;
             font-weight: 600 !important;
-            line-height: 1.25 !important;
+            line-height: 1.15 !important;
             text-align: left !important;
           }
           [data-baseweb="popover"] .stRadio [role="radiogroup"] > label[data-checked="true"],
@@ -830,8 +869,8 @@ def apply_theme() -> None:
             text-transform: uppercase !important;
             font-weight: 800 !important;
             color: #9aa9be !important;
-            margin-top: 0.38rem !important;
-            margin-bottom: 0.24rem !important;
+            margin-top: 0.2rem !important;
+            margin-bottom: 0.12rem !important;
           }
           [data-baseweb="popover"] .stDateInput [data-baseweb="input"],
           [data-baseweb="popover"] .stSelectbox [data-baseweb="select"] > div {
@@ -848,7 +887,7 @@ def apply_theme() -> None:
             font-weight: 700 !important;
           }
           [data-baseweb="popover"] hr {
-            margin: 0.72rem 0 0.58rem 0 !important;
+            margin: 0.48rem 0 0.38rem 0 !important;
             border-top: 1px solid rgba(122,135,157,0.20) !important;
           }
           [data-baseweb="popover"] [data-testid="stButton"] button {
@@ -1097,9 +1136,32 @@ def apply_theme() -> None:
               margin-top: 0.05rem;
               margin-bottom: 0.12rem;
             }
+            .app-filter-title-range {
+              margin-top: -0.12rem !important;
+              margin-bottom: 0.05rem !important;
+            }
             .app-filter-helper {
               font-size: 0.72rem;
               margin-bottom: 0.24rem;
+            }
+            [data-baseweb="popover"] [data-testid="stPopoverContent"] {
+              width: min(440px, calc(100vw - 0.8rem)) !important;
+              min-width: min(440px, calc(100vw - 0.8rem)) !important;
+              max-width: min(440px, calc(100vw - 0.8rem)) !important;
+              min-height: 0 !important;
+              max-height: calc(100vh - 0.45rem) !important;
+            }
+            [data-baseweb="popover"] [data-testid="stPopoverBody"] {
+              max-height: none !important;
+              padding-bottom: 0.24rem !important;
+            }
+            [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] {
+              position: sticky !important;
+              bottom: 0 !important;
+              padding-bottom: 0.16rem !important;
+            }
+            [data-baseweb="popover"] div[class*="st-key-top_compare_custom_range_"] {
+              margin-bottom: 4rem !important;
             }
             .filter-chip-row {
               margin-bottom: 0.32rem;
@@ -1150,6 +1212,16 @@ def apply_theme() -> None:
             }
             [data-testid="stMain"] div[data-testid="stPlotlyChart"] {
               border-radius: 12px;
+            }
+            .viz-head {
+              align-items: flex-start;
+              flex-direction: column;
+              gap: 0.35rem;
+            }
+            .viz-compare-note {
+              max-width: 100%;
+              width: 100%;
+              justify-content: flex-start;
             }
             div[data-testid="stDataFrame"] {
               border-radius: 12px;
@@ -1745,7 +1817,34 @@ def apply_theme() -> None:
             box-shadow: 0 12px 30px rgba(15,23,42,0.04);
           }
           .viz-card { padding: 1rem 1rem 0.8rem 1rem; }
+          .viz-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.65rem;
+          }
           .viz-title { font-size: 1.05rem; font-weight: 800; color: #201D1D; margin: 0; }
+          .viz-compare-note {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            max-width: 60%;
+            min-height: 1.9rem;
+            padding: 0.16rem 0.6rem;
+            border-radius: 999px;
+            border: 1px solid rgba(61,79,103,0.25);
+            background: rgba(61,79,103,0.10);
+            color: #3d4f67;
+            font-size: 0.74rem;
+            font-weight: 800;
+            line-height: 1.2;
+            letter-spacing: 0.01em;
+            white-space: normal;
+          }
+          .viz-compare-note-empty {
+            opacity: 0.85;
+          }
           .viz-sub { color: #4d627f; font-size: 0.9rem; margin-top: 0.15rem; }
           .funnel-card { padding: 1rem; height: 100%; }
           .funnel-title { font-size: 1.05rem; font-weight: 800; color: #201D1D; margin-bottom: 0.8rem; }
@@ -3423,6 +3522,18 @@ def apply_tenant_theme_overrides(theme_colors: Any) -> None:
           .top-pieces-footer {{
             color: {palette["accent"]} !important;
           }}
+          .viz-compare-note {{
+            border-color: {accent_border_72} !important;
+            background: linear-gradient(180deg, {accent_bg_28} 0%, {accent_bg_20} 100%) !important;
+            color: {palette["accent"]} !important;
+            box-shadow: 0 6px 14px {accent_shadow_soft} !important;
+          }}
+          .viz-compare-note-empty {{
+            border-color: {neutral_border_soft} !important;
+            background: {neutral_bg} !important;
+            color: {palette["neutral"]} !important;
+            box-shadow: none !important;
+          }}
           .sidebar-token-days.good {{
             color: {palette["success"]} !important;
           }}
@@ -3480,15 +3591,11 @@ def _resolve_logo_image_source(raw_value: Any) -> str:
     return LOGO_PLACEHOLDER
 
 
-def _image_source_to_data_uri(image_source: str) -> str:
-    src = str(image_source or "").strip()
-    if not src:
-        return src
-    if src.startswith(("http://", "https://", "data:image/")):
-        return src
-    path = Path(src)
-    if not path.exists():
-        return src
+@st.cache_data(show_spinner=False)
+def _cached_local_image_data_uri(path_str: str, modified_ns: int, size_bytes: int) -> str:
+    _ = modified_ns
+    _ = size_bytes
+    path = Path(path_str)
     mime_by_suffix = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
@@ -3501,6 +3608,23 @@ def _image_source_to_data_uri(image_source: str) -> str:
     try:
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         return f"data:{mime};base64,{encoded}"
+    except Exception:
+        return path_str
+
+
+def _image_source_to_data_uri(image_source: str) -> str:
+    src = str(image_source or "").strip()
+    if not src:
+        return src
+    if src.startswith(("http://", "https://", "data:image/")):
+        return src
+    path = Path(src)
+    if not path.exists():
+        return src
+    try:
+        stat = path.stat()
+        path_key = str(path.resolve())
+        return _cached_local_image_data_uri(path_key, int(stat.st_mtime_ns), int(stat.st_size))
     except Exception:
         return src
 
@@ -4398,6 +4522,19 @@ def _ensure_authenticated(users: dict[str, dict[str, Any]]) -> dict[str, Any]:
           [data-testid="stAppViewContainer"] {
             background: rgba(122, 135, 157, 0.30) !important;
             background-image: none !important;
+          }
+          header[data-testid="stHeader"],
+          [data-testid="stToolbar"],
+          #MainMenu,
+          footer {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+          }
+          [data-testid="stAppViewContainer"] > .main,
+          [data-testid="stMain"] {
+            padding-top: 0 !important;
+            margin-top: 0 !important;
           }
           [data-testid="stSidebar"],
           [data-testid="collapsedControl"],
@@ -6122,11 +6259,38 @@ def render_exec(
                 compare_active,
             )
 
+        def _has_series_values(values: Any) -> bool:
+            return isinstance(values, list) and len(values) > 0
+
+        compare_note_html = ""
+        if compare_active:
+            if active_overview_kpi in PAID_TREND_KPI_KEYS:
+                if platform == "Google":
+                    compare_has_values = _has_series_values(payload.get("google_compare"))
+                elif platform == "Meta":
+                    compare_has_values = _has_series_values(payload.get("meta_compare"))
+                else:
+                    compare_has_values = _has_series_values(payload.get("google_compare")) or _has_series_values(
+                        payload.get("meta_compare")
+                    )
+            else:
+                compare_has_values = _has_series_values(payload.get("ga4_compare"))
+            if compare_has_values:
+                compare_note_text = f"Comparación activa · {compare_label}"
+                compare_note_class = "viz-compare-note"
+            else:
+                compare_note_text = "Comparación activa · sin datos comparativos"
+                compare_note_class = "viz-compare-note viz-compare-note-empty"
+            compare_note_html = f"<div class='{compare_note_class}'>{html.escape(compare_note_text)}</div>"
+
         trend_subtitle = str(payload.get("trend_subtitle") or _kpi_trend_subtitle(active_overview_kpi))
         st.markdown(
             f"""
             <div class="viz-card">
-              <p class="viz-title">Performance Across Platforms</p>
+              <div class="viz-head">
+                <p class="viz-title">Performance Across Platforms</p>
+                {compare_note_html}
+              </div>
               <div class="viz-sub">{html.escape(trend_subtitle)}</div>
             """,
             unsafe_allow_html=True,
@@ -6238,11 +6402,6 @@ def render_exec(
                 else:
                     fig.update_yaxes(tickformat=",.0f")
                 st.plotly_chart(fig, width="stretch")
-                if compare_active:
-                    if compare_traces_added > 0:
-                        st.caption(f"Comparación activa: {compare_label}")
-                    else:
-                        st.caption("Comparación activa, pero sin datos en el período comparado para la métrica actual.")
                 if hourly_projection_note:
                     st.caption(hourly_projection_note)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -10626,12 +10785,13 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    apply_theme()
     profiler = DashboardProfiler(enabled=_coerce_bool(os.environ.get("DASHBOARD_PROFILE", ""), False))
 
     with _profile_span(profiler, "main:load_users"):
         users = load_users_config(USERS_CONFIG_PATH)
     auth_user = _ensure_authenticated(users)
+    with _profile_span(profiler, "main:apply_theme"):
+        apply_theme()
 
     with _profile_span(profiler, "main:load_tenants"):
         tenants = load_tenants_config(TENANTS_CONFIG_PATH)
