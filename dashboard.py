@@ -6233,193 +6233,44 @@ def render_exec(
 
     if "device_breakdown" in section_set:
         with _profile_span(profiler, "render_exec:section:device_breakdown"):
-            st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-            st.markdown(
-                "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
-                unsafe_allow_html=True,
+            dashboard_overview_sections.render_device_breakdown(
+                st_module=st,
+                paid_dev_df=paid_dev_df,
+                platform=platform,
+                start_date=s,
+                end_date=e,
+                prev_start_date=prev_s,
+                prev_end_date=prev_e,
+                sdiv_fn=sdiv,
+                pct_delta_fn=pct_delta,
+                fmt_delta_compact_fn=fmt_delta_compact,
+                fmt_money_fn=fmt_money,
+                fmt_pct_fn=fmt_pct,
+                c_google=C_GOOGLE,
+                c_meta=C_META,
+                c_mute=C_MUTE,
             )
-
-            dev_src = paid_dev_df.copy() if not paid_dev_df.empty else pd.DataFrame()
-            if not dev_src.empty and "date" in dev_src.columns:
-                dev_src["date"] = pd.to_datetime(dev_src["date"], errors="coerce").dt.date
-                dev_src = dev_src.dropna(subset=["date"])
-            pcur = dev_src[
-                (dev_src["date"] >= s) & (dev_src["date"] <= e)
-            ].copy() if not dev_src.empty else pd.DataFrame()
-            pprev = dev_src[
-                (dev_src["date"] >= prev_s) & (dev_src["date"] <= prev_e)
-            ].copy() if not dev_src.empty else pd.DataFrame()
-            if platform in ("Google", "Meta"):
-                pcur = pcur[pcur["platform"] == platform]
-                pprev = pprev[pprev["platform"] == platform]
-
-            if pcur.empty:
-                st.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
-            else:
-                cur_roll = (
-                    pcur.groupby("device", as_index=False)
-                    .agg(
-                        spend=("spend", "sum"),
-                        impressions=("impressions", "sum"),
-                        clicks=("clicks", "sum"),
-                        conversions=("conversions", "sum"),
-                    )
-                )
-                prev_roll = (
-                    pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
-                    if not pprev.empty
-                    else pd.DataFrame(columns=["device", "impressions_prev"])
-                )
-                cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
-                cur_roll["ctr"] = cur_roll.apply(
-                    lambda r: sdiv(float(r["clicks"]), float(r["impressions"])),
-                    axis=1,
-                )
-                cur_roll["cpl"] = cur_roll.apply(
-                    lambda r: sdiv(float(r["spend"]), float(r["conversions"])),
-                    axis=1,
-                )
-                cur_roll["delta_impressions"] = cur_roll.apply(
-                    lambda r: pct_delta(float(r["impressions"]), float(r["impressions_prev"])),
-                    axis=1,
-                )
-                order = ["Desktop", "Mobile", "Other"]
-                roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
-
-                m1, m2, m3 = st.columns(3)
-                for idx, dname in enumerate(order):
-                    row = roll[roll["device"] == dname].iloc[0]
-                    target_col = [m1, m2, m3][idx]
-                    target_col.metric(
-                        f"{dname} Impresiones",
-                        f"{float(row['impressions']):,.0f}",
-                        fmt_delta_compact(row["delta_impressions"]),
-                    )
-
-                st.markdown("<div class='viz-card'>", unsafe_allow_html=True)
-                total_impressions = float(pd.to_numeric(roll["impressions"], errors="coerce").fillna(0.0).sum())
-                if total_impressions <= 0:
-                    st.info("Sin impresiones para graficar distribución por dispositivo.")
-                else:
-                    pie = go.Figure(
-                        go.Pie(
-                            labels=roll["device"],
-                            values=roll["impressions"],
-                            hole=0.56,
-                            marker={
-                                "colors": [C_GOOGLE, C_META, C_MUTE],
-                                "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
-                            },
-                            texttemplate="%{label}<br>%{percent}",
-                            hovertemplate="%{label}: %{value:,.0f} impresiones<extra></extra>",
-                            sort=False,
-                        )
-                    )
-                    pie.update_layout(
-                        height=300,
-                        margin={"l": 10, "r": 10, "t": 8, "b": 8},
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        showlegend=False,
-                    )
-                    st.plotly_chart(pie, width="stretch")
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                table = roll.rename(
-                    columns={
-                        "device": "Device",
-                        "spend": "Spend",
-                        "impressions": "Impressions",
-                        "clicks": "Clicks",
-                        "conversions": "Conversions",
-                        "ctr": "CTR",
-                        "cpl": "CPL",
-                    }
-                )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
-
-                st.dataframe(
-                    table.style.format(
-                        {
-                            "Spend": lambda v: fmt_money(float(v)),
-                            "Impressions": "{:.0f}",
-                            "Clicks": "{:.0f}",
-                            "Conversions": "{:.2f}",
-                            "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-                            "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
-                        }
-                    ),
-                    width="stretch",
-                    hide_index=True,
-                )
 
     if "audit_table" in section_set:
         with _profile_span(profiler, "render_exec:section:audit_table"):
-            st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-            st.markdown(
-                "<div class='viz-title' style='margin-bottom:0.35rem;'>8) Tabla Maestra de Auditoria</div>",
-                unsafe_allow_html=True,
+            dashboard_overview_sections.render_audit_table(
+                st_module=st,
+                df_sel=df_sel,
+                metric_cols=c,
+                sdiv_fn=sdiv,
+                fmt_money_fn=fmt_money,
+                fmt_pct_fn=fmt_pct,
             )
-            t = df_sel[
-                [
-                    "date",
-                    "meta_spend",
-                    "google_spend",
-                    c["spend"],
-                    c["clicks"],
-                    c["impr"],
-                    c["conv"],
-                    "ga4_sessions",
-                    "ga4_avg_sess",
-                    "ga4_bounce",
-                ]
-            ].copy()
-            t.columns = [
-                "Date",
-                "Meta Spend",
-                "Google Spend",
-                "Spend",
-                "Clicks",
-                "Impressions",
-                "Conversions",
-                "Sessions",
-                "Avg Session (s)",
-                "Bounce Rate",
-            ]
-            t["CPL"] = t.apply(lambda r: sdiv(float(r["Spend"]), float(r["Conversions"])), axis=1)
-            t["CTR"] = t.apply(lambda r: sdiv(float(r["Clicks"]), float(r["Impressions"])), axis=1)
-            t = t.sort_values("Date", ascending=False)
-            sty = (
-                t.style.format(
-                    {
-                        "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
-                        "Meta Spend": lambda v: fmt_money(float(v)),
-                        "Google Spend": lambda v: fmt_money(float(v)),
-                        "Spend": lambda v: fmt_money(float(v)),
-                        "Clicks": "{:.0f}",
-                        "Impressions": "{:.0f}",
-                        "Conversions": "{:.2f}",
-                        "Sessions": "{:.0f}",
-                        "Avg Session (s)": "{:.1f}",
-                        "Bounce Rate": lambda v: fmt_pct(float(v)),
-                        "CPL": lambda v: fmt_money(v if pd.notna(v) else None),
-                        "CTR": lambda v: fmt_pct(v if pd.notna(v) else None),
-                    }
-                )
-                .background_gradient(subset=["Spend"], cmap="Blues")
-                .background_gradient(subset=["Conversions"], cmap="Greens")
-                .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
-                .background_gradient(subset=["CTR"], cmap="PuBu")
-            )
-            st.dataframe(sty, width="stretch", hide_index=True)
 
     if "top_pieces" in section_set:
         with _profile_span(profiler, "render_exec:section:top_pieces"):
-            render_top_pieces_range(
-                camp_df,
-                piece_df,
-                platform,
-                s,
-                e,
+            dashboard_overview_sections.render_top_pieces_section(
+                render_top_pieces_range_fn=render_top_pieces_range,
+                camp_df=camp_df,
+                piece_df=piece_df,
+                platform=platform,
+                start_ref=s,
+                end_ref=e,
                 tenant_meta_account_id=tenant_meta_account_id,
                 tenant_google_customer_id=tenant_google_customer_id,
                 campaign_filters=campaign_filters,

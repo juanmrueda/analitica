@@ -838,3 +838,240 @@ def render_lead_geo_map(
             width="stretch",
             hide_index=True,
         )
+
+
+def render_device_breakdown(
+    *,
+    st_module: Any,
+    paid_dev_df: pd.DataFrame,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    prev_start_date: Any,
+    prev_end_date: Any,
+    sdiv_fn: SafeDivideFn,
+    pct_delta_fn: Callable[[float, float], float | None],
+    fmt_delta_compact_fn: Callable[[float | None], str],
+    fmt_money_fn: FmtMoneyFn,
+    fmt_pct_fn: Callable[[float | None], str],
+    c_google: str,
+    c_meta: str,
+    c_mute: str,
+) -> None:
+    st_module.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+    st_module.markdown(
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
+        unsafe_allow_html=True,
+    )
+
+    dev_src = paid_dev_df.copy() if not paid_dev_df.empty else pd.DataFrame()
+    if not dev_src.empty and "date" in dev_src.columns:
+        dev_src["date"] = pd.to_datetime(dev_src["date"], errors="coerce").dt.date
+        dev_src = dev_src.dropna(subset=["date"])
+    pcur = (
+        dev_src[(dev_src["date"] >= start_date) & (dev_src["date"] <= end_date)].copy()
+        if not dev_src.empty
+        else pd.DataFrame()
+    )
+    pprev = (
+        dev_src[(dev_src["date"] >= prev_start_date) & (dev_src["date"] <= prev_end_date)].copy()
+        if not dev_src.empty
+        else pd.DataFrame()
+    )
+    if platform in ("Google", "Meta"):
+        pcur = pcur[pcur["platform"] == platform]
+        pprev = pprev[pprev["platform"] == platform]
+
+    if pcur.empty:
+        st_module.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
+        return
+
+    cur_roll = (
+        pcur.groupby("device", as_index=False)
+        .agg(
+            spend=("spend", "sum"),
+            impressions=("impressions", "sum"),
+            clicks=("clicks", "sum"),
+            conversions=("conversions", "sum"),
+        )
+    )
+    prev_roll = (
+        pprev.groupby("device", as_index=False).agg(impressions_prev=("impressions", "sum"))
+        if not pprev.empty
+        else pd.DataFrame(columns=["device", "impressions_prev"])
+    )
+    cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
+    cur_roll["ctr"] = cur_roll.apply(
+        lambda r: sdiv_fn(float(r["clicks"]), float(r["impressions"])),
+        axis=1,
+    )
+    cur_roll["cpl"] = cur_roll.apply(
+        lambda r: sdiv_fn(float(r["spend"]), float(r["conversions"])),
+        axis=1,
+    )
+    cur_roll["delta_impressions"] = cur_roll.apply(
+        lambda r: pct_delta_fn(float(r["impressions"]), float(r["impressions_prev"])),
+        axis=1,
+    )
+    order = ["Desktop", "Mobile", "Other"]
+    roll = pd.DataFrame({"device": order}).merge(cur_roll, on="device", how="left").fillna(0.0)
+
+    m1, m2, m3 = st_module.columns(3)
+    for idx, dname in enumerate(order):
+        row = roll[roll["device"] == dname].iloc[0]
+        target_col = [m1, m2, m3][idx]
+        target_col.metric(
+            f"{dname} Impresiones",
+            f"{float(row['impressions']):,.0f}",
+            fmt_delta_compact_fn(row["delta_impressions"]),
+        )
+
+    st_module.markdown("<div class='viz-card'>", unsafe_allow_html=True)
+    total_impressions = float(pd.to_numeric(roll["impressions"], errors="coerce").fillna(0.0).sum())
+    if total_impressions <= 0:
+        st_module.info("Sin impresiones para graficar distribuci\u00f3n por dispositivo.")
+    else:
+        pie = go.Figure(
+            go.Pie(
+                labels=roll["device"],
+                values=roll["impressions"],
+                hole=0.56,
+                marker={
+                    "colors": [c_google, c_meta, c_mute],
+                    "line": {"color": "rgba(32,29,29,0.10)", "width": 1},
+                },
+                texttemplate="%{label}<br>%{percent}",
+                hovertemplate="%{label}: %{value:,.0f} impresiones<extra></extra>",
+                sort=False,
+            )
+        )
+        pie.update_layout(
+            height=300,
+            margin={"l": 10, "r": 10, "t": 8, "b": 8},
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            showlegend=False,
+        )
+        st_module.plotly_chart(pie, width="stretch")
+    st_module.markdown("</div>", unsafe_allow_html=True)
+
+    table = roll.rename(
+        columns={
+            "device": "Device",
+            "spend": "Spend",
+            "impressions": "Impressions",
+            "clicks": "Clicks",
+            "conversions": "Conversions",
+            "ctr": "CTR",
+            "cpl": "CPL",
+        }
+    )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
+
+    st_module.dataframe(
+        table.style.format(
+            {
+                "Spend": lambda v: fmt_money_fn(float(v)),
+                "Impressions": "{:.0f}",
+                "Clicks": "{:.0f}",
+                "Conversions": "{:.2f}",
+                "CTR": lambda v: fmt_pct_fn(v if pd.notna(v) else None),
+                "CPL": lambda v: fmt_money_fn(v if pd.notna(v) else None),
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def render_audit_table(
+    *,
+    st_module: Any,
+    df_sel: pd.DataFrame,
+    metric_cols: dict[str, str],
+    sdiv_fn: SafeDivideFn,
+    fmt_money_fn: FmtMoneyFn,
+    fmt_pct_fn: Callable[[float | None], str],
+) -> None:
+    st_module.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+    st_module.markdown(
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>8) Tabla Maestra de Auditoria</div>",
+        unsafe_allow_html=True,
+    )
+    t = df_sel[
+        [
+            "date",
+            "meta_spend",
+            "google_spend",
+            metric_cols["spend"],
+            metric_cols["clicks"],
+            metric_cols["impr"],
+            metric_cols["conv"],
+            "ga4_sessions",
+            "ga4_avg_sess",
+            "ga4_bounce",
+        ]
+    ].copy()
+    t.columns = [
+        "Date",
+        "Meta Spend",
+        "Google Spend",
+        "Spend",
+        "Clicks",
+        "Impressions",
+        "Conversions",
+        "Sessions",
+        "Avg Session (s)",
+        "Bounce Rate",
+    ]
+    t["CPL"] = t.apply(lambda r: sdiv_fn(float(r["Spend"]), float(r["Conversions"])), axis=1)
+    t["CTR"] = t.apply(lambda r: sdiv_fn(float(r["Clicks"]), float(r["Impressions"])), axis=1)
+    t = t.sort_values("Date", ascending=False)
+    sty = (
+        t.style.format(
+            {
+                "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
+                "Meta Spend": lambda v: fmt_money_fn(float(v)),
+                "Google Spend": lambda v: fmt_money_fn(float(v)),
+                "Spend": lambda v: fmt_money_fn(float(v)),
+                "Clicks": "{:.0f}",
+                "Impressions": "{:.0f}",
+                "Conversions": "{:.2f}",
+                "Sessions": "{:.0f}",
+                "Avg Session (s)": "{:.1f}",
+                "Bounce Rate": lambda v: fmt_pct_fn(float(v)),
+                "CPL": lambda v: fmt_money_fn(v if pd.notna(v) else None),
+                "CTR": lambda v: fmt_pct_fn(v if pd.notna(v) else None),
+            }
+        )
+        .background_gradient(subset=["Spend"], cmap="Blues")
+        .background_gradient(subset=["Conversions"], cmap="Greens")
+        .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
+        .background_gradient(subset=["CTR"], cmap="PuBu")
+    )
+    st_module.dataframe(sty, width="stretch", hide_index=True)
+
+
+def render_top_pieces_section(
+    *,
+    render_top_pieces_range_fn: Callable[..., None],
+    camp_df: pd.DataFrame,
+    piece_df: pd.DataFrame,
+    platform: str,
+    start_ref: Any,
+    end_ref: Any,
+    tenant_meta_account_id: str,
+    tenant_google_customer_id: str,
+    campaign_filters: dict[str, str],
+    report_cache_sig: tuple[str, int, int] | None,
+) -> None:
+    render_top_pieces_range_fn(
+        camp_df,
+        piece_df,
+        platform,
+        start_ref,
+        end_ref,
+        tenant_meta_account_id=tenant_meta_account_id,
+        tenant_google_customer_id=tenant_google_customer_id,
+        campaign_filters=campaign_filters,
+        report_cache_sig=report_cache_sig,
+    )
