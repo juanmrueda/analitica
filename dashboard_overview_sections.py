@@ -863,21 +863,16 @@ def render_device_breakdown(
         "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
         unsafe_allow_html=True,
     )
+    if paid_dev_df.empty or "date" not in paid_dev_df.columns:
+        st_module.info("No hay datos de dispositivo de pauta para el rango seleccionado.")
+        return
 
-    dev_src = paid_dev_df.copy() if not paid_dev_df.empty else pd.DataFrame()
-    if not dev_src.empty and "date" in dev_src.columns:
-        dev_src["date"] = pd.to_datetime(dev_src["date"], errors="coerce").dt.date
-        dev_src = dev_src.dropna(subset=["date"])
-    pcur = (
-        dev_src[(dev_src["date"] >= start_date) & (dev_src["date"] <= end_date)].copy()
-        if not dev_src.empty
-        else pd.DataFrame()
-    )
-    pprev = (
-        dev_src[(dev_src["date"] >= prev_start_date) & (dev_src["date"] <= prev_end_date)].copy()
-        if not dev_src.empty
-        else pd.DataFrame()
-    )
+    date_series = pd.to_datetime(paid_dev_df["date"], errors="coerce").dt.date
+    valid_mask = date_series.notna()
+    cur_mask = valid_mask & (date_series >= start_date) & (date_series <= end_date)
+    prev_mask = valid_mask & (date_series >= prev_start_date) & (date_series <= prev_end_date)
+    pcur = paid_dev_df.loc[cur_mask]
+    pprev = paid_dev_df.loc[prev_mask]
     if platform in ("Google", "Meta"):
         pcur = pcur[pcur["platform"] == platform]
         pprev = pprev[pprev["platform"] == platform]
@@ -901,13 +896,11 @@ def render_device_breakdown(
         else pd.DataFrame(columns=["device", "impressions_prev"])
     )
     cur_roll = cur_roll.merge(prev_roll, on="device", how="left").fillna({"impressions_prev": 0.0})
-    cur_roll["ctr"] = cur_roll.apply(
-        lambda r: sdiv_fn(float(r["clicks"]), float(r["impressions"])),
-        axis=1,
+    cur_roll["ctr"] = pd.to_numeric(cur_roll["clicks"], errors="coerce").fillna(0.0).div(
+        pd.to_numeric(cur_roll["impressions"], errors="coerce").replace(0.0, pd.NA)
     )
-    cur_roll["cpl"] = cur_roll.apply(
-        lambda r: sdiv_fn(float(r["spend"]), float(r["conversions"])),
-        axis=1,
+    cur_roll["cpl"] = pd.to_numeric(cur_roll["spend"], errors="coerce").fillna(0.0).div(
+        pd.to_numeric(cur_roll["conversions"], errors="coerce").replace(0.0, pd.NA)
     )
     cur_roll["delta_impressions"] = cur_roll.apply(
         lambda r: pct_delta_fn(float(r["impressions"]), float(r["impressions_prev"])),
@@ -967,17 +960,15 @@ def render_device_breakdown(
         }
     )[["Device", "Spend", "Impressions", "Clicks", "Conversions", "CTR", "CPL"]]
 
+    table_display = table.copy()
+    table_display["Spend"] = table_display["Spend"].map(lambda v: fmt_money_fn(float(v)))
+    table_display["Impressions"] = table_display["Impressions"].map(lambda v: f"{float(v):,.0f}")
+    table_display["Clicks"] = table_display["Clicks"].map(lambda v: f"{float(v):,.0f}")
+    table_display["Conversions"] = table_display["Conversions"].map(lambda v: f"{float(v):,.2f}")
+    table_display["CTR"] = table_display["CTR"].map(lambda v: fmt_pct_fn(v if pd.notna(v) else None))
+    table_display["CPL"] = table_display["CPL"].map(lambda v: fmt_money_fn(v if pd.notna(v) else None))
     st_module.dataframe(
-        table.style.format(
-            {
-                "Spend": lambda v: fmt_money_fn(float(v)),
-                "Impressions": "{:.0f}",
-                "Clicks": "{:.0f}",
-                "Conversions": "{:.2f}",
-                "CTR": lambda v: fmt_pct_fn(v if pd.notna(v) else None),
-                "CPL": lambda v: fmt_money_fn(v if pd.notna(v) else None),
-            }
-        ),
+        table_display,
         width="stretch",
         hide_index=True,
     )
@@ -1026,29 +1017,20 @@ def render_audit_table(
     t["CPL"] = t.apply(lambda r: sdiv_fn(float(r["Spend"]), float(r["Conversions"])), axis=1)
     t["CTR"] = t.apply(lambda r: sdiv_fn(float(r["Clicks"]), float(r["Impressions"])), axis=1)
     t = t.sort_values("Date", ascending=False)
-    sty = (
-        t.style.format(
-            {
-                "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
-                "Meta Spend": lambda v: fmt_money_fn(float(v)),
-                "Google Spend": lambda v: fmt_money_fn(float(v)),
-                "Spend": lambda v: fmt_money_fn(float(v)),
-                "Clicks": "{:.0f}",
-                "Impressions": "{:.0f}",
-                "Conversions": "{:.2f}",
-                "Sessions": "{:.0f}",
-                "Avg Session (s)": "{:.1f}",
-                "Bounce Rate": lambda v: fmt_pct_fn(float(v)),
-                "CPL": lambda v: fmt_money_fn(v if pd.notna(v) else None),
-                "CTR": lambda v: fmt_pct_fn(v if pd.notna(v) else None),
-            }
-        )
-        .background_gradient(subset=["Spend"], cmap="Blues")
-        .background_gradient(subset=["Conversions"], cmap="Greens")
-        .background_gradient(subset=["CPL"], cmap="RdYlGn_r")
-        .background_gradient(subset=["CTR"], cmap="PuBu")
-    )
-    st_module.dataframe(sty, width="stretch", hide_index=True)
+    display = t.copy()
+    display["Date"] = display["Date"].map(lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v))
+    display["Meta Spend"] = display["Meta Spend"].map(lambda v: fmt_money_fn(float(v)))
+    display["Google Spend"] = display["Google Spend"].map(lambda v: fmt_money_fn(float(v)))
+    display["Spend"] = display["Spend"].map(lambda v: fmt_money_fn(float(v)))
+    display["Clicks"] = display["Clicks"].map(lambda v: f"{float(v):,.0f}")
+    display["Impressions"] = display["Impressions"].map(lambda v: f"{float(v):,.0f}")
+    display["Conversions"] = display["Conversions"].map(lambda v: f"{float(v):,.2f}")
+    display["Sessions"] = display["Sessions"].map(lambda v: f"{float(v):,.0f}")
+    display["Avg Session (s)"] = display["Avg Session (s)"].map(lambda v: f"{float(v):,.1f}")
+    display["Bounce Rate"] = display["Bounce Rate"].map(lambda v: fmt_pct_fn(float(v)))
+    display["CPL"] = display["CPL"].map(lambda v: fmt_money_fn(v if pd.notna(v) else None))
+    display["CTR"] = display["CTR"].map(lambda v: fmt_pct_fn(v if pd.notna(v) else None))
+    st_module.dataframe(display, width="stretch", hide_index=True)
 
 
 def render_top_pieces_section(

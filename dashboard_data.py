@@ -287,6 +287,11 @@ def normalize_paid_device_table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
+    if "date" in out.columns:
+        out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+        out = out.dropna(subset=["date"])
+    else:
+        out["date"] = pd.NaT
     required = ["platform", "device", "spend", "impressions", "clicks", "conversions"]
     for col in required:
         if col not in out.columns:
