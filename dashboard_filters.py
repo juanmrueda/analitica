@@ -383,11 +383,6 @@ def render_top_filters(
                     with range_start_col:
                         st.date_input(
                             "Inicio",
-                            value=_coerce_date_value(
-                                st.session_state.get(range_draft_start_input_key, draft_start),
-                                min_d,
-                                max_d,
-                            ),
                             min_value=min_d,
                             max_value=max_d,
                             key=range_draft_start_input_key,
@@ -395,11 +390,6 @@ def render_top_filters(
                     with range_end_col:
                         st.date_input(
                             "Fin",
-                            value=_coerce_date_value(
-                                st.session_state.get(range_draft_end_input_key, draft_end),
-                                min_d,
-                                max_d,
-                            ),
                             min_value=min_d,
                             max_value=max_d,
                             key=range_draft_end_input_key,
@@ -416,7 +406,6 @@ def render_top_filters(
                 else:
                     st.date_input(
                         "Fecha de inicio y fin",
-                        value=(draft_start, draft_end),
                         min_value=min_d,
                         max_value=max_d,
                         key=range_draft_key,
@@ -457,11 +446,6 @@ def render_top_filters(
                         with compare_start_col:
                             st.date_input(
                                 "Inicio comparativo",
-                                value=_coerce_date_value(
-                                    st.session_state.get(compare_custom_start_input_key, compare_draft_start),
-                                    min_d,
-                                    max_d,
-                                ),
                                 min_value=min_d,
                                 max_value=max_d,
                                 key=compare_custom_start_input_key,
@@ -469,11 +453,6 @@ def render_top_filters(
                         with compare_end_col:
                             st.date_input(
                                 "Fin comparativo",
-                                value=_coerce_date_value(
-                                    st.session_state.get(compare_custom_end_input_key, compare_draft_end),
-                                    min_d,
-                                    max_d,
-                                ),
                                 min_value=min_d,
                                 max_value=max_d,
                                 key=compare_custom_end_input_key,
