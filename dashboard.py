@@ -5416,7 +5416,10 @@ PAID_TREND_KPI_KEYS = {"spend", "conv", "clicks", "impr", "cpl", "ctr", "cvr", "
 def _series_num(df: pd.DataFrame, column: str) -> pd.Series:
     if column not in df.columns:
         return pd.Series(0.0, index=df.index, dtype="float64")
-    return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+    series = df[column]
+    if pd.api.types.is_numeric_dtype(series):
+        return series.fillna(0.0)
+    return pd.to_numeric(series, errors="coerce").fillna(0.0)
 
 
 def _series_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -5425,27 +5428,33 @@ def _series_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
 
 
 def _platform_kpi_series(df: pd.DataFrame, prefix: str, kpi_key: str) -> pd.Series | None:
-    spend = _series_num(df, f"{prefix}_spend")
-    clicks = _series_num(df, f"{prefix}_clicks")
-    conv = _series_num(df, f"{prefix}_conv")
-    impr = _series_num(df, f"{prefix}_impr")
     if kpi_key == "spend":
-        return spend
+        return _series_num(df, f"{prefix}_spend")
     if kpi_key == "conv":
-        return conv
+        return _series_num(df, f"{prefix}_conv")
     if kpi_key == "clicks":
-        return clicks
+        return _series_num(df, f"{prefix}_clicks")
     if kpi_key == "impr":
-        return impr
+        return _series_num(df, f"{prefix}_impr")
     if kpi_key == "cpl":
+        spend = _series_num(df, f"{prefix}_spend")
+        conv = _series_num(df, f"{prefix}_conv")
         return _series_divide(spend, conv)
     if kpi_key == "ctr":
+        clicks = _series_num(df, f"{prefix}_clicks")
+        impr = _series_num(df, f"{prefix}_impr")
         return _series_divide(clicks, impr)
     if kpi_key == "cvr":
+        conv = _series_num(df, f"{prefix}_conv")
+        clicks = _series_num(df, f"{prefix}_clicks")
         return _series_divide(conv, clicks)
     if kpi_key == "cpc":
+        spend = _series_num(df, f"{prefix}_spend")
+        clicks = _series_num(df, f"{prefix}_clicks")
         return _series_divide(spend, clicks)
     if kpi_key == "cpm":
+        spend = _series_num(df, f"{prefix}_spend")
+        impr = _series_num(df, f"{prefix}_impr")
         return _series_divide(spend * 1000.0, impr)
     return None
 
@@ -5844,17 +5853,27 @@ def render_exec(
         trend_label = str(KPI_CATALOG.get(active_overview_kpi, {}).get("label", active_overview_kpi))
         hover_value_template = _kpi_hover_value_template(active_overview_kpi)
         ld = df_sel.sort_values("date").copy()
-        hd = hourly_sel.copy() if isinstance(hourly_sel, pd.DataFrame) else pd.DataFrame()
-        if not hd.empty:
-            if "timestamp" in hd.columns:
-                hd["timestamp"] = pd.to_datetime(hd["timestamp"], errors="coerce")
-            if "date" in hd.columns:
-                hd["date"] = pd.to_datetime(hd["date"], errors="coerce").dt.date
         is_single_day = bool(not ld.empty and ld["date"].nunique() == 1)
         hd_day = pd.DataFrame()
-        if is_single_day and not hd.empty and "date" in hd.columns:
-            selected_day = ld["date"].iloc[0]
-            hd_day = hd[hd["date"] == selected_day].copy()
+        should_try_hourly = bool(
+            is_single_day
+            and active_overview_kpi in PAID_TREND_KPI_KEYS
+            and isinstance(hourly_sel, pd.DataFrame)
+            and not hourly_sel.empty
+        )
+        if should_try_hourly:
+            hd = hourly_sel.copy()
+            if "date" in hd.columns:
+                date_series = hd["date"]
+                if pd.api.types.is_datetime64_any_dtype(date_series):
+                    hd["date"] = date_series.dt.date
+                else:
+                    hd["date"] = pd.to_datetime(date_series, errors="coerce").dt.date
+            if "timestamp" in hd.columns and not pd.api.types.is_datetime64_any_dtype(hd["timestamp"]):
+                hd["timestamp"] = pd.to_datetime(hd["timestamp"], errors="coerce")
+            if "date" in hd.columns:
+                selected_day = ld["date"].iloc[0]
+                hd_day = hd[hd["date"] == selected_day].copy()
         use_hourly_real = bool(
             is_single_day
             and active_overview_kpi in PAID_TREND_KPI_KEYS
@@ -6134,79 +6153,63 @@ def render_exec(
             "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
             unsafe_allow_html=True,
         )
-        pie_col, combo_col = st.columns([1.05, 1.95], gap="large")
-        color_map = {"Google": C_GOOGLE, "Meta": C_META}
-        with pie_col:
-            pie = go.Figure(
-                go.Pie(
-                    labels=mix["platform"],
-                    values=mix["spend"],
-                    hole=0.56,
-                    marker={"colors": [color_map.get(str(p), C_MUTE) for p in mix["platform"]]},
-                    texttemplate="%{label}<br>%{percent}",
-                    hovertemplate="%{label}<br>Spend: $%{value:,.2f}<extra></extra>",
-                )
+        combo = go.Figure()
+        combo.add_trace(
+            go.Bar(
+                x=mix["platform"],
+                y=mix["cpc"],
+                name="CPC",
+                marker={"color": C_ACCENT},
+                hovertemplate="%{x}<br>CPC: $%{y:,.2f}<extra></extra>",
             )
-            pie.update_layout(
-                title={"text": "Mix de Inversión", "font": {"size": 14, "color": C_TEXT}},
-                margin={"l": 4, "r": 4, "t": 42, "b": 6},
-                height=290,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                showlegend=False,
+        )
+        combo.add_trace(
+            go.Bar(
+                x=mix["platform"],
+                y=mix["cpm"],
+                name="CPM",
+                marker={"color": C_MUTE},
+                hovertemplate="%{x}<br>CPM: $%{y:,.2f}<extra></extra>",
             )
-            st.plotly_chart(pie, width="stretch")
-        with combo_col:
-            combo = go.Figure()
-            combo.add_trace(
-                go.Bar(
-                    x=mix["platform"],
-                    y=mix["cpc"],
-                    name="CPC",
-                    marker={"color": C_ACCENT},
-                    hovertemplate="%{x}<br>CPC: $%{y:,.2f}<extra></extra>",
-                )
+        )
+        combo.add_trace(
+            go.Scatter(
+                x=mix["platform"],
+                y=(mix["cvr"] * 100.0),
+                name="CVR",
+                mode="lines+markers",
+                marker={"color": C_META, "size": 9},
+                line={"color": C_META, "width": 3},
+                yaxis="y2",
+                hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
             )
-            combo.add_trace(
-                go.Bar(
-                    x=mix["platform"],
-                    y=mix["cpm"],
-                    name="CPM",
-                    marker={"color": C_MUTE},
-                    hovertemplate="%{x}<br>CPM: $%{y:,.2f}<extra></extra>",
-                )
-            )
-            combo.add_trace(
-                go.Scatter(
-                    x=mix["platform"],
-                    y=(mix["cvr"] * 100.0),
-                    name="CVR",
-                    mode="lines+markers",
-                    marker={"color": C_META, "size": 9},
-                    line={"color": C_META, "width": 3},
-                    yaxis="y2",
-                    hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
-                )
-            )
-            combo.update_layout(
-                barmode="group",
-                title={"text": "Eficiencia por Plataforma", "font": {"size": 14, "color": C_TEXT}},
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                margin={"l": 10, "r": 10, "t": 42, "b": 10},
-                height=290,
-                legend={"orientation": "h", "x": 0.0, "y": 1.12},
-                xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
-                yaxis={"title": "Costo ($)", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
-                yaxis2={
-                    "title": "CVR (%)",
-                    "overlaying": "y",
-                    "side": "right",
-                    "showgrid": False,
-                    "tickfont": {"size": 11, "color": C_MUTE},
-                },
-            )
-            st.plotly_chart(combo, width="stretch")
+        )
+        combo.update_layout(
+            barmode="group",
+            title={"text": "Eficiencia por Plataforma", "font": {"size": 14, "color": C_TEXT}},
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin={"l": 10, "r": 10, "t": 42, "b": 10},
+            height=300,
+            legend={"orientation": "h", "x": 0.0, "y": 1.12},
+            xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
+            yaxis={"title": "Costo ($)", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
+            yaxis2={
+                "title": "CVR (%)",
+                "overlaying": "y",
+                "side": "right",
+                "showgrid": False,
+                "tickfont": {"size": 11, "color": C_MUTE},
+            },
+        )
+        st.plotly_chart(combo, width="stretch")
+        if total_spend > 0:
+            share_parts = [
+                f"{str(row['platform'])}: {fmt_pct(float(row['spend_share']))}"
+                for _, row in mix.iterrows()
+            ]
+            if share_parts:
+                st.caption("Share spend | " + " | ".join(share_parts))
 
         mix_view = mix.rename(
             columns={
@@ -7315,6 +7318,31 @@ def render_traffic(
 
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
+        def _plot_channels(frame: pd.DataFrame) -> None:
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    x=frame["sessionDefaultChannelGroup"],
+                    y=frame["sessions"],
+                    name="Sessions",
+                    marker={"color": C_ACCENT},
+                    hovertemplate="%{x}<br>Sessions: %{y:,.0f}<extra></extra>",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=frame["sessionDefaultChannelGroup"],
+                    y=frame["conversions"],
+                    name="Conversions",
+                    mode="lines+markers",
+                    line={"color": C_META, "width": 2},
+                    yaxis="y2",
+                    hovertemplate="%{x}<br>Conversions: %{y:,.0f}<extra></extra>",
+                )
+            )
+            pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
+            st.plotly_chart(fig, width="stretch")
+
         if report_cache_sig is not None:
             b = _cached_channels_roll_from_report(
                 cache_path_str,
@@ -7326,11 +7354,7 @@ def render_traffic(
             if b.empty:
                 st.info("Sin datos para el rango seleccionado.")
             else:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=b["sessionDefaultChannelGroup"], y=b["sessions"], name="Sessions", marker={"color": C_ACCENT}))
-                fig.add_trace(go.Scatter(x=b["sessionDefaultChannelGroup"], y=b["conversions"], name="Conversions", mode="lines+markers", line={"color": C_META, "width": 2}, yaxis="y2"))
-                pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
-                st.plotly_chart(fig, width="stretch")
+                _plot_channels(b)
         elif ch_df.empty:
             st.info("No hay datos de canales en JSON.")
         else:
@@ -7344,11 +7368,7 @@ def render_traffic(
                     .sort_values("sessions", ascending=False)
                     .head(10)
                 )
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=b["sessionDefaultChannelGroup"], y=b["sessions"], name="Sessions", marker={"color": C_ACCENT}))
-                fig.add_trace(go.Scatter(x=b["sessionDefaultChannelGroup"], y=b["conversions"], name="Conversions", mode="lines+markers", line={"color": C_META, "width": 2}, yaxis="y2"))
-                pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
-                st.plotly_chart(fig, width="stretch")
+                _plot_channels(b)
 
     def _render_top_pages() -> None:
         section_title("Paginas Mas Visitadas")
