@@ -703,24 +703,38 @@ def apply_theme() -> None:
           [data-baseweb="popover"] [data-testid="stPopoverContent"] {
             border-radius: 24px !important;
             border: 1px solid rgba(32,29,29,0.08) !important;
-            background: linear-gradient(180deg, #F7F8FB 0%, #F3F5F9 100%) !important;
+            background: #FFFFFF !important;
             box-shadow: 0 26px 44px rgba(15,23,42,0.16) !important;
             padding: 0.95rem 1rem 1rem 1rem !important;
-            width: min(500px, calc(100vw - 1.2rem)) !important;
-            min-width: min(500px, calc(100vw - 1.2rem)) !important;
-            max-width: min(500px, calc(100vw - 1.2rem)) !important;
+            width: auto !important;
+            min-width: 0 !important;
+            max-width: min(376px, calc(100vw - 1rem)) !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
             min-height: 0 !important;
             max-height: none !important;
             display: flex !important;
             flex-direction: column !important;
             overflow: visible !important;
           }
+          [data-testid="stPopoverBody"][data-baseweb="popover"],
           [data-baseweb="popover"] [data-testid="stPopoverBody"] {
+            border-radius: 24px !important;
+            border: 1px solid rgba(32,29,29,0.08) !important;
+            background: #FFFFFF !important;
+            box-shadow: 0 26px 44px rgba(15,23,42,0.16) !important;
+            width: auto !important;
+            min-width: 0 !important;
+            max-width: min(376px, calc(100vw - 1rem)) !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            box-sizing: border-box !important;
             flex: 1 1 auto !important;
+            height: auto !important;
             max-height: none !important;
             overflow: visible !important;
-            padding-right: 0.18rem !important;
-            padding-bottom: 0.2rem !important;
+            overflow-y: visible !important;
+            padding: 0.95rem 1rem 1rem 1rem !important;
           }
           [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] {
             position: static !important;
@@ -1142,16 +1156,26 @@ def apply_theme() -> None:
               margin-bottom: 0.24rem;
             }
             [data-baseweb="popover"] [data-testid="stPopoverContent"] {
-              width: min(440px, calc(100vw - 0.8rem)) !important;
-              min-width: min(440px, calc(100vw - 0.8rem)) !important;
-              max-width: min(440px, calc(100vw - 0.8rem)) !important;
+              width: auto !important;
+              min-width: 0 !important;
+              max-width: min(376px, calc(100vw - 0.6rem)) !important;
+              margin-left: auto !important;
+              margin-right: auto !important;
               min-height: 0 !important;
               max-height: none !important;
             }
+            [data-testid="stPopoverBody"][data-baseweb="popover"],
             [data-baseweb="popover"] [data-testid="stPopoverBody"] {
+              width: auto !important;
+              min-width: 0 !important;
+              max-width: min(376px, calc(100vw - 0.6rem)) !important;
+              margin-left: auto !important;
+              margin-right: auto !important;
+              height: auto !important;
               max-height: none !important;
               overflow: visible !important;
-              padding-bottom: 0.12rem !important;
+              overflow-y: visible !important;
+              padding: 0.95rem 1rem 1rem 1rem !important;
             }
             [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] {
               position: static !important;
@@ -5676,10 +5700,48 @@ def _trend_series_values(
     return [projected_value] * target_len
 
 
+def _hourly_compare_series_values(
+    hourly_df: pd.DataFrame | None,
+    *,
+    x_values: list[Any],
+    prefix: str,
+    kpi_key: str,
+    additive: bool,
+) -> list[float] | None:
+    if not isinstance(hourly_df, pd.DataFrame) or hourly_df.empty or not x_values:
+        return None
+    hd = hourly_df.copy()
+    if "timestamp" not in hd.columns:
+        return None
+    if not pd.api.types.is_datetime64_any_dtype(hd["timestamp"]):
+        hd["timestamp"] = pd.to_datetime(hd["timestamp"], errors="coerce")
+    hd = hd.dropna(subset=["timestamp"]).copy()
+    if hd.empty:
+        return None
+    hd["hour"] = pd.to_datetime(hd["timestamp"], errors="coerce").dt.hour
+    metric_series = _platform_kpi_series(hd, prefix, kpi_key)
+    if metric_series is None:
+        return None
+    hd["_metric_value"] = pd.to_numeric(metric_series, errors="coerce").fillna(0.0)
+    if additive:
+        hourly_roll = hd.groupby("hour", dropna=False)["_metric_value"].mean()
+    else:
+        hourly_roll = hd.groupby("hour", dropna=False)["_metric_value"].mean()
+    out: list[float] = []
+    for raw_x in x_values:
+        ts = pd.to_datetime(raw_x, errors="coerce")
+        if pd.isna(ts):
+            out.append(0.0)
+            continue
+        out.append(float(hourly_roll.get(int(ts.hour), 0.0)))
+    return out
+
+
 def _build_overview_trend_payload_from_frames(
     ld: pd.DataFrame,
     ld_prev: pd.DataFrame,
     hourly_candidate: pd.DataFrame | None,
+    hourly_compare_candidate: pd.DataFrame | None,
     active_overview_kpi: str,
     compare_active: bool,
 ) -> dict[str, Any]:
@@ -5731,6 +5793,24 @@ def _build_overview_trend_payload_from_frames(
         and not hd_day.empty
         and "timestamp" in hd_day.columns
     )
+    hd_compare = pd.DataFrame()
+    should_try_hourly_compare = bool(
+        compare_active
+        and use_hourly_real
+        and isinstance(hourly_compare_candidate, pd.DataFrame)
+        and not hourly_compare_candidate.empty
+    )
+    if should_try_hourly_compare:
+        hd_prev = hourly_compare_candidate.copy()
+        if "date" in hd_prev.columns:
+            prev_date_series = hd_prev["date"]
+            if pd.api.types.is_datetime64_any_dtype(prev_date_series):
+                hd_prev["date"] = prev_date_series.dt.date
+            else:
+                hd_prev["date"] = pd.to_datetime(prev_date_series, errors="coerce").dt.date
+        if "timestamp" in hd_prev.columns and not pd.api.types.is_datetime64_any_dtype(hd_prev["timestamp"]):
+            hd_prev["timestamp"] = pd.to_datetime(hd_prev["timestamp"], errors="coerce")
+        hd_compare = hd_prev.dropna(subset=["timestamp"]).sort_values("timestamp").copy()
     trend_label = str(KPI_CATALOG.get(active_overview_kpi, {}).get("label", active_overview_kpi))
     payload["trend_subtitle"] = (
         ("Hourly investment over time" if active_overview_kpi == "spend" else f"Tendencia por hora de {trend_label.lower()}")
@@ -5776,21 +5856,42 @@ def _build_overview_trend_payload_from_frames(
             use_hourly_real=use_hourly_real,
             additive=additive,
         )
-        if compare_active and not prev_df.empty:
-            payload["google_compare"] = _trend_series_values(
-                _platform_kpi_series(prev_df, "google", active_overview_kpi),
-                force_target_len=target_len,
-                is_single_day=is_single_day,
-                use_hourly_real=use_hourly_real,
-                additive=additive,
-            )
-            payload["meta_compare"] = _trend_series_values(
-                _platform_kpi_series(prev_df, "meta", active_overview_kpi),
-                force_target_len=target_len,
-                is_single_day=is_single_day,
-                use_hourly_real=use_hourly_real,
-                additive=additive,
-            )
+        if compare_active:
+            google_compare_values: list[float] | None = None
+            meta_compare_values: list[float] | None = None
+            if use_hourly_real and not hd_compare.empty:
+                google_compare_values = _hourly_compare_series_values(
+                    hd_compare,
+                    x_values=list(payload.get("x_values", [])),
+                    prefix="google",
+                    kpi_key=active_overview_kpi,
+                    additive=additive,
+                )
+                meta_compare_values = _hourly_compare_series_values(
+                    hd_compare,
+                    x_values=list(payload.get("x_values", [])),
+                    prefix="meta",
+                    kpi_key=active_overview_kpi,
+                    additive=additive,
+                )
+            if google_compare_values is None and not prev_df.empty:
+                google_compare_values = _trend_series_values(
+                    _platform_kpi_series(prev_df, "google", active_overview_kpi),
+                    force_target_len=target_len,
+                    is_single_day=is_single_day,
+                    use_hourly_real=use_hourly_real,
+                    additive=additive,
+                )
+            if meta_compare_values is None and not prev_df.empty:
+                meta_compare_values = _trend_series_values(
+                    _platform_kpi_series(prev_df, "meta", active_overview_kpi),
+                    force_target_len=target_len,
+                    is_single_day=is_single_day,
+                    use_hourly_real=use_hourly_real,
+                    additive=additive,
+                )
+            payload["google_compare"] = google_compare_values
+            payload["meta_compare"] = meta_compare_values
     else:
         payload["ga4_current"] = _trend_series_values(
             _ga4_kpi_series(cur_df, active_overview_kpi),
@@ -5832,6 +5933,7 @@ def _cached_overview_trend_payload_from_report(
             pd.DataFrame(),
             pd.DataFrame(),
             pd.DataFrame(),
+            pd.DataFrame(),
             active_overview_kpi,
             compare_active,
         )
@@ -5849,6 +5951,7 @@ def _cached_overview_trend_payload_from_report(
     prev_df = prev_df[(prev_df["date"] >= prev_start_day) & (prev_df["date"] <= prev_end_day)].copy()
 
     hourly_candidate = pd.DataFrame()
+    hourly_compare_candidate = pd.DataFrame()
     if (
         active_overview_kpi in PAID_TREND_KPI_KEYS
         and not cur_df.empty
@@ -5869,11 +5972,25 @@ def _cached_overview_trend_payload_from_report(
             hourly_candidate = hourly_candidate[
                 (hourly_candidate["date"] >= start_day) & (hourly_candidate["date"] <= end_day)
             ].copy()
+            if compare_active:
+                hourly_compare_candidate = hourly_df.copy()
+                if pd.api.types.is_datetime64_any_dtype(hourly_compare_candidate["date"]):
+                    hourly_compare_candidate["date"] = hourly_compare_candidate["date"].dt.date
+                else:
+                    hourly_compare_candidate["date"] = pd.to_datetime(
+                        hourly_compare_candidate["date"], errors="coerce"
+                    ).dt.date
+                hourly_compare_candidate = hourly_compare_candidate.dropna(subset=["date"])
+                hourly_compare_candidate = hourly_compare_candidate[
+                    (hourly_compare_candidate["date"] >= prev_start_day)
+                    & (hourly_compare_candidate["date"] <= prev_end_day)
+                ].copy()
 
     return _build_overview_trend_payload_from_frames(
         cur_df,
         prev_df,
         hourly_candidate,
+        hourly_compare_candidate,
         active_overview_kpi,
         compare_active,
     )
@@ -6197,6 +6314,7 @@ def render_exec(
     compare_label: str,
     overview_chart_state_key: str,
     hourly_sel: pd.DataFrame | None = None,
+    hourly_prev_sel: pd.DataFrame | None = None,
     report_cache_sig: tuple[str, int, int] | None = None,
     profiler: DashboardProfiler | None = None,
 ):
@@ -6252,6 +6370,7 @@ def render_exec(
                 ld_local,
                 ld_prev_local,
                 hourly_sel,
+                hourly_prev_sel,
                 active_overview_kpi,
                 compare_active,
             )
@@ -11017,10 +11136,13 @@ def main() -> None:
                 hourly = load_hourly_df_from_report_path(report_path)
                 if hourly.empty:
                     hourly_sel = hourly.copy()
+                    hourly_prev_sel = hourly.copy()
                 else:
                     hourly_sel = hourly[(hourly["date"] >= s) & (hourly["date"] <= e)].copy()
+                    hourly_prev_sel = hourly[(hourly["date"] >= prev_s) & (hourly["date"] <= prev_e)].copy()
             else:
                 hourly_sel = pd.DataFrame()
+                hourly_prev_sel = pd.DataFrame()
         with _profile_span(profiler, "main:overview:render_coco"):
             render_coco_ia_widget(
                 df_base=df,
@@ -11066,6 +11188,7 @@ def main() -> None:
                 compare_label,
                 f"overview_chart_metric_{tenant_id}",
                 hourly_sel,
+                hourly_prev_sel,
                 report_cache_sig=report_cache_sig,
                 profiler=profiler,
             )
