@@ -2196,6 +2196,27 @@ def _parquet_bundle_health(report_path: Path) -> dict[str, Any]:
     )
 
 
+def _optional_file_cache_signature(path: Path) -> tuple[str, int, int] | None:
+    try:
+        resolved = path.resolve()
+        if not resolved.exists():
+            return None
+        stat = resolved.stat()
+        return str(resolved), int(stat.st_mtime_ns), int(stat.st_size)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def _load_json_file_cached(path_str: str, modified_ns: int, size_bytes: int) -> Any:
+    _ = modified_ns
+    _ = size_bytes
+    try:
+        return json.loads(Path(path_str).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 @st.cache_data(show_spinner=False)
 def _load_report_cached(path_str: str, modified_ns: int, size_bytes: int) -> dict[str, Any]:
     _ = modified_ns
@@ -2346,12 +2367,12 @@ def _resolve_repo_path(raw_path: str) -> Path:
 
 def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
     tenants = default_tenants_config()
-    if not path.exists():
+    cache_sig = _optional_file_cache_signature(path)
+    if cache_sig is None:
         return tenants
 
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    payload = _load_json_file_cached(*cache_sig)
+    if not isinstance(payload, dict):
         return tenants
 
     entries = payload.get("tenants", [])
@@ -2488,11 +2509,11 @@ def _auth_user_tenant_ids(auth_user: Any, tenants: dict[str, dict[str, Any]]) ->
 
 def load_users_config(path: Path) -> dict[str, dict[str, Any]]:
     users: dict[str, dict[str, Any]] = {}
-    if not path.exists():
+    cache_sig = _optional_file_cache_signature(path)
+    if cache_sig is None:
         return users
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    payload = _load_json_file_cached(*cache_sig)
+    if not isinstance(payload, dict):
         return users
     entries = payload.get("users", [])
     if not isinstance(entries, list):
@@ -3984,11 +4005,11 @@ def ensure_dashboard_settings_runtime_file(runtime_path: Path, template_path: Pa
 
 def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> dict[str, Any]:
     base = default_dashboard_settings(tenants)
-    if not path.exists():
+    cache_sig = _optional_file_cache_signature(path)
+    if cache_sig is None:
         return base
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    payload = _load_json_file_cached(*cache_sig)
+    if not isinstance(payload, dict):
         return base
     raw_defaults = payload.get("defaults", {}) if isinstance(payload, dict) else {}
     defaults = {
