@@ -5816,6 +5816,7 @@ def render_exec(
     e,
     prev_s,
     prev_e,
+    compare_label: str,
     overview_chart_state_key: str,
     hourly_sel: pd.DataFrame | None = None,
     report_cache_sig: tuple[str, int, int] | None = None,
@@ -5853,6 +5854,8 @@ def render_exec(
         trend_label = str(KPI_CATALOG.get(active_overview_kpi, {}).get("label", active_overview_kpi))
         hover_value_template = _kpi_hover_value_template(active_overview_kpi)
         ld = df_sel.sort_values("date").copy()
+        compare_active = bool(str(compare_label or "").strip())
+        ld_prev = df_prev.sort_values("date").copy() if compare_active else pd.DataFrame()
         is_single_day = bool(not ld.empty and ld["date"].nunique() == 1)
         hd_day = pd.DataFrame()
         should_try_hourly = bool(
@@ -5898,6 +5901,7 @@ def render_exec(
         else:
             fig = go.Figure()
             traces_added = 0
+            compare_traces_added = 0
             additive_kpis = {"spend", "conv", "clicks", "impr", "sessions", "users"}
             plot_df = hd_day.sort_values("timestamp").copy() if use_hourly_real else ld
             x_values: pd.Series | pd.DatetimeIndex = plot_df["timestamp"] if use_hourly_real else ld["date"]
@@ -5913,10 +5917,27 @@ def render_exec(
                     "(no hay datos horarios disponibles en el JSON actual)."
                 )
 
-            def _series_for_plot(series: pd.Series | None) -> pd.Series | None:
+            def _series_for_plot(
+                series: pd.Series | None,
+                *,
+                force_target_len: int | None = None,
+            ) -> pd.Series | None:
                 if series is None:
                     return None
                 numeric_series = pd.to_numeric(series, errors="coerce").fillna(0.0)
+                if force_target_len is not None:
+                    target_len = max(int(force_target_len), 0)
+                    if target_len == 0:
+                        return pd.Series([], dtype="float64")
+                    if numeric_series.empty:
+                        return pd.Series([0.0] * target_len, dtype="float64")
+                    if len(numeric_series) == target_len:
+                        return numeric_series.reset_index(drop=True)
+                    if active_overview_kpi in additive_kpis:
+                        projected_value = float(numeric_series.sum()) / float(target_len)
+                    else:
+                        projected_value = float(numeric_series.mean())
+                    return pd.Series([projected_value] * target_len, dtype="float64")
                 if use_hourly_real or not is_single_day:
                     return numeric_series
                 if numeric_series.empty:
@@ -5945,6 +5966,28 @@ def render_exec(
                             )
                         )
                         traces_added += 1
+                    if compare_active:
+                        google_prev_series = _platform_kpi_series(ld_prev, "google", active_overview_kpi)
+                        google_prev_plot_series = _series_for_plot(
+                            google_prev_series,
+                            force_target_len=len(x_values),
+                        )
+                        if google_prev_plot_series is not None and not google_prev_plot_series.empty:
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=x_values,
+                                    y=google_prev_plot_series,
+                                    mode="lines+markers" if is_single_day else "lines",
+                                    name="Google Ads (Comparación)",
+                                    line={"color": C_GOOGLE, "width": 2, "dash": "dot", "shape": "linear"},
+                                    opacity=0.75,
+                                    hovertemplate=(
+                                        f"%{{x|{x_hover_format}}}<br>"
+                                        f"Google (comparación): {hover_value_template}<extra></extra>"
+                                    ),
+                                )
+                            )
+                            compare_traces_added += 1
                 if platform in ("All", "Meta"):
                     meta_series = _platform_kpi_series(plot_df, "meta", active_overview_kpi)
                     meta_plot_series = _series_for_plot(meta_series)
@@ -5960,6 +6003,28 @@ def render_exec(
                             )
                         )
                         traces_added += 1
+                    if compare_active:
+                        meta_prev_series = _platform_kpi_series(ld_prev, "meta", active_overview_kpi)
+                        meta_prev_plot_series = _series_for_plot(
+                            meta_prev_series,
+                            force_target_len=len(x_values),
+                        )
+                        if meta_prev_plot_series is not None and not meta_prev_plot_series.empty:
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=x_values,
+                                    y=meta_prev_plot_series,
+                                    mode="lines+markers" if is_single_day else "lines",
+                                    name="Meta Ads (Comparación)",
+                                    line={"color": C_META, "width": 2, "dash": "dot", "shape": "linear"},
+                                    opacity=0.75,
+                                    hovertemplate=(
+                                        f"%{{x|{x_hover_format}}}<br>"
+                                        f"Meta (comparación): {hover_value_template}<extra></extra>"
+                                    ),
+                                )
+                            )
+                            compare_traces_added += 1
             else:
                 ga4_series = _ga4_kpi_series(ld, active_overview_kpi)
                 ga4_plot_series = _series_for_plot(ga4_series)
@@ -5975,6 +6040,28 @@ def render_exec(
                         )
                     )
                     traces_added += 1
+                if compare_active:
+                    ga4_prev_series = _ga4_kpi_series(ld_prev, active_overview_kpi)
+                    ga4_prev_plot_series = _series_for_plot(
+                        ga4_prev_series,
+                        force_target_len=len(x_values),
+                    )
+                    if ga4_prev_plot_series is not None and not ga4_prev_plot_series.empty:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x_values,
+                                y=ga4_prev_plot_series,
+                                mode="lines+markers" if is_single_day else "lines",
+                                name="GA4 (Comparación)",
+                                line={"color": C_ACCENT, "width": 2, "dash": "dot", "shape": "linear"},
+                                opacity=0.75,
+                                hovertemplate=(
+                                    f"%{{x|{x_hover_format}}}<br>"
+                                    f"{html.escape(trend_label)} (comparación): {hover_value_template}<extra></extra>"
+                                ),
+                            )
+                        )
+                        compare_traces_added += 1
             if traces_added == 0:
                 st.info("No hay datos de tendencia para la métrica seleccionada.")
             else:
@@ -5992,6 +6079,11 @@ def render_exec(
                 else:
                     fig.update_yaxes(tickformat=",.0f")
                 st.plotly_chart(fig, width="stretch")
+                if compare_active:
+                    if compare_traces_added > 0:
+                        st.caption(f"Comparación activa: {compare_label}")
+                    else:
+                        st.caption("Comparación activa, pero sin datos en el período comparado para la métrica actual.")
                 if hourly_projection_note:
                     st.caption(hourly_projection_note)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -10511,7 +10603,7 @@ def main() -> None:
         DEFAULT_CAMPAIGN_FILTER_KEYS,
     )
     with _profile_span(profiler, "main:render_top_filters"):
-        s, e, platform, campaign_filters, _compare_mode, prev_s, prev_e, _compare_label = render_top_filters(
+        s, e, platform, campaign_filters, _compare_mode, prev_s, prev_e, compare_label = render_top_filters(
             min_d,
             max_d,
             tenant_name,
@@ -10657,6 +10749,7 @@ def main() -> None:
                 e,
                 prev_s,
                 prev_e,
+                compare_label,
                 f"overview_chart_metric_{tenant_id}",
                 hourly_sel,
                 report_cache_sig=report_cache_sig,
