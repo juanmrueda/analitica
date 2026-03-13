@@ -137,15 +137,7 @@ def build_overview_trend_payload_from_frames(
         and not hourly_candidate.empty
     )
     if should_try_hourly:
-        hd = hourly_candidate.copy()
-        if "date" in hd.columns:
-            date_series = hd["date"]
-            if pd.api.types.is_datetime64_any_dtype(date_series):
-                hd["date"] = date_series.dt.date
-            else:
-                hd["date"] = pd.to_datetime(date_series, errors="coerce").dt.date
-        if "timestamp" in hd.columns and not pd.api.types.is_datetime64_any_dtype(hd["timestamp"]):
-            hd["timestamp"] = pd.to_datetime(hd["timestamp"], errors="coerce")
+        hd = hourly_candidate
         if "date" in hd.columns:
             selected_day = cur_df["date"].iloc[0]
             hd_day = hd[hd["date"] == selected_day].copy()
@@ -164,16 +156,7 @@ def build_overview_trend_payload_from_frames(
         and not hourly_compare_candidate.empty
     )
     if should_try_hourly_compare:
-        hd_prev = hourly_compare_candidate.copy()
-        if "date" in hd_prev.columns:
-            prev_date_series = hd_prev["date"]
-            if pd.api.types.is_datetime64_any_dtype(prev_date_series):
-                hd_prev["date"] = prev_date_series.dt.date
-            else:
-                hd_prev["date"] = pd.to_datetime(prev_date_series, errors="coerce").dt.date
-        if "timestamp" in hd_prev.columns and not pd.api.types.is_datetime64_any_dtype(hd_prev["timestamp"]):
-            hd_prev["timestamp"] = pd.to_datetime(hd_prev["timestamp"], errors="coerce")
-        hd_compare = hd_prev.dropna(subset=["timestamp"]).sort_values("timestamp").copy()
+        hd_compare = hourly_compare_candidate.dropna(subset=["timestamp"]).sort_values("timestamp").copy()
 
     payload["trend_subtitle"] = (
         ("Hourly investment over time" if active_overview_kpi == "spend" else f"Tendencia por hora de {trend_label.lower()}")
@@ -318,15 +301,20 @@ def build_overview_trend_payload_from_report(
     start_day, end_day = resolve_cached_range_fn(start_iso, end_iso)
     prev_start_day, prev_end_day = resolve_cached_range_fn(prev_start_iso, prev_end_iso)
 
-    cur_df = daily_df.copy()
-    if pd.api.types.is_datetime64_any_dtype(cur_df["date"]):
-        cur_df["date"] = cur_df["date"].dt.date
-    else:
-        cur_df["date"] = pd.to_datetime(cur_df["date"], errors="coerce").dt.date
-    cur_df = cur_df.dropna(subset=["date"])
-    prev_df = cur_df.copy()
-    cur_df = cur_df[(cur_df["date"] >= start_day) & (cur_df["date"] <= end_day)].copy()
-    prev_df = prev_df[(prev_df["date"] >= prev_start_day) & (prev_df["date"] <= prev_end_day)].copy()
+    daily_dates = daily_df["date"]
+    if pd.api.types.is_datetime64_any_dtype(daily_dates):
+        daily_dates = daily_dates.dt.date
+    elif not pd.api.types.is_object_dtype(daily_dates):
+        daily_dates = pd.to_datetime(daily_dates, errors="coerce").dt.date
+    valid_daily = daily_dates.notna()
+    cur_mask = valid_daily & (daily_dates >= start_day) & (daily_dates <= end_day)
+    prev_mask = valid_daily & (daily_dates >= prev_start_day) & (daily_dates <= prev_end_day)
+    cur_df = daily_df.loc[cur_mask].copy()
+    prev_df = daily_df.loc[prev_mask].copy()
+    if not cur_df.empty:
+        cur_df["date"] = daily_dates.loc[cur_mask].to_numpy()
+    if not prev_df.empty:
+        prev_df["date"] = daily_dates.loc[prev_mask].to_numpy()
 
     hourly_candidate = pd.DataFrame()
     hourly_compare_candidate = pd.DataFrame()
@@ -341,28 +329,33 @@ def build_overview_trend_payload_from_report(
         else:
             hourly_df = load_hourly_df_cached_fn(path_str, modified_ns, size_bytes)
         if not hourly_df.empty and "date" in hourly_df.columns:
-            hourly_candidate = hourly_df.copy()
-            if pd.api.types.is_datetime64_any_dtype(hourly_candidate["date"]):
-                hourly_candidate["date"] = hourly_candidate["date"].dt.date
-            else:
-                hourly_candidate["date"] = pd.to_datetime(hourly_candidate["date"], errors="coerce").dt.date
-            hourly_candidate = hourly_candidate.dropna(subset=["date"])
-            hourly_candidate = hourly_candidate[
-                (hourly_candidate["date"] >= start_day) & (hourly_candidate["date"] <= end_day)
-            ].copy()
+            hourly_dates = hourly_df["date"]
+            if pd.api.types.is_datetime64_any_dtype(hourly_dates):
+                hourly_dates = hourly_dates.dt.date
+            elif not pd.api.types.is_object_dtype(hourly_dates):
+                hourly_dates = pd.to_datetime(hourly_dates, errors="coerce").dt.date
+            valid_hourly = hourly_dates.notna()
+
+            hourly_cur_mask = valid_hourly & (hourly_dates >= start_day) & (hourly_dates <= end_day)
+            hourly_candidate = hourly_df.loc[hourly_cur_mask].copy()
+            if not hourly_candidate.empty:
+                hourly_candidate["date"] = hourly_dates.loc[hourly_cur_mask].to_numpy()
+                if "timestamp" in hourly_candidate.columns and not pd.api.types.is_datetime64_any_dtype(
+                    hourly_candidate["timestamp"]
+                ):
+                    hourly_candidate["timestamp"] = pd.to_datetime(hourly_candidate["timestamp"], errors="coerce")
+
             if compare_active:
-                hourly_compare_candidate = hourly_df.copy()
-                if pd.api.types.is_datetime64_any_dtype(hourly_compare_candidate["date"]):
-                    hourly_compare_candidate["date"] = hourly_compare_candidate["date"].dt.date
-                else:
-                    hourly_compare_candidate["date"] = pd.to_datetime(
-                        hourly_compare_candidate["date"], errors="coerce"
-                    ).dt.date
-                hourly_compare_candidate = hourly_compare_candidate.dropna(subset=["date"])
-                hourly_compare_candidate = hourly_compare_candidate[
-                    (hourly_compare_candidate["date"] >= prev_start_day)
-                    & (hourly_compare_candidate["date"] <= prev_end_day)
-                ].copy()
+                hourly_prev_mask = valid_hourly & (hourly_dates >= prev_start_day) & (hourly_dates <= prev_end_day)
+                hourly_compare_candidate = hourly_df.loc[hourly_prev_mask].copy()
+                if not hourly_compare_candidate.empty:
+                    hourly_compare_candidate["date"] = hourly_dates.loc[hourly_prev_mask].to_numpy()
+                    if "timestamp" in hourly_compare_candidate.columns and not pd.api.types.is_datetime64_any_dtype(
+                        hourly_compare_candidate["timestamp"]
+                    ):
+                        hourly_compare_candidate["timestamp"] = pd.to_datetime(
+                            hourly_compare_candidate["timestamp"], errors="coerce"
+                        )
 
     return build_payload_from_frames_fn(
         cur_df,
