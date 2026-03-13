@@ -5924,7 +5924,10 @@ def render_exec(
             ) -> pd.Series | None:
                 if series is None:
                     return None
-                numeric_series = pd.to_numeric(series, errors="coerce").fillna(0.0)
+                if pd.api.types.is_numeric_dtype(series):
+                    numeric_series = series.fillna(0.0)
+                else:
+                    numeric_series = pd.to_numeric(series, errors="coerce").fillna(0.0)
                 if force_target_len is not None:
                     target_len = max(int(force_target_len), 0)
                     if target_len == 0:
@@ -6239,7 +6242,10 @@ def render_exec(
             return
         mix["spend"] = pd.to_numeric(mix["spend"], errors="coerce").fillna(0.0)
         total_spend = float(mix["spend"].sum())
-        mix["spend_share"] = mix["spend"].apply(lambda v: (v / total_spend) if total_spend > 0 else 0.0)
+        if total_spend > 0:
+            mix["spend_share"] = mix["spend"] / total_spend
+        else:
+            mix["spend_share"] = 0.0
 
         st.markdown(
             "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
@@ -6296,10 +6302,7 @@ def render_exec(
         )
         st.plotly_chart(combo, width="stretch")
         if total_spend > 0:
-            share_parts = [
-                f"{str(row['platform'])}: {fmt_pct(float(row['spend_share']))}"
-                for _, row in mix.iterrows()
-            ]
+            share_parts = [f"{platform_name}: {fmt_pct(float(share))}" for platform_name, share in zip(mix["platform"], mix["spend_share"])]
             if share_parts:
                 st.caption("Share spend | " + " | ".join(share_parts))
 
@@ -6316,19 +6319,17 @@ def render_exec(
                 "conversions": "Conversiones",
             }
         )[["Plataforma", "Inversión", "Share Spend", "CPC", "CPM", "CVR", "Clics", "Impresiones", "Conversiones"]]
+        mix_display = mix_view.copy()
+        mix_display["Inversión"] = mix_display["Inversión"].apply(lambda v: fmt_money(float(v)))
+        mix_display["Share Spend"] = mix_display["Share Spend"].apply(lambda v: fmt_pct(float(v)))
+        mix_display["CPC"] = mix_display["CPC"].apply(lambda v: fmt_money(v if pd.notna(v) else None))
+        mix_display["CPM"] = mix_display["CPM"].apply(lambda v: fmt_money(v if pd.notna(v) else None))
+        mix_display["CVR"] = mix_display["CVR"].apply(lambda v: fmt_pct(v if pd.notna(v) else None))
+        mix_display["Clics"] = mix_display["Clics"].apply(lambda v: f"{float(v):,.0f}")
+        mix_display["Impresiones"] = mix_display["Impresiones"].apply(lambda v: f"{float(v):,.0f}")
+        mix_display["Conversiones"] = mix_display["Conversiones"].apply(lambda v: f"{float(v):,.2f}")
         st.dataframe(
-            mix_view.style.format(
-                {
-                    "Inversión": lambda v: fmt_money(float(v)),
-                    "Share Spend": lambda v: fmt_pct(float(v)),
-                    "CPC": lambda v: fmt_money(v if pd.notna(v) else None),
-                    "CPM": lambda v: fmt_money(v if pd.notna(v) else None),
-                    "CVR": lambda v: fmt_pct(v if pd.notna(v) else None),
-                    "Clics": "{:.0f}",
-                    "Impresiones": "{:.0f}",
-                    "Conversiones": "{:.2f}",
-                }
-            ),
+            mix_display,
             width="stretch",
             hide_index=True,
         )
