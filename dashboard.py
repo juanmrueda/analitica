@@ -10087,7 +10087,8 @@ def main() -> None:
         overview_section_set = set(overview_sections)
         has_report_cache = report_cache_sig is not None
         needs_top_pieces_source = bool("top_pieces" in overview_section_set and not has_report_cache)
-        needs_trend_hourly = "trend_chart" in overview_section_set
+        # With report cache enabled, trend payload loads hourly data lazily only when needed.
+        needs_trend_hourly = bool("trend_chart" in overview_section_set and not has_report_cache)
         needs_piece_data = bool(coco_enabled_for_tenant or needs_top_pieces_source)
         needs_campaign_data = bool(coco_enabled_for_tenant or needs_top_pieces_source)
         needs_ga4_event = "ga4_conversion" in overview_section_set
