@@ -30,6 +30,7 @@ import streamlit as st
 from PIL import Image
 import dashboard_data
 import dashboard_filters
+import dashboard_overview_sections
 import dashboard_trends
 from coco_agent import run_coco_agent_turn
 from coco_agent import deterministic_resolvers as coco_det
@@ -6117,111 +6118,25 @@ def render_exec(
         )
 
     def _render_funnel_and_ga4() -> None:
-        if "funnel" in section_set:
-            impr = float(df_sel[c["impr"]].sum())
-            clicks = float(df_sel[c["clicks"]].sum())
-            conv = float(df_sel[c["conv"]].sum())
-            sess_total = float(df_sel["ga4_sessions"].sum())
-            sess = sess_total if platform == "All" else sess_total * (sdiv(clicks, float(df_sel["total_clicks"].sum())) or 0.0)
-            if impr <= 0 and clicks > 0:
-                impr = clicks / 0.03
-
-            funnel_vals = [
-                ("Impresiones", max(impr, 0.0)),
-                ("Clics", max(min(clicks, impr), 0.0)),
-                ("Sesiones", max(min(sess, clicks), 0.0)),
-                ("Conversiones", max(min(conv, sess), 0.0)),
-            ]
-            top_val = max(float(funnel_vals[0][1]), 1.0)
-            funnel_stage_colors = [C_GOOGLE, C_ACCENT, C_MUTE, C_META]
-            rows_html: list[str] = []
-            prev_val: float | None = None
-            for idx, (name, value) in enumerate(funnel_vals):
-                pct = 0.0 if value <= 0 else min(max((value / top_val) * 100.0, 0.0), 100.0)
-                stage_color = funnel_stage_colors[idx % len(funnel_stage_colors)]
-                if prev_val is None or prev_val <= 0:
-                    drop_html = "<span class='funnel-drop funnel-drop-base' title='Etapa base'>Base</span>"
-                else:
-                    drop_pct = max(0.0, min(100.0, (1.0 - sdiv(value, prev_val)) * 100.0))
-                    drop_html = f"<span class='funnel-drop' title='Caída vs etapa anterior'>&darr; {drop_pct:.1f}%</span>"
-                rows_html.append(
-                    f"<div class='funnel-row'>"
-                    f"<div class='funnel-fill' style='width:{pct:.2f}%; background:{stage_color}33; border:1px solid {stage_color}66;'></div>"
-                    f"<div class='funnel-content'>"
-                    f"<span class='funnel-name'>{name}</span>"
-                    f"<span class='funnel-metrics'><span class='funnel-value'>{fmt_compact(value)}</span>{drop_html}</span>"
-                    f"</div>"
-                    f"</div>"
-                )
-                prev_val = value
-
-            st.markdown(
-                textwrap.dedent(
-                    f"""
-                    <div class='funnel-card'>
-                      <div class='funnel-title'>Funnel de Conversión</div>
-                      <div class='funnel-stack'>{''.join(rows_html)}</div>
-                    </div>
-                    """
-                ).strip(),
-                unsafe_allow_html=True,
-            )
-
-        if "ga4_conversion" in section_set:
-            ga4_event_name = str(ga4_conversion_event_name or GA4_GTC_SOLICITAR_CODIGO_EVENT).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT
-            ga4_filtered = ga4_event_df.copy() if not ga4_event_df.empty else pd.DataFrame()
-            ga4_conv_total = 0.0
-            if not ga4_filtered.empty:
-                if "date" in ga4_filtered.columns:
-                    ga4_filtered = ga4_filtered[(ga4_filtered["date"] >= s) & (ga4_filtered["date"] <= e)]
-                event_col = "eventName" if "eventName" in ga4_filtered.columns else ("event_name" if "event_name" in ga4_filtered.columns else None)
-                if event_col:
-                    ga4_filtered = ga4_filtered[
-                        ga4_filtered[event_col].astype(str).str.strip().str.lower() == ga4_event_name.lower()
-                    ]
-                if platform in ("Google", "Meta") and "platform" in ga4_filtered.columns:
-                    ga4_filtered = ga4_filtered[
-                        ga4_filtered["platform"].astype(str).str.strip().str.lower() == platform.lower()
-                    ]
-                conv_col = (
-                    "conversions"
-                    if "conversions" in ga4_filtered.columns
-                    else ("eventCount" if "eventCount" in ga4_filtered.columns else ("event_count" if "event_count" in ga4_filtered.columns else None))
-                )
-                if conv_col:
-                    ga4_conv_total = float(pd.to_numeric(ga4_filtered[conv_col], errors="coerce").fillna(0.0).sum())
-
-            spend_total = float(df_sel[c["spend"]].sum()) if not df_sel.empty else 0.0
-            ga4_cpl = sdiv(spend_total, ga4_conv_total)
-            st.markdown(
-                textwrap.dedent(
-                    f"""
-                    <div class='ga4-conv-card'>
-                      <div class='ga4-conv-title'>Conversiones GA4</div>
-                      <div class='ga4-conv-event'>Evento: {html.escape(ga4_event_name)}</div>
-                      <div class='ga4-conv-grid'>
-                        <div class='ga4-conv-item'>
-                          <span class='ga4-conv-label'>Conversiones</span>
-                          <span class='ga4-conv-value'>{fmt_compact(ga4_conv_total)}</span>
-                        </div>
-                        <div class='ga4-conv-item'>
-                          <span class='ga4-conv-label'>Inversión</span>
-                          <span class='ga4-conv-value'>{fmt_money(spend_total)}</span>
-                        </div>
-                        <div class='ga4-conv-item'>
-                          <span class='ga4-conv-label'>Plataforma</span>
-                          <span class='ga4-conv-value'>{html.escape(platform)}</span>
-                        </div>
-                        <div class='ga4-conv-item'>
-                          <span class='ga4-conv-label'>CPL GA4</span>
-                          <span class='ga4-conv-value'>{fmt_money(ga4_cpl)}</span>
-                        </div>
-                      </div>
-                    </div>
-                    """
-                ).strip(),
-                unsafe_allow_html=True,
-            )
+        dashboard_overview_sections.render_funnel_and_ga4(
+            st_module=st,
+            section_set=section_set,
+            df_sel=df_sel,
+            metric_cols=c,
+            platform=platform,
+            ga4_event_df=ga4_event_df,
+            ga4_conversion_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            start_date=s,
+            end_date=e,
+            sdiv_fn=sdiv,
+            fmt_compact_fn=fmt_compact,
+            fmt_money_fn=fmt_money,
+            c_google=C_GOOGLE,
+            c_meta=C_META,
+            c_accent=C_ACCENT,
+            c_mute=C_MUTE,
+        )
 
     def _render_media_mix() -> None:
         rows: list[dict[str, float | str | None]] = []
