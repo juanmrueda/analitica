@@ -2246,6 +2246,48 @@ def _load_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) ->
 
 
 @st.cache_data(show_spinner=False)
+def _load_daily_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_daily_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_hourly_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_hourly_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_acq_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_acq_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_campaign_unified_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_campaign_unified_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_piece_enriched_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_paid_piece_enriched_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_paid_device_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_paid_device_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_paid_lead_demographics_parquet_df_cached(
+    path_str: str, modified_ns: int, size_bytes: int
+) -> pd.DataFrame:
+    return dashboard_data.normalize_paid_lead_demographics_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _load_paid_lead_geo_parquet_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return dashboard_data.normalize_paid_lead_geo_table(_load_parquet_df_cached(path_str, modified_ns, size_bytes))
+
+
+@st.cache_data(show_spinner=False)
 def _load_daily_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
     report = _load_report_cached(path_str, modified_ns, size_bytes)
     return dashboard_data.daily_df(report)
@@ -2268,7 +2310,7 @@ def _load_campaign_unified_df_cached(path_str: str, modified_ns: int, size_bytes
     report_path = Path(path_str)
     pq_sig = _parquet_cache_signature(report_path, PARQUET_CAMPAIGN_UNIFIED_DATASET)
     if pq_sig is not None:
-        return dashboard_data.normalize_campaign_unified_table(_load_parquet_df_cached(*pq_sig))
+        return _load_campaign_unified_parquet_df_cached(*pq_sig)
 
     meta_df = _load_acq_df_cached(path_str, modified_ns, size_bytes, "meta_campaign_daily")
     google_df = _load_acq_df_cached(path_str, modified_ns, size_bytes, "google_campaign_daily")
@@ -2281,7 +2323,7 @@ def _load_piece_enriched_df_cached(path_str: str, modified_ns: int, size_bytes: 
     report_path = Path(path_str)
     pq_sig = _parquet_cache_signature(report_path, PARQUET_PIECE_ENRICHED_DATASET)
     if pq_sig is not None:
-        return dashboard_data.normalize_paid_piece_enriched_table(_load_parquet_df_cached(*pq_sig))
+        return _load_piece_enriched_parquet_df_cached(*pq_sig)
 
     piece_df = _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_piece_daily")
     return dashboard_data.normalize_paid_piece_enriched_table(piece_df)
@@ -2295,7 +2337,7 @@ def load_report(path: Path) -> dict[str, Any]:
 def load_daily_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, PARQUET_DAILY_DATASET)
     if pq_sig is not None:
-        return dashboard_data.normalize_daily_table(_load_parquet_df_cached(*pq_sig))
+        return _load_daily_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
     return _load_daily_df_cached(path_str, modified_ns, size_bytes)
 
@@ -2303,7 +2345,7 @@ def load_daily_df_from_report_path(path: Path) -> pd.DataFrame:
 def load_hourly_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, PARQUET_HOURLY_DATASET)
     if pq_sig is not None:
-        return dashboard_data.normalize_hourly_table(_load_parquet_df_cached(*pq_sig))
+        return _load_hourly_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
     return _load_hourly_df_cached(path_str, modified_ns, size_bytes)
 
@@ -2311,7 +2353,7 @@ def load_hourly_df_from_report_path(path: Path) -> pd.DataFrame:
 def load_acq_df_from_report_path(path: Path, key: str) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, key)
     if pq_sig is not None:
-        return dashboard_data.normalize_acq_table(_load_parquet_df_cached(*pq_sig))
+        return _load_acq_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
     return _load_acq_df_cached(path_str, modified_ns, size_bytes, key)
 
@@ -2329,7 +2371,7 @@ def load_piece_enriched_df_from_report_path(path: Path) -> pd.DataFrame:
 def load_paid_device_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, "paid_device_daily")
     if pq_sig is not None:
-        return dashboard_data.normalize_paid_device_table(_load_parquet_df_cached(*pq_sig))
+        return _load_paid_device_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
     return dashboard_data.normalize_paid_device_table(
         _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_device_daily")
@@ -2339,7 +2381,7 @@ def load_paid_device_df_from_report_path(path: Path) -> pd.DataFrame:
 def load_paid_lead_demographics_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, "paid_lead_demographics_daily")
     if pq_sig is not None:
-        return dashboard_data.normalize_paid_lead_demographics_table(_load_parquet_df_cached(*pq_sig))
+        return _load_paid_lead_demographics_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
     return dashboard_data.normalize_paid_lead_demographics_table(
         _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_lead_demographics_daily")
@@ -2349,10 +2391,7 @@ def load_paid_lead_demographics_df_from_report_path(path: Path) -> pd.DataFrame:
 def load_paid_lead_geo_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, "paid_lead_geo_daily")
     if pq_sig is not None:
-        return dashboard_data.normalize_paid_lead_geo_table(
-            _load_parquet_df_cached(*pq_sig),
-            COUNTRY_CODE_TO_NAME,
-        )
+        return _load_paid_lead_geo_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
     return dashboard_data.normalize_paid_lead_geo_table(
         _load_acq_df_cached(path_str, modified_ns, size_bytes, "paid_lead_geo_daily"),

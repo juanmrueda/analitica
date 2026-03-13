@@ -92,6 +92,41 @@ def _hourly_compare_series_values(
     return out
 
 
+def _downsample_payload(payload: dict[str, Any], *, max_points: int = 120) -> dict[str, Any]:
+    x_values = payload.get("x_values")
+    if not isinstance(x_values, list):
+        return payload
+    total = len(x_values)
+    if total <= max(int(max_points), 2):
+        return payload
+    if bool(payload.get("is_single_day", False)):
+        return payload
+
+    step = float(total - 1) / float(max_points - 1)
+    raw_indices = [int(round(i * step)) for i in range(max_points)]
+    seen: set[int] = set()
+    indices: list[int] = []
+    for idx in raw_indices:
+        bounded = min(max(idx, 0), total - 1)
+        if bounded in seen:
+            continue
+        seen.add(bounded)
+        indices.append(bounded)
+    if not indices:
+        return payload
+
+    sampled = dict(payload)
+    sampled["x_values"] = [x_values[i] for i in indices]
+    for key in ("google_current", "meta_current", "ga4_current", "google_compare", "meta_compare", "ga4_compare"):
+        values = payload.get(key)
+        if isinstance(values, list) and values:
+            if len(values) == total:
+                sampled[key] = [values[i] for i in indices]
+            elif len(values) > len(indices):
+                sampled[key] = values[: len(indices)]
+    return sampled
+
+
 def build_overview_trend_payload_from_frames(
     ld: pd.DataFrame,
     ld_prev: pd.DataFrame,
@@ -255,7 +290,7 @@ def build_overview_trend_payload_from_frames(
                 use_hourly_real=use_hourly_real,
                 additive=additive,
             )
-    return payload
+    return _downsample_payload(payload, max_points=120)
 
 
 def build_overview_trend_payload_from_report(
