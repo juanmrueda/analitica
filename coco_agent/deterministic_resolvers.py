@@ -783,6 +783,12 @@ def _extract_first_n_days(question: str) -> int | None:
         q,
     )
     if day_match is None:
+        # Also support wording like "los 10 primeros dias".
+        day_match = re.search(
+            r"\b(?:los\s+)?(\d{1,2}|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieciseis|diecisiete|dieciocho|diecinueve|veinte|veintiuno|veintidos|veintitres|veinticuatro|veinticinco|veintiseis|veintisiete|veintiocho|veintinueve|treinta(?:\s+y\s+uno)?)\s+primeros?\s+dias?\b",
+            q,
+        )
+    if day_match is None:
         return None
     token = str(day_match.group(1)).strip().lower()
     if token.isdigit():
@@ -810,14 +816,18 @@ def _is_month_day_window_comparison_question(question: str) -> bool:
     if not q:
         return False
     compare_tokens = ("compara", "comparar", "comparativo", "vs", "versus", "contra")
-    if not any(token in q for token in compare_tokens):
-        return False
+    followup_tokens = ("lo mismo", "igual", "mismo periodo", "mismo rango")
     years = _extract_comparison_years(q)
     if len(years) < 2:
         return False
     day_count = _extract_first_n_days(q)
     month_idx = _extract_reference_month(q)
-    return bool(day_count is not None and month_idx is not None)
+    if day_count is None or month_idx is None:
+        return False
+    return bool(
+        any(token in q for token in compare_tokens)
+        or any(token in q for token in followup_tokens)
+    )
 
 def _is_year_period_comparison_question(question: str) -> bool:
     q = _normalize_question_text(question)
@@ -963,6 +973,418 @@ def _build_month_day_window_comparison_table(
         )
         lines.append(f"| {label} | {base_text} | {target_text} | {delta_text} |")
     return "\n".join(lines)
+
+def _extract_explicit_range_with_base_year(
+    question: str,
+) -> tuple[int, int, int, int, int] | None:
+    q = _normalize_question_text(question)
+    if not q:
+        return None
+    pattern = re.search(
+        r"\bdel?\s+(\d{1,2})\s+de\s+([a-z]+)\s+a(?:l)?\s+(\d{1,2})\s+de\s+([a-z]+)\s+de(?:l)?\s+(20\d{2})\b",
+        q,
+    )
+    if pattern is None:
+        pattern = re.search(
+            r"\b(\d{1,2})\s+de\s+([a-z]+)\s+a(?:l)?\s+(\d{1,2})\s+de\s+([a-z]+)\s+de(?:l)?\s+(20\d{2})\b",
+            q,
+        )
+    if pattern is None:
+        return None
+    start_day = int(pattern.group(1))
+    start_month_name = str(pattern.group(2)).strip().lower()
+    end_day = int(pattern.group(3))
+    end_month_name = str(pattern.group(4)).strip().lower()
+    base_year = int(pattern.group(5))
+    start_month = SPANISH_MONTHS.get(start_month_name)
+    end_month = SPANISH_MONTHS.get(end_month_name)
+    if not start_month or not end_month:
+        return None
+    if not (1 <= start_day <= 31 and 1 <= end_day <= 31):
+        return None
+    return int(start_day), int(start_month), int(end_day), int(end_month), int(base_year)
+
+def _is_explicit_range_year_comparison_question(question: str) -> bool:
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    compare_tokens = ("compara", "comparar", "comparativo", "vs", "versus", "contra")
+    if not any(token in q for token in compare_tokens):
+        return False
+    extracted = _extract_explicit_range_with_base_year(question)
+    if extracted is None:
+        return False
+    base_year = int(extracted[4])
+    years = _extract_comparison_years(question)
+    return any(int(y) != base_year for y in years)
+
+def _explicit_range_period_tag(
+    *,
+    start_day: int,
+    start_month: int,
+    end_day: int,
+    end_month: int,
+) -> str:
+    if int(start_month) == int(end_month):
+        return f"{_month_short_label(start_month)} {int(start_day)}-{int(end_day)}"
+    return (
+        f"{_month_short_label(start_month)} {int(start_day)}-"
+        f"{_month_short_label(end_month)} {int(end_day)}"
+    )
+
+def _build_explicit_range_year_comparison_table(
+    *,
+    base_year: int,
+    target_year: int,
+    start_day: int,
+    start_month: int,
+    end_day: int,
+    end_month: int,
+    base_metrics: dict[str, float | None],
+    target_metrics: dict[str, float | None],
+) -> str:
+    period_tag = _explicit_range_period_tag(
+        start_day=start_day,
+        start_month=start_month,
+        end_day=end_day,
+        end_month=end_month,
+    )
+    rows: list[tuple[str, str]] = [
+        ("spend", "Gasto"),
+        ("conv", "Conversiones"),
+        ("cpl", "CPL"),
+        ("ctr", "CTR"),
+        ("impr", "Impresiones"),
+        ("clicks", "Clics"),
+        ("cpc", "CPC"),
+        ("cpm", "CPM"),
+        ("cvr", "CVR"),
+        ("sessions", "Sesiones"),
+        ("users", "Usuarios"),
+        ("avg_sess", "Duración Prom."),
+        ("bounce", "Bounce"),
+    ]
+    lines = [
+        f"| Métrica | {base_year} ({period_tag}) | {target_year} ({period_tag}) | Variación (%) |",
+        "|---|---:|---:|---:|",
+    ]
+    for metric_key, label in rows:
+        fmt_key = str(KPI_CATALOG.get(metric_key, {}).get("fmt", "int")).strip()
+        base_text = _format_kpi_value(fmt_key, base_metrics.get(metric_key))
+        target_text = _format_kpi_value(fmt_key, target_metrics.get(metric_key))
+        delta_text = fmt_delta_compact(
+            pct_delta(target_metrics.get(metric_key), base_metrics.get(metric_key))
+        )
+        lines.append(f"| {label} | {base_text} | {target_text} | {delta_text} |")
+    return "\n".join(lines)
+
+def _try_resolve_explicit_range_year_comparison_question(
+    *,
+    question: str,
+    df_base: pd.DataFrame,
+    selected_platform: str,
+    include_actions: bool = True,
+) -> tuple[str, dict[str, str]]:
+    if not _is_explicit_range_year_comparison_question(question):
+        return "", {}
+    if df_base.empty or "date" not in df_base.columns:
+        return "", {}
+
+    extracted = _extract_explicit_range_with_base_year(question)
+    if extracted is None:
+        return "", {}
+    start_day, start_month, end_day, end_month, base_year = extracted
+
+    years = _extract_comparison_years(question)
+    target_year = next((int(y) for y in years if int(y) != int(base_year)), None)
+    if target_year is None:
+        return "", {}
+
+    base_start_day = min(int(start_day), int(calendar.monthrange(base_year, start_month)[1]))
+    base_end_day = min(int(end_day), int(calendar.monthrange(base_year, end_month)[1]))
+    target_start_day = min(int(start_day), int(calendar.monthrange(target_year, start_month)[1]))
+    target_end_day = min(int(end_day), int(calendar.monthrange(target_year, end_month)[1]))
+
+    base_start = _safe_make_date(base_year, start_month, base_start_day)
+    base_end = _safe_make_date(base_year, end_month, base_end_day)
+    target_start = _safe_make_date(target_year, start_month, target_start_day)
+    target_end = _safe_make_date(target_year, end_month, target_end_day)
+    if (
+        base_start is None
+        or base_end is None
+        or target_start is None
+        or target_end is None
+    ):
+        return "", {}
+    if base_start > base_end or target_start > target_end:
+        return "", {}
+
+    cp_base = df_base[(df_base["date"] >= base_start) & (df_base["date"] <= base_end)].copy()
+    cp_target = df_base[(df_base["date"] >= target_start) & (df_base["date"] <= target_end)].copy()
+    if cp_base.empty or cp_target.empty:
+        data_min = df_base["date"].min()
+        data_max = df_base["date"].max()
+        missing_periods: list[str] = []
+        if cp_base.empty:
+            missing_periods.append(
+                f"Sin datos para {base_year}: {base_start.isoformat()} a {base_end.isoformat()}."
+            )
+        if cp_target.empty:
+            missing_periods.append(
+                f"Sin datos para {target_year}: {target_start.isoformat()} a {target_end.isoformat()}."
+            )
+        if isinstance(data_min, date) and isinstance(data_max, date):
+            missing_periods.append(
+                f"Cobertura disponible del tenant: {data_min.isoformat()} a {data_max.isoformat()}."
+            )
+        answer = _format_coco_structured_answer(
+            headline="No hay cobertura completa para comparar los periodos solicitados.",
+            findings=missing_periods,
+            actions=(["Ajusta el rango o valida cobertura histórica."] if include_actions else []),
+        )
+        meta = {
+            "resolver": "deterministic_explicit_range_year_comparison",
+            "metric_key": "multi_kpi",
+            "range_start": base_start.isoformat(),
+            "range_end": target_end.isoformat(),
+            "applied_platform": selected_platform,
+            "comparison_years": f"{base_year},{target_year}",
+            "comparison_start_day": str(start_day),
+            "comparison_start_month": str(start_month),
+            "comparison_end_day": str(end_day),
+            "comparison_end_month": str(end_month),
+            "table_mode": "0",
+        }
+        return answer, meta
+
+    platforms_to_use = _comparison_platforms_to_use(question, selected_platform)
+    table_mode = _question_requests_table(question)
+    metric_fmt = {k: str(KPI_CATALOG.get(k, {}).get("fmt", "int")).strip() for k in KPI_CATALOG.keys()}
+    findings: list[str] = []
+    insight_lines: list[str] = []
+    table_sections: list[tuple[str, str]] = []
+
+    for platform_name in platforms_to_use:
+        base_metrics = summary(cp_base, platform_name)
+        target_metrics = summary(cp_target, platform_name)
+        prefix = f"{platform_name}: " if len(platforms_to_use) > 1 else ""
+        if table_mode:
+            table_sections.append(
+                (
+                    platform_name,
+                    _build_explicit_range_year_comparison_table(
+                        base_year=base_year,
+                        target_year=target_year,
+                        start_day=base_start_day,
+                        start_month=start_month,
+                        end_day=base_end_day,
+                        end_month=end_month,
+                        base_metrics=base_metrics,
+                        target_metrics=target_metrics,
+                    ),
+                )
+            )
+
+        findings.append(
+            f"{prefix}{base_year}: Gasto {_format_kpi_value(metric_fmt['spend'], base_metrics.get('spend'))}, "
+            f"Conversiones {_format_kpi_value(metric_fmt['conv'], base_metrics.get('conv'))}, "
+            f"Clics {_format_kpi_value(metric_fmt['clicks'], base_metrics.get('clicks'))}, "
+            f"Impresiones {_format_kpi_value(metric_fmt['impr'], base_metrics.get('impr'))}, "
+            f"CTR {_format_kpi_value(metric_fmt['ctr'], base_metrics.get('ctr'))}, "
+            f"CVR {_format_kpi_value(metric_fmt['cvr'], base_metrics.get('cvr'))}, "
+            f"CPC {_format_kpi_value(metric_fmt['cpc'], base_metrics.get('cpc'))}."
+        )
+        findings.append(
+            f"{prefix}{target_year}: Gasto {_format_kpi_value(metric_fmt['spend'], target_metrics.get('spend'))}, "
+            f"Conversiones {_format_kpi_value(metric_fmt['conv'], target_metrics.get('conv'))}, "
+            f"Clics {_format_kpi_value(metric_fmt['clicks'], target_metrics.get('clicks'))}, "
+            f"Impresiones {_format_kpi_value(metric_fmt['impr'], target_metrics.get('impr'))}, "
+            f"CTR {_format_kpi_value(metric_fmt['ctr'], target_metrics.get('ctr'))}, "
+            f"CVR {_format_kpi_value(metric_fmt['cvr'], target_metrics.get('cvr'))}, "
+            f"CPC {_format_kpi_value(metric_fmt['cpc'], target_metrics.get('cpc'))}."
+        )
+
+        d_spend = pct_delta(target_metrics.get("spend"), base_metrics.get("spend"))
+        d_conv = pct_delta(target_metrics.get("conv"), base_metrics.get("conv"))
+        d_clicks = pct_delta(target_metrics.get("clicks"), base_metrics.get("clicks"))
+        d_ctr = pct_delta(target_metrics.get("ctr"), base_metrics.get("ctr"))
+        d_cvr = pct_delta(target_metrics.get("cvr"), base_metrics.get("cvr"))
+        d_cpc = pct_delta(target_metrics.get("cpc"), base_metrics.get("cpc"))
+        d_cpl = pct_delta(target_metrics.get("cpl"), base_metrics.get("cpl"))
+
+        findings.append(
+            f"{prefix}Variación {target_year} vs {base_year}: "
+            f"Gasto {fmt_delta_compact(d_spend)}, "
+            f"Conversiones {fmt_delta_compact(d_conv)}, "
+            f"Clics {fmt_delta_compact(d_clicks)}, "
+            f"CTR {fmt_delta_compact(d_ctr)}, "
+            f"CVR {fmt_delta_compact(d_cvr)}, "
+            f"CPC {fmt_delta_compact(d_cpc)}."
+        )
+        if d_cpl is not None:
+            if d_cpl < 0:
+                insight_lines.append(
+                    f"{prefix}Eficiencia: el CPL mejoró {abs(d_cpl):.1f}% en {target_year}."
+                )
+            else:
+                insight_lines.append(
+                    f"{prefix}Eficiencia: el CPL empeoró {fmt_delta_compact(d_cpl)} en {target_year}."
+                )
+
+    start_name = MONTH_NAMES_ES.get(start_month, f"mes {start_month}")
+    end_name = MONTH_NAMES_ES.get(end_month, f"mes {end_month}")
+    period_label = f"del {base_start_day} de {start_name} al {base_end_day} de {end_name}"
+
+    if table_mode and table_sections:
+        headline = f"Comparativo {period_label} {target_year} vs {base_year}"
+        if len(platforms_to_use) == 1 and platforms_to_use[0] == "All":
+            headline += " (consolidado total)"
+        elif len(platforms_to_use) == 1:
+            headline += f" ({platforms_to_use[0]})"
+        lines = [headline + ".", ""]
+        for idx, (platform_name, table_md) in enumerate(table_sections):
+            if len(table_sections) > 1:
+                if idx > 0:
+                    lines.append("")
+                lines.append(f"**{platform_name}**")
+                lines.append("")
+            lines.append(table_md)
+        answer = "\n".join(lines).strip()
+        meta = {
+            "resolver": "deterministic_explicit_range_year_comparison",
+            "metric_key": "multi_kpi",
+            "range_start": base_start.isoformat(),
+            "range_end": target_end.isoformat(),
+            "applied_platform": ",".join(platforms_to_use),
+            "comparison_years": f"{base_year},{target_year}",
+            "comparison_start_day": str(start_day),
+            "comparison_start_month": str(start_month),
+            "comparison_end_day": str(end_day),
+            "comparison_end_month": str(end_month),
+            "table_mode": "1",
+        }
+        return answer, meta
+
+    findings.append(f"Rango comparado ({period_label}): {base_year} vs {target_year}.")
+    findings.append(f"Plataforma aplicada: {', '.join(platforms_to_use)}.")
+    if insight_lines:
+        findings.append("Insights clave:")
+        findings.extend(insight_lines[:3] if len(platforms_to_use) == 1 else insight_lines[:4])
+    answer = _format_coco_structured_answer(
+        headline=f"Comparativo {period_label} {target_year} vs {base_year} con datos reales del tenant.",
+        findings=findings,
+        actions=(
+            ["Si quieres, también te lo pongo en tabla o lo separo por plataforma."]
+            if include_actions
+            else []
+        ),
+    )
+    meta = {
+        "resolver": "deterministic_explicit_range_year_comparison",
+        "metric_key": "multi_kpi",
+        "range_start": base_start.isoformat(),
+        "range_end": target_end.isoformat(),
+        "applied_platform": ",".join(platforms_to_use),
+        "comparison_years": f"{base_year},{target_year}",
+        "comparison_start_day": str(start_day),
+        "comparison_start_month": str(start_month),
+        "comparison_end_day": str(end_day),
+        "comparison_end_month": str(end_month),
+        "table_mode": "0",
+    }
+    return answer, meta
+
+def _is_explicit_range_year_comparison_followup_question(question: str) -> bool:
+    if not _question_requests_table(question):
+        return False
+    q = _normalize_question_text(question)
+    if not q:
+        return False
+    follow_terms = (
+        "esos datos",
+        "esos resultados",
+        "esa comparacion",
+        "ese comparativo",
+        "pon",
+        "muestra",
+        "pasa",
+        "tabla",
+    )
+    return any(term in q for term in follow_terms)
+
+def _try_resolve_explicit_range_year_comparison_followup_question(
+    *,
+    question: str,
+    last_context: dict[str, Any] | None,
+    df_base: pd.DataFrame,
+    selected_platform: str,
+    include_actions: bool = True,
+) -> tuple[str, dict[str, str]]:
+    if not _is_explicit_range_year_comparison_followup_question(question):
+        return "", {}
+    ctx = last_context if isinstance(last_context, dict) else {}
+    resolver_name = str(ctx.get("resolver", "")).strip().lower()
+    if resolver_name not in {
+        "deterministic_explicit_range_year_comparison",
+        "deterministic_explicit_range_year_comparison_followup_table",
+    }:
+        return "", {}
+
+    ctx_years = [int(y) for y in re.findall(r"\b(20\d{2})\b", str(ctx.get("comparison_years", "")))]
+    if len(ctx_years) < 2:
+        return "", {}
+    base_year = int(ctx_years[0])
+    target_year = int(ctx_years[1])
+    try:
+        start_day = int(str(ctx.get("comparison_start_day", "0")).strip() or "0")
+        start_month = int(str(ctx.get("comparison_start_month", "0")).strip() or "0")
+        end_day = int(str(ctx.get("comparison_end_day", "0")).strip() or "0")
+        end_month = int(str(ctx.get("comparison_end_month", "0")).strip() or "0")
+    except Exception:
+        return "", {}
+    if (
+        start_day < 1
+        or start_day > 31
+        or end_day < 1
+        or end_day > 31
+        or start_month < 1
+        or start_month > 12
+        or end_month < 1
+        or end_month > 12
+    ):
+        return "", {}
+
+    context_platform = _context_platform_for_comparison(
+        ctx.get("applied_platform"),
+        selected_platform,
+    )
+    if _question_requests_consolidated_comparison(question):
+        effective_platform = "All"
+    else:
+        effective_platform = context_platform
+
+    start_month_name = MONTH_NAMES_ES.get(start_month, str(start_month))
+    end_month_name = MONTH_NAMES_ES.get(end_month, str(end_month))
+    synthetic_question = (
+        f"compara del {start_day} de {start_month_name} al {end_day} de {end_month_name} "
+        f"de {base_year} contra el mismo periodo de {target_year} en tabla"
+    )
+    if effective_platform == "All":
+        synthetic_question += " consolidado total no por plataforma"
+    elif effective_platform in {"Meta", "Google"}:
+        synthetic_question += f" de {effective_platform}"
+
+    answer, meta = _try_resolve_explicit_range_year_comparison_question(
+        question=synthetic_question,
+        df_base=df_base,
+        selected_platform=effective_platform,
+        include_actions=include_actions,
+    )
+    if not answer:
+        return "", {}
+    meta["resolver"] = "deterministic_explicit_range_year_comparison_followup_table"
+    meta["source"] = "contexto_previo"
+    return answer, meta
 
 def _try_resolve_year_period_comparison_question(
     *,

@@ -26,6 +26,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import tomllib
+import pandas as pd
 
 
 META_AD_ACCOUNT_ID = "act_1808641036591815"
@@ -43,6 +44,26 @@ GA4_OAUTH_PATH = ROOT_DIR / "ga4_user_oauth_analytics_ipalmera.json"
 TENANTS_CONFIG_PATH = ROOT_DIR / "config" / "tenants.json"
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_historical.json"
 DEFAULT_ORGANIC_OUTPUT_PATH = ROOT_DIR / "reports" / "yap" / "yap_organic_historical.json"
+DASHBOARD_PARQUET_DIRNAME = "dashboard"
+PARQUET_DAILY_DATASET = "daily"
+PARQUET_HOURLY_DATASET = "hourly"
+PARQUET_ACQ_DATASETS: Tuple[str, ...] = (
+    "ga4_channel_daily",
+    "ga4_top_pages_daily",
+    "ga4_event_daily",
+    "meta_campaign_daily",
+    "google_campaign_daily",
+    "paid_piece_daily",
+    "paid_device_daily",
+    "paid_lead_demographics_daily",
+    "paid_lead_geo_daily",
+)
+PARQUET_DERIVED_CAMPAIGN_DATASET = "campaign_unified_daily"
+PARQUET_DERIVED_PIECE_DATASET = "paid_piece_enriched_daily"
+PARQUET_DERIVED_DATASETS: Tuple[str, ...] = (
+    PARQUET_DERIVED_CAMPAIGN_DATASET,
+    PARQUET_DERIVED_PIECE_DATASET,
+)
 DEFAULT_ORGANIC_LOOKBACK_DAYS = 30
 DEFAULT_BOOTSTRAP_START = "2025-01-01"
 META_LEAD_ACTION_PRIORITY = (
@@ -2971,6 +2992,302 @@ def _summarize(daily_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _dashboard_parquet_dir(output_path: Path) -> Path:
+    return output_path.parent / DASHBOARD_PARQUET_DIRNAME
+
+
+def _flatten_daily_for_dashboard(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in daily_rows:
+        meta = row.get("meta", {}) if isinstance(row.get("meta"), dict) else {}
+        google = row.get("google_ads", {}) if isinstance(row.get("google_ads"), dict) else {}
+        ga4 = row.get("ga4", {}) if isinstance(row.get("ga4"), dict) else {}
+        norm = row.get("normalization", {}) if isinstance(row.get("normalization"), dict) else {}
+
+        meta_spend = _safe_float(meta.get("spend"))
+        google_spend = _safe_float(google.get("cost"))
+        meta_clicks = _safe_float(meta.get("clicks"))
+        google_clicks = _safe_float(google.get("clicks"))
+        meta_conversions = _safe_float(meta.get("conversions"))
+        google_conversions = _safe_float(google.get("conversions"))
+        meta_impressions = _safe_float(meta.get("impressions"))
+        google_impressions = _safe_float(google.get("impressions"))
+
+        out.append(
+            {
+                "date": str(row.get("date", "")),
+                "meta_spend": meta_spend,
+                "google_spend": google_spend,
+                "total_spend": _safe_float(norm.get("total_spend")) or (meta_spend + google_spend),
+                "meta_clicks": meta_clicks,
+                "google_clicks": google_clicks,
+                "total_clicks": _safe_float(norm.get("total_clicks")) or (meta_clicks + google_clicks),
+                "meta_conv": meta_conversions,
+                "google_conv": google_conversions,
+                "total_conv": _safe_float(norm.get("total_conversions")) or (meta_conversions + google_conversions),
+                "meta_impr": meta_impressions,
+                "google_impr": google_impressions,
+                "total_impr": _safe_float(norm.get("total_impressions")) or (meta_impressions + google_impressions),
+                "ga4_sessions": _safe_float(ga4.get("sessions")),
+                "ga4_users": _safe_float(ga4.get("totalUsers")),
+                "ga4_avg_sess": _safe_float(ga4.get("averageSessionDuration")),
+                "ga4_bounce": _safe_float(ga4.get("bounceRate")),
+            }
+        )
+    return out
+
+
+def _flatten_hourly_for_dashboard(hourly_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in hourly_rows:
+        meta = row.get("meta", {}) if isinstance(row.get("meta"), dict) else {}
+        google = row.get("google_ads", {}) if isinstance(row.get("google_ads"), dict) else {}
+        norm = row.get("normalization", {}) if isinstance(row.get("normalization"), dict) else {}
+
+        dt_raw = str(row.get("datetime", "")).strip()
+        if not dt_raw:
+            date_raw = str(row.get("date", "")).strip()
+            hour_value = _safe_int(row.get("hour"))
+            if date_raw:
+                dt_raw = f"{date_raw} {hour_value:02d}:00:00"
+
+        meta_spend = _safe_float(meta.get("spend"))
+        google_spend = _safe_float(google.get("cost"))
+        meta_clicks = _safe_float(meta.get("clicks"))
+        google_clicks = _safe_float(google.get("clicks"))
+        meta_conversions = _safe_float(meta.get("conversions"))
+        google_conversions = _safe_float(google.get("conversions"))
+        meta_impressions = _safe_float(meta.get("impressions"))
+        google_impressions = _safe_float(google.get("impressions"))
+
+        out.append(
+            {
+                "timestamp": dt_raw,
+                "date": str(row.get("date", "")),
+                "hour": _safe_int(row.get("hour")),
+                "meta_spend": meta_spend,
+                "google_spend": google_spend,
+                "total_spend": _safe_float(norm.get("total_spend")) or (meta_spend + google_spend),
+                "meta_clicks": meta_clicks,
+                "google_clicks": google_clicks,
+                "total_clicks": _safe_float(norm.get("total_clicks")) or (meta_clicks + google_clicks),
+                "meta_conv": meta_conversions,
+                "google_conv": google_conversions,
+                "total_conv": _safe_float(norm.get("total_conversions")) or (meta_conversions + google_conversions),
+                "meta_impr": meta_impressions,
+                "google_impr": google_impressions,
+                "total_impr": _safe_float(norm.get("total_impressions")) or (meta_impressions + google_impressions),
+                "ga4_sessions": 0.0,
+                "ga4_users": 0.0,
+                "ga4_avg_sess": 0.0,
+                "ga4_bounce": 0.0,
+            }
+        )
+    return out
+
+
+def _clean_text_token(raw: Any) -> str:
+    txt = str(raw or "").strip()
+    if txt.lower() in {"", "nan", "none", "null", "nat"}:
+        return ""
+    return txt
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    num = _safe_float(numerator)
+    den = _safe_float(denominator)
+    return num / den if den > 0 else 0.0
+
+
+def _build_campaign_unified_daily_rows(
+    meta_rows: List[Dict[str, Any]],
+    google_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+
+    for row in meta_rows:
+        spend = _safe_float(row.get("spend"))
+        impressions = _safe_float(row.get("impressions"))
+        clicks = _safe_float(row.get("clicks"))
+        conversions = _safe_float(row.get("conversions"))
+        reach = _safe_float(row.get("reach"))
+        frequency = _safe_float(row.get("frequency"))
+        out.append(
+            {
+                "date": str(row.get("date", "")),
+                "platform": "Meta",
+                "source": "meta_campaign_daily",
+                "campaign_id": _clean_text_token(row.get("campaign_id")),
+                "campaign_name": _clean_text_token(row.get("campaign_name")),
+                "campaign_goal": _clean_text_token(row.get("campaign_goal")),
+                "objective": _clean_text_token(row.get("objective")),
+                "advertising_channel_type": "",
+                "advertising_channel_sub_type": "",
+                "bidding_strategy_type": "",
+                "spend": spend,
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": conversions,
+                "reach": reach,
+                "frequency": frequency if frequency > 0 else (_safe_ratio(impressions, reach) if reach > 0 else 0.0),
+                "ctr": _safe_ratio(clicks, impressions),
+                "cpc": _safe_ratio(spend, clicks),
+                "cpl": _calc_cpl(spend, conversions),
+            }
+        )
+
+    for row in google_rows:
+        spend = _safe_float(row.get("spend")) or _safe_float(row.get("cost"))
+        impressions = _safe_float(row.get("impressions"))
+        clicks = _safe_float(row.get("clicks"))
+        conversions = _safe_float(row.get("conversions"))
+        ctr = _safe_float(row.get("ctr"))
+        if ctr <= 0:
+            ctr = _safe_ratio(clicks, impressions)
+        cpc = _safe_float(row.get("average_cpc")) or _safe_float(row.get("cpc"))
+        if cpc <= 0:
+            cpc = _safe_ratio(spend, clicks)
+        out.append(
+            {
+                "date": str(row.get("date", "")),
+                "platform": "Google",
+                "source": "google_campaign_daily",
+                "campaign_id": _clean_text_token(row.get("campaign_id")),
+                "campaign_name": _clean_text_token(row.get("campaign_name")),
+                "campaign_goal": _clean_text_token(row.get("campaign_goal")),
+                "objective": "",
+                "advertising_channel_type": _clean_text_token(row.get("advertising_channel_type")),
+                "advertising_channel_sub_type": _clean_text_token(row.get("advertising_channel_sub_type")),
+                "bidding_strategy_type": _clean_text_token(row.get("bidding_strategy_type")),
+                "spend": spend,
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": conversions,
+                "reach": 0.0,
+                "frequency": 0.0,
+                "ctr": ctr,
+                "cpc": cpc,
+                "cpl": _calc_cpl(spend, conversions),
+            }
+        )
+
+    out.sort(
+        key=lambda r: (
+            str(r.get("date", "")),
+            str(r.get("platform", "")),
+            str(r.get("campaign_id", "")),
+        )
+    )
+    return out
+
+
+def _build_paid_piece_enriched_daily_rows(piece_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in piece_rows:
+        day = str(row.get("date", "")).strip()
+        platform = _clean_text_token(row.get("platform")) or "Meta"
+        campaign_id = _clean_text_token(row.get("campaign_id"))
+        campaign_name = _clean_text_token(row.get("campaign_name"))
+        ad_id = _clean_text_token(row.get("ad_id"))
+        ad_name = _clean_text_token(row.get("ad_name"))
+        piece_id = _clean_text_token(row.get("piece_id")) or ad_id or f"piece::{campaign_id or 'na'}::{day or 'na'}"
+        piece_name = _clean_text_token(row.get("piece_name")) or ad_name or campaign_name or "Sin nombre"
+        preview_image = (
+            _clean_text_token(row.get("preview_url"))
+            or _clean_text_token(row.get("image_url"))
+            or _clean_text_token(row.get("thumbnail_url"))
+        )
+        spend = _safe_float(row.get("spend"))
+        impressions = _safe_float(row.get("impressions"))
+        clicks = _safe_float(row.get("clicks"))
+        conversions = _safe_float(row.get("conversions"))
+        out.append(
+            {
+                "date": day,
+                "platform": platform,
+                "campaign_id": campaign_id,
+                "campaign_name": campaign_name,
+                "ad_id": ad_id,
+                "ad_name": ad_name,
+                "piece_id": piece_id,
+                "piece_name": piece_name,
+                "image_url": _clean_text_token(row.get("image_url")),
+                "thumbnail_url": _clean_text_token(row.get("thumbnail_url")),
+                "preview_url": _clean_text_token(row.get("preview_url")),
+                "preview_image": preview_image,
+                "spend": spend,
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": conversions,
+                "ctr": _safe_ratio(clicks, impressions),
+                "cpc": _safe_ratio(spend, clicks),
+                "cpl": _calc_cpl(spend, conversions),
+            }
+        )
+    out.sort(
+        key=lambda r: (
+            str(r.get("date", "")),
+            str(r.get("platform", "")),
+            str(r.get("campaign_id", "")),
+            str(r.get("piece_id", "")),
+        )
+    )
+    return out
+
+
+def _write_dashboard_parquet_rows(path: Path, rows: List[Dict[str, Any]]) -> None:
+    if not rows:
+        if path.exists():
+            path.unlink()
+        return
+    df = pd.DataFrame(rows)
+    if df.empty:
+        if path.exists():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False, engine="pyarrow")
+
+
+def _export_dashboard_parquet_bundle(
+    *,
+    output_path: Path,
+    daily_rows: List[Dict[str, Any]],
+    hourly_rows: List[Dict[str, Any]],
+    traffic_acquisition: Dict[str, List[Dict[str, Any]]],
+    derived_datasets: Dict[str, List[Dict[str, Any]]] | None = None,
+) -> None:
+    bundle_dir = _dashboard_parquet_dir(output_path)
+    try:
+        _write_dashboard_parquet_rows(
+            bundle_dir / f"{PARQUET_DAILY_DATASET}.parquet",
+            _flatten_daily_for_dashboard(daily_rows),
+        )
+        _write_dashboard_parquet_rows(
+            bundle_dir / f"{PARQUET_HOURLY_DATASET}.parquet",
+            _flatten_hourly_for_dashboard(hourly_rows),
+        )
+        for dataset_key in PARQUET_ACQ_DATASETS:
+            rows = traffic_acquisition.get(dataset_key, [])
+            if not isinstance(rows, list):
+                rows = []
+            _write_dashboard_parquet_rows(
+                bundle_dir / f"{dataset_key}.parquet",
+                rows,
+            )
+        derived_map = dict(derived_datasets or {})
+        for dataset_key in PARQUET_DERIVED_DATASETS:
+            rows = derived_map.get(dataset_key, [])
+            if not isinstance(rows, list):
+                rows = []
+            _write_dashboard_parquet_rows(
+                bundle_dir / f"{dataset_key}.parquet",
+                rows,
+            )
+    except Exception as exc:
+        print(f"Warning: dashboard parquet export skipped: {_redact_sensitive_text(exc)}")
+
+
 def _load_existing(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -3527,9 +3844,25 @@ def main() -> int:
         },
         "summary_all_time": _summarize(all_daily),
     }
+    dashboard_derived_datasets = {
+        PARQUET_DERIVED_CAMPAIGN_DATASET: _build_campaign_unified_daily_rows(
+            all_meta_campaign_daily,
+            all_google_campaign_daily,
+        ),
+        PARQUET_DERIVED_PIECE_DATASET: _build_paid_piece_enriched_daily_rows(
+            all_paid_piece_daily
+        ),
+    }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    _export_dashboard_parquet_bundle(
+        output_path=output_path,
+        daily_rows=all_daily,
+        hourly_rows=all_hourly,
+        traffic_acquisition=report.get("traffic_acquisition", {}),
+        derived_datasets=dashboard_derived_datasets,
+    )
     print(
         f"Report updated: {output_path} | tenant={tenant_id} | run_kind={run_kind} | "
         f"range={start_day.isoformat()}..{end_day.isoformat()}"

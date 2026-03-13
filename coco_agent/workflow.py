@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from . import deterministic_resolvers as coco_det
+from .intent_workflow import run_intent_resolver_chain
 
 
 def run_deterministic_resolver_chain(
@@ -21,7 +22,32 @@ def run_deterministic_resolver_chain(
     include_actions: bool,
     include_platform_breakdown: bool,
     last_context: dict[str, Any] | None,
+    # Feature flag: activa el flujo basado en intent classifier
+    use_intent_classifier: bool = False,
+    api_key: str = "",
+    model: str = "",
 ) -> tuple[str, str, dict[str, Any], str]:
+    # Flujo nuevo: intent classifier + compute resolvers
+    if use_intent_classifier and str(api_key or "").strip() and str(model or "").strip():
+        intent_answer, intent_model_used, intent_meta, intent_note = run_intent_resolver_chain(
+            api_key=api_key,
+            model=model,
+            question=question,
+            tenant_id=tenant_id,
+            camp_df=camp_df,
+            piece_df=piece_df,
+            df_base=df_base,
+            query_platform=query_platform,
+            default_start=default_start,
+            default_end=default_end,
+            include_actions=include_actions,
+            include_platform_breakdown=include_platform_breakdown,
+            last_context=last_context,
+        )
+        if intent_answer:
+            return intent_answer, intent_model_used, intent_meta, intent_note
+
+    # Flujo original: cadena de resolvers con regex (fallback)
     context_payload = last_context if isinstance(last_context, dict) else {}
     deterministic_answer, deterministic_meta = coco_det._try_resolve_top_piece_question(
         question=question,
@@ -70,6 +96,21 @@ def run_deterministic_resolver_chain(
         )
         return comparison_answer, "deterministic-year-period-comparison", comparison_meta, note
 
+    explicit_range_answer, explicit_range_meta = coco_det._try_resolve_explicit_range_year_comparison_question(
+        question=question,
+        df_base=df_base,
+        selected_platform=query_platform,
+        include_actions=include_actions,
+    )
+    if explicit_range_answer:
+        note = (
+            f"Contexto aplicado: tenant `{tenant_id}`, rango "
+            f"`{explicit_range_meta.get('range_start')}` a `{explicit_range_meta.get('range_end')}`, "
+            f"plataforma `{explicit_range_meta.get('applied_platform', query_platform)}`, "
+            f"resolver `{explicit_range_meta.get('resolver', 'deterministic')}`."
+        )
+        return explicit_range_answer, "deterministic-explicit-range-year-comparison", explicit_range_meta, note
+
     day_window_answer, day_window_meta = coco_det._try_resolve_month_day_window_comparison_question(
         question=question,
         df_base=df_base,
@@ -106,6 +147,30 @@ def run_deterministic_resolver_chain(
             comparison_followup_answer,
             "deterministic-year-period-comparison-followup-table",
             comparison_followup_meta,
+            note,
+        )
+
+    explicit_range_followup_answer, explicit_range_followup_meta = (
+        coco_det._try_resolve_explicit_range_year_comparison_followup_question(
+            question=question,
+            last_context=context_payload,
+            df_base=df_base,
+            selected_platform=query_platform,
+            include_actions=include_actions,
+        )
+    )
+    if explicit_range_followup_answer:
+        note = (
+            f"Contexto aplicado: tenant `{tenant_id}`, rango "
+            f"`{explicit_range_followup_meta.get('range_start')}` a `{explicit_range_followup_meta.get('range_end')}`, "
+            f"plataforma `{explicit_range_followup_meta.get('applied_platform', query_platform)}`, "
+            f"resolver `{explicit_range_followup_meta.get('resolver', 'deterministic')}`, "
+            f"fuente `{explicit_range_followup_meta.get('source', 'contexto_previo')}`."
+        )
+        return (
+            explicit_range_followup_answer,
+            "deterministic-explicit-range-year-comparison-followup-table",
+            explicit_range_followup_meta,
             note,
         )
 

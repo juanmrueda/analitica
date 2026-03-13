@@ -1,0 +1,185 @@
+{
+  "daily": [
+    {
+      "date": "2026-02-01",
+      "meta": {
+        "spend": 10,
+        "clicks": 4,
+        "conversions": 1,
+        "impressions": 100
+      },
+      "google_ads": {
+        "cost": 22,
+        "clicks": 8,
+        "conversions": 2,
+        "impressions": 200
+      },
+      "ga4": {
+        "sessions": 30,
+        "totalUsers": 20,
+        "averageSessionDuration": 65,
+        "bounceRate": 0.42
+      },
+      "normalization": {}
+    },
+    {
+      "date": "2026-02-02",
+      "meta": {
+        "spend": 12,
+        "clicks": 5,
+        "conversions": 2,
+        "impressions": 120
+      },
+      "google_ads": {
+        "cost": 24,
+        "clicks": 10,
+        "conversions": 3,
+        "impressions": 240
+      },
+      "ga4": {
+        "sessions": 35,
+        "totalUsers": 25,
+        "averageSessionDuration": 68,
+        "bounceRate": 0.4
+      },
+      "normalization": {}
+    }
+  ],
+  "hourly": [
+    {
+      "datetime": "2026-02-01 09:00:00",
+      "date": "2026-02-01",
+      "hour": 9,
+      "meta": {
+        "spend": 3,
+        "clicks": 1,
+        "conversions": 0,
+        "impressions": 30
+      },
+      "google_ads": {
+        "cost": 5,
+        "clicks": 2,
+        "conversions": 1,
+        "impressions": 45
+      },
+      "normalization": {}
+    },
+    {
+      "datetime": "2026-02-01 10:00:00",
+      "date": "2026-02-01",
+      "hour": 10,
+      "meta": {
+        "spend": 2,
+        "clicks": 1,
+        "conversions": 1,
+        "impressions": 20
+      },
+      "google_ads": {
+        "cost": 4,
+        "clicks": 2,
+        "conversions": 0,
+        "impressions": 40
+      },
+      "normalization": {}
+    }
+  ],
+  "traffic_acquisition": {
+    "meta_campaign_daily": [
+      {
+        "date": "2026-02-01",
+        "platform": "Meta",
+        "campaign_id": "meta_1",
+        "campaign_name": "Meta Campaign",
+        "spend": 10,
+        "impressions": 100,
+        "clicks": 4,
+        "conversions": 1
+      }
+    ],
+    "google_campaign_daily": [
+      {
+        "date": "2026-02-01",
+        "platform": "Google",
+        "campaign_id": "google_1",
+        "campaign_name": "Google Campaign",
+        "cost": 22,
+        "impressions": 200,
+        "clicks": 8,
+        "conversions": 2
+      }
+    ],
+    "paid_piece_daily": [
+      {
+        "date": "2026-02-01",
+        "platform": "Meta",
+        "campaign_id": "meta_1",
+        "campaign_name": "Meta Campaign",
+        "ad_id": "ad_1",
+        "ad_name": "Creative 1",
+        "piece_id": "",
+        "piece_name": "",
+        "preview_url": "https://example.com/creative-1.png",
+        "spend": 10,
+        "impressions": 100,
+        "clicks": 4,
+        "conversions": 1
+      }
+    ],
+    "paid_device_daily": [
+      {
+        "date": "2026-02-01",
+        "platform": "Meta",
+        "device": "mobile",
+        "spend": 10,
+        "impressions": 100,
+        "clicks": 4,
+        "conversions": 1
+      }
+    ],
+    "paid_lead_demographics_daily": [
+      {
+        "date": "2026-02-01",
+        "platform": "Meta",
+        "breakdown": "age_gender",
+        "age_range": "25_34",
+        "gender": "female",
+        "leads": 1,
+        "spend": 10,
+        "impressions": 100,
+        "clicks": 4
+      }
+    ],
+    "paid_lead_geo_daily": [
+      {
+        "date": "2026-02-01",
+        "platform": "Meta",
+        "country_code": "HN",
+        "country_name": "Honduras",
+        "region": "Francisco Morazan",
+        "leads": 1,
+        "spend": 10,
+        "impressions": 100,
+        "clicks": 4
+      }
+    ],
+    "ga4_channel_daily": [
+      {
+        "date": "2026-02-01",
+        "sessionDefaultChannelGroup": "Paid Social",
+        "sessions": 30,
+        "conversions": 3
+      }
+    ],
+    "ga4_top_pages_daily": [
+      {
+        "date": "2026-02-01",
+        "pagePath": "/",
+        "pageTitle": "Home",
+        "screenPageViews": 80,
+        "sessions": 30,
+        "averageSessionDuration": 62
+      }
+    ],
+    "ga4_event_daily": []
+  }
+}

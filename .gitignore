@@ -20,3 +20,10 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime/local state
+config/coco_chat_memory.jsonl
+config/coco_chat_state.json

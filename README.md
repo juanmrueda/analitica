@@ -43,6 +43,8 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 ## Estructura principal
 
 - `dashboard.py` -> UI principal.
+- `dashboard_data.py` -> capa de datos (IO de reportes/parquet + normalizacion de tablas para dashboard).
+- `assets/dashboard.css` -> estilos principales del dashboard (antes embebidos en `apply_theme()`).
 - `coco_agent/` -> modulo de agente COCO IA (engine, workflow, resolvers, context builder, tools).
 - `scripts/run_all_tenants.py` -> ejecuta el pipeline para todos los tenants configurados.
 - `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion por tenant.
@@ -83,6 +85,20 @@ python -m venv .venv
 .\.venv\Scripts\streamlit run dashboard.py
 ```
 
+Opcional (Windows): auto-arrancar Streamlit cuando abras Antigravity:
+
+```powershell
+.\scripts\auto-start-streamlit-on-antigravity.ps1
+```
+
+Por defecto vigila el proceso `antigravity` y, al detectarlo, ejecuta:
+`python -m streamlit run dashboard.py`.
+
+Flags utiles:
+- `-RunOnce`: sale despues del primer arranque.
+- `-RelaunchOnAntigravityRestart`: vuelve a disparar Streamlit si cierras y reabres Antigravity.
+- `-AntigravityProcess <nombre>`: cambia el nombre del proceso a vigilar.
+
 5. Login local:
 
 ```powershell
@@ -96,6 +112,56 @@ Usuarios base del template:
 - `yap` (rol `viewer`, tenant `yap`)
 
 Definir o resetear passwords desde `config/users.json` o desde el panel de Administracion.
+
+## Testing y Benchmark (Fase 2.1)
+
+1. Instalar dependencias de desarrollo:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+```
+
+2. Ejecutar tests automatizados:
+
+```powershell
+python -m pytest
+```
+
+3. Ejecutar benchmark reproducible (Parquet vs JSON fallback):
+
+```powershell
+python scripts\benchmark_dashboard_loaders.py --report-path reports\yap\yap_historical.json --iterations 5 --mode compare
+```
+
+Opciones utiles del benchmark:
+- `--mode parquet` para medir solo ruta Parquet.
+- `--mode json-fallback` para forzar carga desde JSON.
+- `--output json` para exportar resultados en formato JSON.
+
+4. Ejecutar gate de regresion de performance (P3.2):
+
+```powershell
+python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_historical.json --iterations 2
+```
+
+Opcional (agrega chequeo E2E usando JSON de `profile_dashboard_e2e.py`):
+
+```powershell
+python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_historical.json --iterations 2 --profile-json artifacts\perf\p3_1_e2e_profile_20260313.json
+```
+
+## CI minima (Fase 2.3)
+
+- Workflow: `.github/workflows/ci.yml`
+- Ejecuta en `push` a `main` y en `pull_request`.
+- Pasos:
+  - Instalacion de dependencias runtime + dev.
+  - `pytest` completo.
+  - benchmark smoke con fixture versionado:
+    `python scripts/benchmark_dashboard_loaders.py --report-path tests/fixtures/benchmark_historical.json --iterations 1 --mode compare`
+  - gate de performance:
+    `python scripts/perf_regression_gate.py --report-path tests/fixtures/benchmark_historical.json --iterations 2`
 
 ## Panel de Administracion (dashboard)
 
