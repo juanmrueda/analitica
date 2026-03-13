@@ -6139,605 +6139,65 @@ def render_exec(
         )
 
     def _render_media_mix() -> None:
-        rows: list[dict[str, float | str | None]] = []
-        if platform in ("All", "Meta"):
-            meta_spend = float(df_sel["meta_spend"].sum()) if not df_sel.empty else 0.0
-            meta_clicks = float(df_sel["meta_clicks"].sum()) if not df_sel.empty else 0.0
-            meta_impr = float(df_sel["meta_impr"].sum()) if not df_sel.empty else 0.0
-            meta_conv = float(df_sel["meta_conv"].sum()) if not df_sel.empty else 0.0
-            if meta_spend > 0 or meta_clicks > 0 or meta_impr > 0:
-                rows.append(
-                    {
-                        "platform": "Meta",
-                        "spend": meta_spend,
-                        "clicks": meta_clicks,
-                        "impressions": meta_impr,
-                        "conversions": meta_conv,
-                        "cpc": sdiv(meta_spend, meta_clicks),
-                        "cpm": (meta_spend * 1000.0 / meta_impr) if meta_impr > 0 else None,
-                        "cvr": sdiv(meta_conv, meta_clicks),
-                    }
-                )
-        if platform in ("All", "Google"):
-            google_spend = float(df_sel["google_spend"].sum()) if not df_sel.empty else 0.0
-            google_clicks = float(df_sel["google_clicks"].sum()) if not df_sel.empty else 0.0
-            google_impr = float(df_sel["google_impr"].sum()) if not df_sel.empty else 0.0
-            google_conv = float(df_sel["google_conv"].sum()) if not df_sel.empty else 0.0
-            if google_spend > 0 or google_clicks > 0 or google_impr > 0:
-                rows.append(
-                    {
-                        "platform": "Google",
-                        "spend": google_spend,
-                        "clicks": google_clicks,
-                        "impressions": google_impr,
-                        "conversions": google_conv,
-                        "cpc": sdiv(google_spend, google_clicks),
-                        "cpm": (google_spend * 1000.0 / google_impr) if google_impr > 0 else None,
-                        "cvr": sdiv(google_conv, google_clicks),
-                    }
-                )
-        mix = pd.DataFrame(rows)
-        if mix.empty:
-            st.info("No hay datos suficientes para Mix y Eficiencia Paid.")
-            return
-        mix["spend"] = pd.to_numeric(mix["spend"], errors="coerce").fillna(0.0)
-        total_spend = float(mix["spend"].sum())
-        if total_spend > 0:
-            mix["spend_share"] = mix["spend"] / total_spend
-        else:
-            mix["spend_share"] = 0.0
-
-        st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
-            unsafe_allow_html=True,
-        )
-        combo = go.Figure()
-        combo.add_trace(
-            go.Bar(
-                x=mix["platform"],
-                y=mix["cpc"],
-                name="CPC",
-                marker={"color": C_ACCENT},
-                hovertemplate="%{x}<br>CPC: $%{y:,.2f}<extra></extra>",
-            )
-        )
-        combo.add_trace(
-            go.Bar(
-                x=mix["platform"],
-                y=mix["cpm"],
-                name="CPM",
-                marker={"color": C_MUTE},
-                hovertemplate="%{x}<br>CPM: $%{y:,.2f}<extra></extra>",
-            )
-        )
-        combo.add_trace(
-            go.Scatter(
-                x=mix["platform"],
-                y=(mix["cvr"] * 100.0),
-                name="CVR",
-                mode="lines+markers",
-                marker={"color": C_META, "size": 9},
-                line={"color": C_META, "width": 3},
-                yaxis="y2",
-                hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
-            )
-        )
-        combo.update_layout(
-            barmode="group",
-            title={"text": "Eficiencia por Plataforma", "font": {"size": 14, "color": C_TEXT}},
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            margin={"l": 10, "r": 10, "t": 42, "b": 10},
-            height=300,
-            legend={"orientation": "h", "x": 0.0, "y": 1.12},
-            xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
-            yaxis={"title": "Costo ($)", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
-            yaxis2={
-                "title": "CVR (%)",
-                "overlaying": "y",
-                "side": "right",
-                "showgrid": False,
-                "tickfont": {"size": 11, "color": C_MUTE},
-            },
-        )
-        st.plotly_chart(combo, width="stretch")
-        if total_spend > 0:
-            share_parts = [f"{platform_name}: {fmt_pct(float(share))}" for platform_name, share in zip(mix["platform"], mix["spend_share"])]
-            if share_parts:
-                st.caption("Share spend | " + " | ".join(share_parts))
-
-        mix_view = mix.rename(
-            columns={
-                "platform": "Plataforma",
-                "spend": "Inversión",
-                "spend_share": "Share Spend",
-                "cpc": "CPC",
-                "cpm": "CPM",
-                "cvr": "CVR",
-                "clicks": "Clics",
-                "impressions": "Impresiones",
-                "conversions": "Conversiones",
-            }
-        )[["Plataforma", "Inversión", "Share Spend", "CPC", "CPM", "CVR", "Clics", "Impresiones", "Conversiones"]]
-        mix_display = mix_view.copy()
-        mix_display["Inversión"] = mix_display["Inversión"].apply(lambda v: fmt_money(float(v)))
-        mix_display["Share Spend"] = mix_display["Share Spend"].apply(lambda v: fmt_pct(float(v)))
-        mix_display["CPC"] = mix_display["CPC"].apply(lambda v: fmt_money(v if pd.notna(v) else None))
-        mix_display["CPM"] = mix_display["CPM"].apply(lambda v: fmt_money(v if pd.notna(v) else None))
-        mix_display["CVR"] = mix_display["CVR"].apply(lambda v: fmt_pct(v if pd.notna(v) else None))
-        mix_display["Clics"] = mix_display["Clics"].apply(lambda v: f"{float(v):,.0f}")
-        mix_display["Impresiones"] = mix_display["Impresiones"].apply(lambda v: f"{float(v):,.0f}")
-        mix_display["Conversiones"] = mix_display["Conversiones"].apply(lambda v: f"{float(v):,.2f}")
-        st.dataframe(
-            mix_display,
-            width="stretch",
-            hide_index=True,
+        dashboard_overview_sections.render_media_mix(
+            st_module=st,
+            platform=platform,
+            df_sel=df_sel,
+            sdiv_fn=sdiv,
+            fmt_pct_fn=fmt_pct,
+            fmt_money_fn=fmt_money,
+            c_accent=C_ACCENT,
+            c_mute=C_MUTE,
+            c_meta=C_META,
+            c_text=C_TEXT,
+            c_grid=C_GRID,
         )
 
     def _render_lead_demographics() -> None:
-        st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Distribución de Leads Paid por Edad y Género</div>",
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "Métrica de análisis (breakdown de plataformas). No es comparable 1:1 con el KPI global de Conversiones."
-        )
-        if lead_demo_df.empty:
-            st.info("No hay datos de leads por edad y género para el tenant.")
-            return
-
-        dcur = lead_demo_df[(lead_demo_df["date"] >= s) & (lead_demo_df["date"] <= e)].copy()
-        dprev = lead_demo_df[(lead_demo_df["date"] >= prev_s) & (lead_demo_df["date"] <= prev_e)].copy()
-        if platform in ("Google", "Meta"):
-            dcur = dcur[dcur["platform"] == platform]
-            dprev = dprev[dprev["platform"] == platform]
-        if dcur.empty:
-            st.info("Sin datos demográficos de leads para el rango/plataforma seleccionados.")
-            return
-
-        age_cur = dcur[dcur["breakdown"].isin(["age", "age_gender"])].copy()
-        age_prev = dprev[dprev["breakdown"].isin(["age", "age_gender"])].copy()
-        gender_cur = dcur[dcur["breakdown"].isin(["gender", "age_gender"])].copy()
-        gender_prev = dprev[dprev["breakdown"].isin(["gender", "age_gender"])].copy()
-        if age_cur.empty and gender_cur.empty:
-            st.info("Sin datos demográficos para el rango/plataforma seleccionados.")
-            return
-
-        age_totals = (
-            age_cur.groupby("age_range", as_index=False)
-            .agg(
-                leads=("leads", "sum"),
-                spend=("spend", "sum"),
-                clicks=("clicks", "sum"),
-                impressions=("impressions", "sum"),
-            )
-            if not age_cur.empty
-            else pd.DataFrame(columns=["age_range", "leads", "spend", "clicks", "impressions"])
-        )
-        age_prev_totals = (
-            age_prev.groupby("age_range", as_index=False).agg(leads_prev=("leads", "sum"))
-            if not age_prev.empty
-            else pd.DataFrame(columns=["age_range", "leads_prev"])
-        )
-        age_totals = age_totals.merge(age_prev_totals, on="age_range", how="left").fillna({"leads_prev": 0.0})
-        total_leads = float(age_totals["leads"].sum()) if not age_totals.empty else 0.0
-        total_prev_leads = float(age_totals["leads_prev"].sum()) if not age_totals.empty else 0.0
-
-        gender_totals = (
-            gender_cur.groupby("gender", as_index=False)
-            .agg(leads=("leads", "sum"))
-            .sort_values("leads", ascending=False, na_position="last")
-            if not gender_cur.empty
-            else pd.DataFrame(columns=["gender", "leads"])
-        )
-        gender_prev_totals = (
-            gender_prev.groupby("gender", as_index=False).agg(leads_prev=("leads", "sum"))
-            if not gender_prev.empty
-            else pd.DataFrame(columns=["gender", "leads_prev"])
-        )
-        gender_totals = gender_totals.merge(gender_prev_totals, on="gender", how="left").fillna(
-            {"leads_prev": 0.0}
-        )
-        if total_leads <= 0 and not gender_totals.empty:
-            total_leads = float(gender_totals["leads"].sum())
-            total_prev_leads = float(gender_totals["leads_prev"].sum())
-
-        if total_leads <= 0:
-            st.info("No se detectaron leads para construir el desglose de edad y género.")
-            return
-
-        if not age_totals.empty:
-            age_totals["share"] = age_totals["leads"].apply(lambda v: sdiv(float(v), total_leads) or 0.0)
-            age_totals["age_order"] = age_totals["age_range"].apply(
-                lambda v: AGE_BUCKET_ORDER.index(v) if v in AGE_BUCKET_ORDER else len(AGE_BUCKET_ORDER)
-            )
-            age_totals = age_totals.sort_values(["age_order", "leads"], ascending=[True, False]).drop(
-                columns=["age_order"]
-            )
-        top_age = str(age_totals.iloc[0]["age_range"]) if not age_totals.empty else "N/A"
-        top_age_share = float(age_totals.iloc[0]["share"]) if not age_totals.empty else 0.0
-        gender_totals["share"] = gender_totals["leads"].apply(lambda v: sdiv(float(v), total_leads) or 0.0)
-        top_gender = str(gender_totals.iloc[0]["gender"]) if not gender_totals.empty else "N/A"
-        top_gender_share = float(gender_totals.iloc[0]["share"]) if not gender_totals.empty else 0.0
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric(
-            "Leads (breakdown demográfico)",
-            f"{total_leads:,.0f}",
-            fmt_delta_compact(pct_delta(total_leads, total_prev_leads)),
-        )
-        m2.metric("Top Edad (share)", top_age, fmt_pct(top_age_share))
-        m3.metric("Top Género (share)", top_gender, fmt_pct(top_gender_share))
-
-        cross_roll = (
-            dcur[dcur["breakdown"] == "age_gender"]
-            .groupby(["age_range", "gender"], as_index=False)
-            .agg(
-                leads=("leads", "sum"),
-                spend=("spend", "sum"),
-                clicks=("clicks", "sum"),
-                impressions=("impressions", "sum"),
-            )
-            if "age_gender" in set(dcur["breakdown"].astype(str))
-            else pd.DataFrame(columns=["age_range", "gender", "leads", "spend", "clicks", "impressions"])
-        )
-        age_gender = (
-            cross_roll.pivot_table(index="age_range", columns="gender", values="leads", aggfunc="sum", fill_value=0.0)
-            if not cross_roll.empty
-            else pd.DataFrame()
-        )
-        has_cross = not age_gender.empty
-
-        viz_col_1, viz_col_2 = st.columns([1.9, 1.1], gap="large")
-        with viz_col_1:
-            if has_cross:
-                ordered_age = [a for a in AGE_BUCKET_ORDER if a in age_gender.index]
-                if not ordered_age:
-                    ordered_age = sorted([str(v) for v in age_gender.index.tolist()])
-                age_gender = age_gender.reindex(ordered_age, fill_value=0.0)
-
-                bar = go.Figure()
-                for gender, color in (("Female", C_META), ("Male", C_GOOGLE), ("Unknown", C_MUTE), ("All", C_ACCENT)):
-                    if gender not in age_gender.columns:
-                        continue
-                    bar.add_trace(
-                        go.Bar(
-                            x=age_gender.index.tolist(),
-                            y=age_gender[gender].tolist(),
-                            name=gender,
-                            marker={"color": color},
-                            hovertemplate="%{x}<br>" + gender + ": %{y:,.0f} leads<extra></extra>",
-                        )
-                    )
-                bar.update_layout(
-                    barmode="stack",
-                    height=290,
-                    margin={"l": 8, "r": 8, "t": 40, "b": 10},
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    legend={"orientation": "h", "x": 0.0, "y": 1.15},
-                    xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
-                    yaxis={"title": "Leads", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
-                    title={"text": "Distribución de Leads por Edad", "font": {"size": 14, "color": C_TEXT}},
-                )
-                st.plotly_chart(bar, width="stretch")
-            elif not age_totals.empty:
-                bar = go.Figure(
-                    go.Bar(
-                        x=age_totals["age_range"],
-                        y=age_totals["leads"],
-                        marker={"color": C_GOOGLE},
-                        hovertemplate="%{x}<br>Leads: %{y:,.0f}<extra></extra>",
-                    )
-                )
-                bar.update_layout(
-                    height=290,
-                    margin={"l": 8, "r": 8, "t": 40, "b": 10},
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis={"title": "", "tickfont": {"size": 11, "color": C_MUTE}},
-                    yaxis={"title": "Leads", "gridcolor": C_GRID, "tickfont": {"size": 11, "color": C_MUTE}},
-                    title={"text": "Distribución de Leads por Edad", "font": {"size": 14, "color": C_TEXT}},
-                )
-                st.plotly_chart(bar, width="stretch")
-            else:
-                st.info("Sin datos por edad para el rango seleccionado.")
-        with viz_col_2:
-            if gender_totals.empty:
-                st.info("Sin datos por género para el rango seleccionado.")
-            else:
-                gender_color = {"Female": C_META, "Male": C_GOOGLE, "Unknown": C_MUTE, "All": C_ACCENT}
-                pie = go.Figure(
-                    go.Pie(
-                        labels=gender_totals["gender"],
-                        values=gender_totals["leads"],
-                        hole=0.56,
-                        marker={"colors": [gender_color.get(str(g), C_MUTE) for g in gender_totals["gender"]]},
-                        texttemplate="%{label}<br>%{percent}",
-                        hovertemplate="%{label}: %{value:,.0f} leads<extra></extra>",
-                        sort=False,
-                    )
-                )
-                pie.update_layout(
-                    height=290,
-                    margin={"l": 4, "r": 4, "t": 40, "b": 8},
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    showlegend=False,
-                    title={"text": "Mix de Género", "font": {"size": 14, "color": C_TEXT}},
-                )
-                st.plotly_chart(pie, width="stretch")
-
-        if not cross_roll.empty:
-            demo_table = cross_roll.copy()
-        elif not age_totals.empty:
-            demo_table = age_totals[["age_range", "leads", "spend", "impressions", "clicks"]].copy()
-            demo_table["gender"] = "All"
-        else:
-            demo_table = gender_totals[["gender", "leads"]].copy()
-            demo_table["age_range"] = "All"
-            demo_table["spend"] = 0.0
-            demo_table["impressions"] = 0.0
-            demo_table["clicks"] = 0.0
-        demo_table["share_leads"] = demo_table["leads"].apply(lambda v: sdiv(float(v), total_leads) or 0.0)
-        demo_table = demo_table.rename(
-            columns={
-                "age_range": "Edad",
-                "gender": "Género",
-                "leads": "Leads",
-                "share_leads": "Share Leads",
-                "spend": "Gasto",
-                "impressions": "Impresiones",
-                "clicks": "Clicks",
-            }
-        )[["Edad", "Género", "Leads", "Share Leads", "Gasto", "Impresiones", "Clicks"]]
-        demo_table = demo_table.sort_values(["Leads", "Share Leads"], ascending=[False, False], na_position="last")
-        st.dataframe(
-            demo_table.style.format(
-                {
-                    "Leads": "{:.0f}",
-                    "Share Leads": lambda v: fmt_pct(float(v)),
-                    "Gasto": lambda v: fmt_money(float(v)),
-                    "Impresiones": "{:.0f}",
-                    "Clicks": "{:.0f}",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
+        dashboard_overview_sections.render_lead_demographics(
+            st_module=st,
+            lead_demo_df=lead_demo_df,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            prev_start_date=prev_s,
+            prev_end_date=prev_e,
+            age_bucket_order=AGE_BUCKET_ORDER,
+            sdiv_fn=sdiv,
+            pct_delta_fn=pct_delta,
+            fmt_delta_compact_fn=fmt_delta_compact,
+            fmt_pct_fn=fmt_pct,
+            fmt_money_fn=fmt_money,
+            c_google=C_GOOGLE,
+            c_meta=C_META,
+            c_mute=C_MUTE,
+            c_accent=C_ACCENT,
+            c_grid=C_GRID,
+            c_text=C_TEXT,
         )
 
     def _render_lead_geo_map() -> None:
-        st.markdown(
-            "<div class='viz-title' style='margin-bottom:0.35rem;'>6) Mapa de Distribución de Leads Paid</div>",
-            unsafe_allow_html=True,
+        dashboard_overview_sections.render_lead_geo_map(
+            st_module=st,
+            lead_geo_df=lead_geo_df,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            prev_start_date=prev_s,
+            prev_end_date=prev_e,
+            clean_text_value_fn=_clean_text_value,
+            country_name_from_code_fn=_country_name_from_code,
+            theme_color_scale_fn=_theme_color_scale,
+            sdiv_fn=sdiv,
+            pct_delta_fn=pct_delta,
+            fmt_delta_compact_fn=fmt_delta_compact,
+            fmt_pct_fn=fmt_pct,
+            fmt_money_fn=fmt_money,
+            c_google=C_GOOGLE,
+            c_mute=C_MUTE,
+            c_grid=C_GRID,
+            c_text=C_TEXT,
         )
-        st.caption(
-            "Métrica de análisis (breakdown de plataformas). No es comparable 1:1 con el KPI global de Conversiones."
-        )
-        if lead_geo_df.empty:
-            st.info("No hay datos de geografía de leads para el tenant.")
-            return
-
-        gcur = lead_geo_df[(lead_geo_df["date"] >= s) & (lead_geo_df["date"] <= e)].copy()
-        gprev = lead_geo_df[(lead_geo_df["date"] >= prev_s) & (lead_geo_df["date"] <= prev_e)].copy()
-        if platform in ("Google", "Meta"):
-            gcur = gcur[gcur["platform"] == platform]
-            gprev = gprev[gprev["platform"] == platform]
-        if gcur.empty:
-            st.info("Sin datos geográficos de leads para el rango/plataforma seleccionados.")
-            return
-
-        def _first_text(values: pd.Series) -> str:
-            for raw in values:
-                txt = _clean_text_value(raw)
-                if txt:
-                    return txt
-            return ""
-
-        geo_roll = (
-            gcur.groupby(["country_code", "region"], as_index=False)
-            .agg(
-                country_name=("country_name", _first_text),
-                leads=("leads", "sum"),
-                spend=("spend", "sum"),
-                clicks=("clicks", "sum"),
-                impressions=("impressions", "sum"),
-            )
-        )
-        geo_roll["country_name"] = geo_roll.apply(
-            lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code", "")),
-            axis=1,
-        )
-        total_geo_leads = float(geo_roll["leads"].sum())
-        if total_geo_leads <= 0:
-            st.info("No se detectaron leads para construir el mapa geográfico.")
-            return
-
-        prev_geo_total = float(gprev["leads"].sum()) if not gprev.empty else 0.0
-        country_roll = (
-            geo_roll.groupby("country_code", as_index=False)
-            .agg(
-                country_name=("country_name", _first_text),
-                leads=("leads", "sum"),
-                spend=("spend", "sum"),
-                clicks=("clicks", "sum"),
-                impressions=("impressions", "sum"),
-            )
-        )
-        country_roll["country_name"] = country_roll.apply(
-            lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code", "")),
-            axis=1,
-        )
-        country_roll["share_leads"] = country_roll["leads"].apply(lambda v: sdiv(float(v), total_geo_leads) or 0.0)
-        top_country = country_roll.sort_values("leads", ascending=False, na_position="last").head(1)
-        top_country_name = (
-            _clean_text_value(top_country.iloc[0]["country_name"])
-            or _clean_text_value(top_country.iloc[0]["country_code"])
-            or "N/A"
-        ) if not top_country.empty else "N/A"
-        top_country_share = float(top_country.iloc[0]["share_leads"]) if not top_country.empty else 0.0
-        country_count = int((country_roll["leads"] > 0).sum())
-        prev_country_count = int((gprev.groupby("country_code", as_index=False)["leads"].sum()["leads"] > 0).sum()) if not gprev.empty else 0
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Leads (geo breakdown)", f"{total_geo_leads:,.0f}", fmt_delta_compact(pct_delta(total_geo_leads, prev_geo_total)))
-        m2.metric("País Top (share)", top_country_name, fmt_pct(top_country_share))
-        m3.metric("Cobertura Países", f"{country_count}", fmt_delta_compact(pct_delta(float(country_count), float(prev_country_count))))
-
-        map_df = country_roll.copy()
-        map_df["country_code"] = map_df["country_code"].astype(str).str.strip().str.upper()
-        map_df["country_name"] = map_df.apply(
-            lambda r: _clean_text_value(r.get("country_name")) or _country_name_from_code(r.get("country_code", "")),
-            axis=1,
-        )
-        map_df["country_label"] = map_df.apply(
-            lambda r: _clean_text_value(r.get("country_name")) or _clean_text_value(r.get("country_code")),
-            axis=1,
-        )
-        map_df["cpl"] = map_df.apply(
-            lambda r: sdiv(float(r.get("spend", 0.0)), float(r.get("leads", 0.0))),
-            axis=1,
-        )
-        map_df = map_df[
-            map_df["country_code"].str.fullmatch(r"[A-Z]{2}", na=False)
-            & (pd.to_numeric(map_df["leads"], errors="coerce").fillna(0.0) > 0)
-        ].copy()
-        map_col, table_col = st.columns([1.7, 1.3], gap="large")
-        with map_col:
-            if map_df.empty:
-                st.info("No hay países mapeables para mostrar en el mapa.")
-            else:
-                if int(map_df["country_name"].nunique()) <= 2:
-                    ch = px.choropleth(
-                        map_df,
-                        locations="country_name",
-                        locationmode="country names",
-                        color="share_leads",
-                        hover_name="country_label",
-                        hover_data={
-                            "country_code": True,
-                            "leads": ":.0f",
-                            "spend": ":.2f",
-                            "cpl": ":.2f",
-                            "share_leads": ":.2%",
-                        },
-                        color_continuous_scale=_theme_color_scale(C_GOOGLE),
-                    )
-                    ch.update_layout(
-                        height=330,
-                        margin={"l": 0, "r": 0, "t": 6, "b": 0},
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        coloraxis_colorbar={"title": "Share Leads", "tickformat": ".0%"},
-                    )
-                    ch.update_geos(
-                        fitbounds="locations",
-                        visible=False,
-                        showcountries=True,
-                        countrycolor="rgba(255,255,255,0.9)",
-                        bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(ch, width="stretch")
-                else:
-                    bubble_df = map_df.copy()
-                    bubble_df["bubble_size"] = bubble_df["leads"].clip(lower=0.0)
-                    ch = px.scatter_geo(
-                        bubble_df,
-                        locations="country_name",
-                        locationmode="country names",
-                        size="bubble_size",
-                        color="share_leads",
-                        hover_name="country_label",
-                        hover_data={
-                            "country_code": True,
-                            "leads": ":.0f",
-                            "spend": ":.2f",
-                            "cpl": ":.2f",
-                            "clicks": ":.0f",
-                            "impressions": ":.0f",
-                            "share_leads": ":.2%",
-                        },
-                        color_continuous_scale=_theme_color_scale(C_GOOGLE),
-                        size_max=48,
-                        projection="natural earth",
-                    )
-                    ch.update_traces(
-                        marker={"line": {"width": 0.7, "color": "rgba(255,255,255,0.9)"}, "opacity": 0.82}
-                    )
-                    ch.update_layout(
-                        height=330,
-                        margin={"l": 0, "r": 0, "t": 6, "b": 0},
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        coloraxis_colorbar={"title": "Share Leads", "tickformat": ".0%"},
-                    )
-                    ch.update_geos(showframe=False, showcoastlines=False, bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(ch, width="stretch")
-        with table_col:
-            top_source = map_df if not map_df.empty else country_roll.copy()
-            top_source = top_source[pd.to_numeric(top_source["leads"], errors="coerce").fillna(0.0) > 0].copy()
-            top_country_view = (
-                top_source.sort_values(["leads", "share_leads"], ascending=[False, False], na_position="last")
-                .head(10)
-                .copy()
-            )
-            if not top_country_view.empty:
-                top_country_view["country_label"] = top_country_view.apply(
-                    lambda r: _clean_text_value(r.get("country_name")) or _clean_text_value(r.get("country_code")),
-                    axis=1,
-                )
-                top_country_view = top_country_view.sort_values("leads", ascending=True, na_position="last")
-                top_bar = go.Figure(
-                    go.Bar(
-                        x=top_country_view["leads"],
-                        y=top_country_view["country_label"],
-                        orientation="h",
-                        marker={"color": C_GOOGLE},
-                        hovertemplate="%{y}<br>Leads: %{x:,.0f}<extra></extra>",
-                    )
-                )
-                top_bar.update_layout(
-                    height=210,
-                    margin={"l": 6, "r": 6, "t": 18, "b": 6},
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis={"title": "Leads", "gridcolor": C_GRID, "tickfont": {"size": 10, "color": C_MUTE}},
-                    yaxis={"title": "", "tickfont": {"size": 10, "color": C_MUTE}},
-                    title={"text": "Top Países por Leads", "font": {"size": 13, "color": C_TEXT}},
-                )
-                st.plotly_chart(top_bar, width="stretch")
-
-            region_view = geo_roll.copy()
-            region_view["country_label"] = region_view.apply(
-                lambda r: _clean_text_value(r.get("country_name")) or _clean_text_value(r.get("country_code")),
-                axis=1,
-            )
-            region_view["share_leads"] = region_view["leads"].apply(lambda v: sdiv(float(v), total_geo_leads) or 0.0)
-            region_view = region_view.rename(
-                columns={
-                    "country_label": "País",
-                    "region": "Región",
-                    "leads": "Leads",
-                    "share_leads": "Share Leads",
-                    "spend": "Gasto",
-                    "clicks": "Clicks",
-                    "impressions": "Impresiones",
-                }
-            )[["País", "Región", "Leads", "Share Leads", "Gasto", "Clicks", "Impresiones"]]
-            region_view = region_view.sort_values(["Leads", "Share Leads"], ascending=[False, False], na_position="last").head(15)
-            st.dataframe(
-                region_view.style.format(
-                    {
-                        "Leads": "{:.0f}",
-                        "Share Leads": lambda v: fmt_pct(float(v)),
-                        "Gasto": lambda v: fmt_money(float(v)),
-                        "Clicks": "{:.0f}",
-                        "Impresiones": "{:.0f}",
-                    }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
 
     show_trend = "trend_chart" in section_set
     show_right_stack = ("funnel" in section_set) or ("ga4_conversion" in section_set)
