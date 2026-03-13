@@ -229,56 +229,72 @@ def render_media_mix(
         "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
         unsafe_allow_html=True,
     )
-    combo = go.Figure()
-    combo.add_trace(
-        go.Bar(
-            x=mix["platform"],
-            y=mix["cpc"],
-            name="CPC",
-            marker={"color": c_accent},
-            hovertemplate="%{x}<br>CPC: $%{y:,.2f}<extra></extra>",
+    mix_rows_html: list[str] = []
+    for _, row in mix.iterrows():
+        share_pct = max(min(float(row.get("spend_share", 0.0)) * 100.0, 100.0), 0.0)
+        mix_rows_html.append(
+            "<div class='mix-row'>"
+            f"<div class='mix-head'><span class='mix-platform'>{html.escape(str(row['platform']))}</span>"
+            f"<span class='mix-share'>{fmt_pct_fn(float(row['spend_share']))} share spend</span></div>"
+            "<div class='mix-bar-wrap'>"
+            f"<div class='mix-bar' style='width:{share_pct:.2f}%; background:{c_accent};'></div>"
+            "</div>"
+            f"<div class='mix-kpis'>CPC {fmt_money_fn(row['cpc'] if pd.notna(row['cpc']) else None)}"
+            f" · CPM {fmt_money_fn(row['cpm'] if pd.notna(row['cpm']) else None)}"
+            f" · CVR {fmt_pct_fn(row['cvr'] if pd.notna(row['cvr']) else None)}</div>"
+            "</div>"
         )
+    st_module.markdown(
+        f"""
+        <style>
+          .mix-card {{
+            border: 1px solid rgba(32,29,29,0.08);
+            border-radius: 14px;
+            padding: 0.75rem 0.9rem 0.8rem 0.9rem;
+            background: rgba(255,255,255,0.62);
+            margin-bottom: 0.5rem;
+          }}
+          .mix-row + .mix-row {{
+            margin-top: 0.72rem;
+            padding-top: 0.72rem;
+            border-top: 1px solid rgba(32,29,29,0.08);
+          }}
+          .mix-head {{
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 0.5rem;
+          }}
+          .mix-platform {{
+            font-weight: 700;
+            color: {c_text};
+          }}
+          .mix-share {{
+            font-size: 0.85rem;
+            color: {c_mute};
+          }}
+          .mix-bar-wrap {{
+            margin-top: 0.4rem;
+            width: 100%;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(32,29,29,0.10);
+            overflow: hidden;
+          }}
+          .mix-bar {{
+            height: 100%;
+            border-radius: 999px;
+          }}
+          .mix-kpis {{
+            margin-top: 0.4rem;
+            color: {c_text};
+            font-size: 0.88rem;
+          }}
+        </style>
+        <div class="mix-card">{''.join(mix_rows_html)}</div>
+        """,
+        unsafe_allow_html=True,
     )
-    combo.add_trace(
-        go.Bar(
-            x=mix["platform"],
-            y=mix["cpm"],
-            name="CPM",
-            marker={"color": c_mute},
-            hovertemplate="%{x}<br>CPM: $%{y:,.2f}<extra></extra>",
-        )
-    )
-    combo.add_trace(
-        go.Scatter(
-            x=mix["platform"],
-            y=(mix["cvr"] * 100.0),
-            name="CVR",
-            mode="lines+markers",
-            marker={"color": c_meta, "size": 9},
-            line={"color": c_meta, "width": 3},
-            yaxis="y2",
-            hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
-        )
-    )
-    combo.update_layout(
-        barmode="group",
-        title={"text": "Eficiencia por Plataforma", "font": {"size": 14, "color": c_text}},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin={"l": 10, "r": 10, "t": 42, "b": 10},
-        height=300,
-        legend={"orientation": "h", "x": 0.0, "y": 1.12},
-        xaxis={"title": "", "tickfont": {"size": 11, "color": c_mute}},
-        yaxis={"title": "Costo ($)", "gridcolor": c_grid, "tickfont": {"size": 11, "color": c_mute}},
-        yaxis2={
-            "title": "CVR (%)",
-            "overlaying": "y",
-            "side": "right",
-            "showgrid": False,
-            "tickfont": {"size": 11, "color": c_mute},
-        },
-    )
-    st_module.plotly_chart(combo, width="stretch")
     if total_spend > 0:
         share_parts = [
             f"{platform_name}: {fmt_pct_fn(float(share))}"
@@ -309,11 +325,7 @@ def render_media_mix(
     mix_display["Clics"] = mix_display["Clics"].apply(lambda v: f"{float(v):,.0f}")
     mix_display["Impresiones"] = mix_display["Impresiones"].apply(lambda v: f"{float(v):,.0f}")
     mix_display["Conversiones"] = mix_display["Conversiones"].apply(lambda v: f"{float(v):,.2f}")
-    st_module.dataframe(
-        mix_display,
-        width="stretch",
-        hide_index=True,
-    )
+    st_module.table(mix_display.set_index("Plataforma"))
 
 
 def render_lead_demographics(
