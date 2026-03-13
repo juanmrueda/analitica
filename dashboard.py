@@ -5721,6 +5721,48 @@ def _build_overview_trend_payload_from_frames(
 
 
 @st.cache_data(show_spinner=False)
+def _cached_hourly_ranges_from_report(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    start_iso: str,
+    end_iso: str,
+    prev_start_iso: str,
+    prev_end_iso: str,
+    include_compare: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    report_path = Path(path_str)
+    hourly_pq_sig = _parquet_cache_signature(report_path, PARQUET_HOURLY_DATASET)
+    if hourly_pq_sig is not None:
+        hourly_df = dashboard_data.normalize_hourly_table(_load_parquet_df_cached(*hourly_pq_sig))
+    else:
+        hourly_df = _load_hourly_df_cached(path_str, modified_ns, size_bytes)
+    if hourly_df.empty or "date" not in hourly_df.columns:
+        return pd.DataFrame(), pd.DataFrame()
+
+    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
+    prev_start_day, prev_end_day = _resolve_cached_range(prev_start_iso, prev_end_iso)
+    date_series = hourly_df["date"]
+    if pd.api.types.is_datetime64_any_dtype(date_series):
+        date_series = date_series.dt.date
+    else:
+        date_series = pd.to_datetime(date_series, errors="coerce").dt.date
+    valid_mask = date_series.notna()
+    cur_mask = valid_mask & (date_series >= start_day) & (date_series <= end_day)
+    cur_hourly = hourly_df.loc[cur_mask].copy()
+    if not cur_hourly.empty:
+        cur_hourly["date"] = date_series.loc[cur_mask].to_numpy()
+
+    if not include_compare:
+        return cur_hourly, pd.DataFrame()
+    prev_mask = valid_mask & (date_series >= prev_start_day) & (date_series <= prev_end_day)
+    prev_hourly = hourly_df.loc[prev_mask].copy()
+    if not prev_hourly.empty:
+        prev_hourly["date"] = date_series.loc[prev_mask].to_numpy()
+    return cur_hourly, prev_hourly
+
+
+@st.cache_data(show_spinner=False)
 def _cached_overview_trend_payload_from_report(
     path_str: str,
     modified_ns: int,
@@ -6108,9 +6150,21 @@ def render_exec(
 
     def _render_trend_chart() -> None:
         compare_active = bool(str(compare_label or "").strip())
-        if report_cache_sig is not None:
+        ld_local = df_sel.sort_values("date").copy()
+        ld_prev_local = df_prev.sort_values("date").copy() if compare_active else pd.DataFrame()
+        hourly_local = hourly_sel if isinstance(hourly_sel, pd.DataFrame) else pd.DataFrame()
+        hourly_prev_local = hourly_prev_sel if isinstance(hourly_prev_sel, pd.DataFrame) else pd.DataFrame()
+
+        needs_hourly_lazy_load = bool(
+            report_cache_sig is not None
+            and active_overview_kpi in PAID_TREND_KPI_KEYS
+            and not ld_local.empty
+            and ld_local["date"].nunique() == 1
+            and hourly_local.empty
+        )
+        if needs_hourly_lazy_load:
             path_str, modified_ns, size_bytes = report_cache_sig
-            payload = _cached_overview_trend_payload_from_report(
+            hourly_local, hourly_prev_local = _cached_hourly_ranges_from_report(
                 path_str,
                 modified_ns,
                 size_bytes,
@@ -6118,20 +6172,19 @@ def render_exec(
                 e.isoformat(),
                 prev_s.isoformat(),
                 prev_e.isoformat(),
-                active_overview_kpi,
                 compare_active,
             )
-        else:
-            ld_local = df_sel.sort_values("date").copy()
-            ld_prev_local = df_prev.sort_values("date").copy() if compare_active else pd.DataFrame()
-            payload = _build_overview_trend_payload_from_frames(
-                ld_local,
-                ld_prev_local,
-                hourly_sel,
-                hourly_prev_sel,
-                active_overview_kpi,
-                compare_active,
-            )
+        if not compare_active:
+            hourly_prev_local = pd.DataFrame()
+
+        payload = _build_overview_trend_payload_from_frames(
+            ld_local,
+            ld_prev_local,
+            hourly_local,
+            hourly_prev_local,
+            active_overview_kpi,
+            compare_active,
+        )
 
         dashboard_trends.render_overview_trend_chart(
             st_module=st,
