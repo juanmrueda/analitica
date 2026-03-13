@@ -19,19 +19,19 @@ from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import urllib.error
 import urllib.request
 
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
-from PIL import Image
 import dashboard_data
 import dashboard_filters
 import dashboard_overview_sections
 import dashboard_trends
+
+if TYPE_CHECKING:
+    import plotly.graph_objects as go
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORT_PATH = BASE_DIR / "reports" / "yap" / "yap_historical.json"
@@ -292,6 +292,12 @@ def _load_coco_agent_modules() -> tuple[Any, Any, Any, Any, str]:
         return run_turn, det_mod, workflow_mod, context_mod, ""
     except Exception as exc:
         return None, None, None, None, str(exc)
+
+
+@st.cache_resource(show_spinner=False)
+def _load_plotly_graph_objects() -> Any:
+    import plotly.graph_objects as go_mod
+    return go_mod
 
 
 def _profile_span(profiler: DashboardProfiler | None, name: str):
@@ -2594,6 +2600,7 @@ def _save_uploaded_logo_file(uploaded: Any, scope_key: str) -> tuple[str | None,
         return None, "El archivo de logo está vacío."
 
     try:
+        from PIL import Image
         img = Image.open(BytesIO(raw))
         width_px, height_px = img.size
         img.close()
@@ -6380,9 +6387,10 @@ def render_traffic(
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
         def _plot_channels(frame: pd.DataFrame) -> None:
-            fig = go.Figure()
+            go_mod = _load_plotly_graph_objects()
+            fig = go_mod.Figure()
             fig.add_trace(
-                go.Bar(
+                go_mod.Bar(
                     x=frame["sessionDefaultChannelGroup"],
                     y=frame["sessions"],
                     name="Sessions",
@@ -6391,7 +6399,7 @@ def render_traffic(
                 )
             )
             fig.add_trace(
-                go.Scatter(
+                go_mod.Scatter(
                     x=frame["sessionDefaultChannelGroup"],
                     y=frame["conversions"],
                     name="Conversions",
