@@ -13,6 +13,39 @@ FmtCompactFn = Callable[[float | int | None], str]
 FmtMoneyFn = Callable[[float | int | None], str]
 
 
+def _coerce_to_day(raw_value: Any) -> Any:
+    try:
+        parsed = pd.to_datetime(raw_value, errors="coerce")
+    except Exception:
+        return None
+    if pd.isna(parsed):
+        return None
+    return parsed.date() if hasattr(parsed, "date") else None
+
+
+def _filter_by_date_range(frame: pd.DataFrame, start_date: Any, end_date: Any) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    if "date" not in frame.columns:
+        return frame.copy()
+
+    start_day = _coerce_to_day(start_date)
+    end_day = _coerce_to_day(end_date)
+    if start_day is None or end_day is None:
+        return frame.copy()
+    if start_day > end_day:
+        start_day, end_day = end_day, start_day
+
+    out = frame.copy()
+    parsed_dates = pd.to_datetime(out["date"], errors="coerce").dt.date
+    valid_mask = parsed_dates.notna()
+    mask = valid_mask & (parsed_dates >= start_day) & (parsed_dates <= end_day)
+    filtered = out.loc[mask].copy()
+    if not filtered.empty:
+        filtered["date"] = parsed_dates.loc[mask].to_numpy()
+    return filtered
+
+
 def render_funnel_and_ga4(
     *,
     st_module: Any,
@@ -98,9 +131,7 @@ def render_funnel_and_ga4(
         ga4_conv_total = 0.0
         if not ga4_filtered.empty:
             if "date" in ga4_filtered.columns:
-                ga4_filtered = ga4_filtered[
-                    (ga4_filtered["date"] >= start_date) & (ga4_filtered["date"] <= end_date)
-                ]
+                ga4_filtered = _filter_by_date_range(ga4_filtered, start_date, end_date)
             event_col = (
                 "eventName"
                 if "eventName" in ga4_filtered.columns
@@ -361,8 +392,8 @@ def render_lead_demographics(
         st_module.info("No hay datos de leads por edad y g\u00e9nero para el tenant.")
         return
 
-    dcur = lead_demo_df[(lead_demo_df["date"] >= start_date) & (lead_demo_df["date"] <= end_date)].copy()
-    dprev = lead_demo_df[(lead_demo_df["date"] >= prev_start_date) & (lead_demo_df["date"] <= prev_end_date)].copy()
+    dcur = _filter_by_date_range(lead_demo_df, start_date, end_date)
+    dprev = _filter_by_date_range(lead_demo_df, prev_start_date, prev_end_date)
     if platform in ("Google", "Meta"):
         dcur = dcur[dcur["platform"] == platform]
         dprev = dprev[dprev["platform"] == platform]
@@ -618,8 +649,8 @@ def render_lead_geo_map(
         st_module.info("No hay datos de geograf\u00eda de leads para el tenant.")
         return
 
-    gcur = lead_geo_df[(lead_geo_df["date"] >= start_date) & (lead_geo_df["date"] <= end_date)].copy()
-    gprev = lead_geo_df[(lead_geo_df["date"] >= prev_start_date) & (lead_geo_df["date"] <= prev_end_date)].copy()
+    gcur = _filter_by_date_range(lead_geo_df, start_date, end_date)
+    gprev = _filter_by_date_range(lead_geo_df, prev_start_date, prev_end_date)
     if platform in ("Google", "Meta"):
         gcur = gcur[gcur["platform"] == platform]
         gprev = gprev[gprev["platform"] == platform]

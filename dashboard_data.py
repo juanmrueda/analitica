@@ -445,6 +445,10 @@ def normalize_paid_lead_demographics_table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
+    if "date" in out.columns:
+        out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+    else:
+        out["date"] = pd.NaT
     required = ["platform", "breakdown", "age_range", "gender", "leads", "spend", "impressions", "clicks"]
     for col in required:
         if col not in out.columns:
@@ -457,7 +461,7 @@ def normalize_paid_lead_demographics_table(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[~out["breakdown"].isin(valid_breakdowns), "breakdown"] = "age_gender"
     out["age_range"] = out["age_range"].apply(normalize_age_bucket)
     out["gender"] = out["gender"].apply(normalize_gender_bucket)
-    return out
+    return out.dropna(subset=["date"]).reset_index(drop=True)
 
 
 def paid_lead_demographics_df(report: dict[str, Any]) -> pd.DataFrame:
@@ -470,6 +474,10 @@ def normalize_paid_lead_geo_table(
     if df.empty:
         return df
     out = df.copy()
+    if "date" in out.columns:
+        out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+    else:
+        out["date"] = pd.NaT
     if "country_code" not in out.columns and "country" in out.columns:
         out["country_code"] = out["country"]
     required = ["platform", "country_code", "country_name", "region", "leads", "spend", "impressions", "clicks"]
@@ -487,7 +495,7 @@ def normalize_paid_lead_geo_table(
         axis=1,
     )
     out["region"] = out["region"].apply(lambda v: clean_text_value(v, "Unknown") or "Unknown")
-    return out
+    return out.dropna(subset=["date"]).reset_index(drop=True)
 
 
 def paid_lead_geo_df(report: dict[str, Any], country_code_to_name: dict[str, str] | None = None) -> pd.DataFrame:
