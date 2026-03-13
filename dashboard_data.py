@@ -118,9 +118,13 @@ def normalize_daily_table(df: pd.DataFrame) -> pd.DataFrame:
         out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
     else:
         out["date"] = pd.NaT
-    num_cols = [c for c in out.columns if c != "date"]
-    if num_cols:
-        out[num_cols] = out[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    for col in [c for c in out.columns if c != "date"]:
+        series = out[col]
+        if pd.api.types.is_numeric_dtype(series):
+            if series.isna().any():
+                out[col] = series.fillna(0.0)
+            continue
+        out[col] = pd.to_numeric(series, errors="coerce").fillna(0.0)
     return out.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
 
 
@@ -140,15 +144,18 @@ def normalize_hourly_table(df: pd.DataFrame) -> pd.DataFrame:
     if "hour" not in out.columns:
         out["hour"] = out["timestamp"].dt.hour
     else:
-        out["hour"] = (
-            pd.to_numeric(out["hour"], errors="coerce")
-            .fillna(out["timestamp"].dt.hour)
-            .fillna(0)
-            .astype(int)
-        )
-    num_cols = [c for c in out.columns if c not in {"timestamp", "date"}]
-    if num_cols:
-        out[num_cols] = out[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        hour_series = out["hour"]
+        if pd.api.types.is_numeric_dtype(hour_series):
+            out["hour"] = hour_series.fillna(out["timestamp"].dt.hour).fillna(0).astype(int)
+        else:
+            out["hour"] = pd.to_numeric(hour_series, errors="coerce").fillna(out["timestamp"].dt.hour).fillna(0).astype(int)
+    for col in [c for c in out.columns if c not in {"timestamp", "date"}]:
+        series = out[col]
+        if pd.api.types.is_numeric_dtype(series):
+            if series.isna().any():
+                out[col] = series.fillna(0.0)
+            continue
+        out[col] = pd.to_numeric(series, errors="coerce").fillna(0.0)
     return out.dropna(subset=["timestamp", "date"]).sort_values(["timestamp"]).reset_index(drop=True)
 
 
