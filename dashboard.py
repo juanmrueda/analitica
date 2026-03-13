@@ -2299,6 +2299,26 @@ def _load_hourly_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> 
     return dashboard_data.hourly_df(report)
 
 
+@st.cache_resource(show_spinner=False)
+def _load_daily_parquet_df_resource(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return _load_daily_parquet_df_cached(path_str, modified_ns, size_bytes)
+
+
+@st.cache_resource(show_spinner=False)
+def _load_daily_df_resource(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return _load_daily_df_cached(path_str, modified_ns, size_bytes)
+
+
+@st.cache_resource(show_spinner=False)
+def _load_hourly_parquet_df_resource(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return _load_hourly_parquet_df_cached(path_str, modified_ns, size_bytes)
+
+
+@st.cache_resource(show_spinner=False)
+def _load_hourly_df_resource(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
+    return _load_hourly_df_cached(path_str, modified_ns, size_bytes)
+
+
 @st.cache_data(show_spinner=False)
 def _load_acq_df_cached(path_str: str, modified_ns: int, size_bytes: int, key: str) -> pd.DataFrame:
     report = _load_report_cached(path_str, modified_ns, size_bytes)
@@ -2337,17 +2357,17 @@ def load_report(path: Path) -> dict[str, Any]:
 def load_daily_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, PARQUET_DAILY_DATASET)
     if pq_sig is not None:
-        return _load_daily_parquet_df_cached(*pq_sig)
+        return _load_daily_parquet_df_resource(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
-    return _load_daily_df_cached(path_str, modified_ns, size_bytes)
+    return _load_daily_df_resource(path_str, modified_ns, size_bytes)
 
 
 def load_hourly_df_from_report_path(path: Path) -> pd.DataFrame:
     pq_sig = _parquet_cache_signature(path, PARQUET_HOURLY_DATASET)
     if pq_sig is not None:
-        return _load_hourly_parquet_df_cached(*pq_sig)
+        return _load_hourly_parquet_df_resource(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
-    return _load_hourly_df_cached(path_str, modified_ns, size_bytes)
+    return _load_hourly_df_resource(path_str, modified_ns, size_bytes)
 
 
 def load_acq_df_from_report_path(path: Path, key: str) -> pd.DataFrame:
