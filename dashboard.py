@@ -5695,77 +5695,27 @@ def _cached_overview_trend_payload_from_report(
     active_overview_kpi: str,
     compare_active: bool,
 ) -> dict[str, Any]:
-    report_path = Path(path_str)
-    daily_pq_sig = _parquet_cache_signature(report_path, PARQUET_DAILY_DATASET)
-    if daily_pq_sig is not None:
-        daily_df = dashboard_data.normalize_daily_table(_load_parquet_df_cached(*daily_pq_sig))
-    else:
-        daily_df = _load_daily_df_cached(path_str, modified_ns, size_bytes)
-    if daily_df.empty or "date" not in daily_df.columns:
-        return _build_overview_trend_payload_from_frames(
-            pd.DataFrame(),
-            pd.DataFrame(),
-            pd.DataFrame(),
-            pd.DataFrame(),
-            active_overview_kpi,
-            compare_active,
-        )
-    start_day, end_day = _resolve_cached_range(start_iso, end_iso)
-    prev_start_day, prev_end_day = _resolve_cached_range(prev_start_iso, prev_end_iso)
-
-    cur_df = daily_df.copy()
-    if pd.api.types.is_datetime64_any_dtype(cur_df["date"]):
-        cur_df["date"] = cur_df["date"].dt.date
-    else:
-        cur_df["date"] = pd.to_datetime(cur_df["date"], errors="coerce").dt.date
-    cur_df = cur_df.dropna(subset=["date"])
-    prev_df = cur_df.copy()
-    cur_df = cur_df[(cur_df["date"] >= start_day) & (cur_df["date"] <= end_day)].copy()
-    prev_df = prev_df[(prev_df["date"] >= prev_start_day) & (prev_df["date"] <= prev_end_day)].copy()
-
-    hourly_candidate = pd.DataFrame()
-    hourly_compare_candidate = pd.DataFrame()
-    if (
-        active_overview_kpi in PAID_TREND_KPI_KEYS
-        and not cur_df.empty
-        and cur_df["date"].nunique() == 1
-    ):
-        hourly_pq_sig = _parquet_cache_signature(report_path, PARQUET_HOURLY_DATASET)
-        if hourly_pq_sig is not None:
-            hourly_df = dashboard_data.normalize_hourly_table(_load_parquet_df_cached(*hourly_pq_sig))
-        else:
-            hourly_df = _load_hourly_df_cached(path_str, modified_ns, size_bytes)
-        if not hourly_df.empty and "date" in hourly_df.columns:
-            hourly_candidate = hourly_df.copy()
-            if pd.api.types.is_datetime64_any_dtype(hourly_candidate["date"]):
-                hourly_candidate["date"] = hourly_candidate["date"].dt.date
-            else:
-                hourly_candidate["date"] = pd.to_datetime(hourly_candidate["date"], errors="coerce").dt.date
-            hourly_candidate = hourly_candidate.dropna(subset=["date"])
-            hourly_candidate = hourly_candidate[
-                (hourly_candidate["date"] >= start_day) & (hourly_candidate["date"] <= end_day)
-            ].copy()
-            if compare_active:
-                hourly_compare_candidate = hourly_df.copy()
-                if pd.api.types.is_datetime64_any_dtype(hourly_compare_candidate["date"]):
-                    hourly_compare_candidate["date"] = hourly_compare_candidate["date"].dt.date
-                else:
-                    hourly_compare_candidate["date"] = pd.to_datetime(
-                        hourly_compare_candidate["date"], errors="coerce"
-                    ).dt.date
-                hourly_compare_candidate = hourly_compare_candidate.dropna(subset=["date"])
-                hourly_compare_candidate = hourly_compare_candidate[
-                    (hourly_compare_candidate["date"] >= prev_start_day)
-                    & (hourly_compare_candidate["date"] <= prev_end_day)
-                ].copy()
-
-    return _build_overview_trend_payload_from_frames(
-        cur_df,
-        prev_df,
-        hourly_candidate,
-        hourly_compare_candidate,
+    return dashboard_trends.build_overview_trend_payload_from_report(
+        path_str,
+        modified_ns,
+        size_bytes,
+        start_iso,
+        end_iso,
+        prev_start_iso,
+        prev_end_iso,
         active_overview_kpi,
         compare_active,
+        parquet_daily_dataset=PARQUET_DAILY_DATASET,
+        parquet_hourly_dataset=PARQUET_HOURLY_DATASET,
+        paid_trend_kpi_keys=PAID_TREND_KPI_KEYS,
+        parquet_cache_signature_fn=_parquet_cache_signature,
+        load_parquet_df_cached_fn=_load_parquet_df_cached,
+        load_daily_df_cached_fn=_load_daily_df_cached,
+        load_hourly_df_cached_fn=_load_hourly_df_cached,
+        normalize_daily_table_fn=dashboard_data.normalize_daily_table,
+        normalize_hourly_table_fn=dashboard_data.normalize_hourly_table,
+        resolve_cached_range_fn=_resolve_cached_range,
+        build_payload_from_frames_fn=_build_overview_trend_payload_from_frames,
     )
 
 
@@ -6120,8 +6070,6 @@ def render_exec(
     c = metric_cols(platform)
 
     def _render_trend_chart() -> None:
-        trend_label = str(KPI_CATALOG.get(active_overview_kpi, {}).get("label", active_overview_kpi))
-        hover_value_template = _kpi_hover_value_template(active_overview_kpi)
         compare_active = bool(str(compare_label or "").strip())
         if report_cache_sig is not None:
             path_str, modified_ns, size_bytes = report_cache_sig
@@ -6148,152 +6096,25 @@ def render_exec(
                 compare_active,
             )
 
-        def _has_series_values(values: Any) -> bool:
-            return isinstance(values, list) and len(values) > 0
-
-        compare_note_html = ""
-        if compare_active:
-            if active_overview_kpi in PAID_TREND_KPI_KEYS:
-                if platform == "Google":
-                    compare_has_values = _has_series_values(payload.get("google_compare"))
-                elif platform == "Meta":
-                    compare_has_values = _has_series_values(payload.get("meta_compare"))
-                else:
-                    compare_has_values = _has_series_values(payload.get("google_compare")) or _has_series_values(
-                        payload.get("meta_compare")
-                    )
-            else:
-                compare_has_values = _has_series_values(payload.get("ga4_compare"))
-            if compare_has_values:
-                compare_note_text = f"Comparación activa · {compare_label}"
-                compare_note_class = "viz-compare-note"
-            else:
-                compare_note_text = "Comparación activa · sin datos comparativos"
-                compare_note_class = "viz-compare-note viz-compare-note-empty"
-            compare_note_html = f"<div class='{compare_note_class}'>{html.escape(compare_note_text)}</div>"
-
-        trend_subtitle = str(payload.get("trend_subtitle") or _kpi_trend_subtitle(active_overview_kpi))
-        st.markdown(
-            f"""
-            <div class="viz-card">
-              <div class="viz-head">
-                <p class="viz-title">Performance Across Platforms</p>
-                {compare_note_html}
-              </div>
-              <div class="viz-sub">{html.escape(trend_subtitle)}</div>
-            """,
-            unsafe_allow_html=True,
+        dashboard_trends.render_overview_trend_chart(
+            st_module=st,
+            payload=payload,
+            active_overview_kpi=active_overview_kpi,
+            platform=platform,
+            compare_active=compare_active,
+            compare_label=compare_label,
+            paid_trend_kpi_keys=PAID_TREND_KPI_KEYS,
+            kpi_catalog=KPI_CATALOG,
+            kpi_trend_subtitle_fn=_kpi_trend_subtitle,
+            kpi_axis_title_fn=_kpi_axis_title,
+            kpi_hover_value_template_fn=_kpi_hover_value_template,
+            pbi_layout_fn=pbi_layout,
+            html_escape_fn=html.escape,
+            c_google=C_GOOGLE,
+            c_meta=C_META,
+            c_accent=C_ACCENT,
+            c_mute=C_MUTE,
         )
-        x_values = payload.get("x_values", [])
-        if not isinstance(x_values, list) or not x_values:
-            st.info("Sin datos para el periodo seleccionado.")
-        else:
-            is_single_day = bool(payload.get("is_single_day", False))
-            x_tick_format = str(payload.get("x_tick_format", "%d %b"))
-            x_hover_format = str(payload.get("x_hover_format", "%d %b %Y"))
-            hourly_projection_note = str(payload.get("hourly_projection_note", ""))
-            fig = go.Figure()
-            traces_added = 0
-            compare_traces_added = 0
-
-            def _add_series_trace(
-                values: Any,
-                *,
-                name: str,
-                hover_label: str,
-                color: str,
-                compare_series: bool = False,
-            ) -> None:
-                nonlocal traces_added, compare_traces_added
-                if not isinstance(values, list) or not values:
-                    return
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_values,
-                        y=values,
-                        mode="lines+markers" if is_single_day else "lines",
-                        name=name,
-                        line={
-                            "color": color,
-                            "width": 2 if compare_series else 4,
-                            "dash": "dot" if compare_series else "solid",
-                            "shape": "linear",
-                        },
-                        opacity=0.75 if compare_series else 1.0,
-                        hovertemplate=f"%{{x|{x_hover_format}}}<br>{hover_label}: {hover_value_template}<extra></extra>",
-                    )
-                )
-                if compare_series:
-                    compare_traces_added += 1
-                else:
-                    traces_added += 1
-
-            if active_overview_kpi in PAID_TREND_KPI_KEYS:
-                if platform in ("All", "Google"):
-                    _add_series_trace(
-                        payload.get("google_current"),
-                        name="Google Ads",
-                        hover_label="Google",
-                        color=C_GOOGLE,
-                    )
-                    if compare_active:
-                        _add_series_trace(
-                            payload.get("google_compare"),
-                            name="Google Ads (Comparación)",
-                            hover_label="Google (comparación)",
-                            color=C_GOOGLE,
-                            compare_series=True,
-                        )
-                if platform in ("All", "Meta"):
-                    _add_series_trace(
-                        payload.get("meta_current"),
-                        name="Meta Ads",
-                        hover_label="Meta",
-                        color=C_META,
-                    )
-                    if compare_active:
-                        _add_series_trace(
-                            payload.get("meta_compare"),
-                            name="Meta Ads (Comparación)",
-                            hover_label="Meta (comparación)",
-                            color=C_META,
-                            compare_series=True,
-                        )
-            else:
-                _add_series_trace(
-                    payload.get("ga4_current"),
-                    name="GA4",
-                    hover_label=html.escape(trend_label),
-                    color=C_ACCENT,
-                )
-                if compare_active:
-                    _add_series_trace(
-                        payload.get("ga4_compare"),
-                        name="GA4 (Comparación)",
-                        hover_label=f"{html.escape(trend_label)} (comparación)",
-                        color=C_ACCENT,
-                        compare_series=True,
-                    )
-            if traces_added == 0:
-                st.info("No hay datos de tendencia para la métrica seleccionada.")
-            else:
-                pbi_layout(fig, yaxis_title=_kpi_axis_title(active_overview_kpi), xaxis_title="")
-                fig.update_layout(height=355, hovermode="x unified", showlegend=True)
-                fig.update_xaxes(tickformat=x_tick_format, tickfont={"size": 10, "color": C_MUTE})
-                if is_single_day:
-                    fig.update_xaxes(dtick=2 * 60 * 60 * 1000)
-                fig.update_yaxes(tickfont={"size": 10, "color": C_MUTE})
-                fmt = str(KPI_CATALOG.get(active_overview_kpi, {}).get("fmt", "int"))
-                if fmt == "pct":
-                    fig.update_yaxes(tickformat=".1%")
-                elif fmt == "money":
-                    fig.update_yaxes(tickprefix="$", separatethousands=True)
-                else:
-                    fig.update_yaxes(tickformat=",.0f")
-                st.plotly_chart(fig, width="stretch")
-                if hourly_projection_note:
-                    st.caption(hourly_projection_note)
-        st.markdown("</div>", unsafe_allow_html=True)
 
     def _render_funnel_and_ga4() -> None:
         if "funnel" in section_set:
