@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,11 +36,28 @@ def _trend_series_values(
             return []
         if len(numeric_series) == target_len:
             return [float(v) for v in numeric_series.tolist()]
-        if additive:
-            projected_value = float(numeric_series.sum()) / float(target_len)
-        else:
-            projected_value = float(numeric_series.mean())
-        return [projected_value] * target_len
+        source_values = [float(v) for v in numeric_series.tolist()]
+        if target_len == 1:
+            return [float(numeric_series.mean())]
+        if len(source_values) == 1:
+            return [source_values[0]] * target_len
+
+        # Rescale source series to target length preserving shape
+        # instead of collapsing into a flat average line.
+        src_last = len(source_values) - 1
+        dst_last = target_len - 1
+        resampled: list[float] = []
+        for idx in range(target_len):
+            pos = (idx / float(dst_last)) * float(src_last)
+            lo = int(math.floor(pos))
+            hi = int(math.ceil(pos))
+            if lo == hi:
+                resampled.append(source_values[lo])
+                continue
+            weight = pos - float(lo)
+            value = (source_values[lo] * (1.0 - weight)) + (source_values[hi] * weight)
+            resampled.append(float(value))
+        return resampled
     if use_hourly_real or not is_single_day:
         if numeric_series.empty:
             return []

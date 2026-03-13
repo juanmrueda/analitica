@@ -251,6 +251,11 @@ def render_top_filters(
             compare_mode_draft_key = f"{compare_mode_key}_draft"
             compare_custom_key = f"top_compare_custom_range_{tenant_id}"
             compare_custom_draft_key = f"{compare_custom_key}_draft"
+            # Avoid Streamlit-reserved suffixes (__start_input/__end_input) used by range date_input widgets.
+            range_draft_start_input_key = f"{range_draft_key}__custom_start_input"
+            range_draft_end_input_key = f"{range_draft_key}__custom_end_input"
+            compare_custom_start_input_key = f"{compare_custom_draft_key}__custom_start_input"
+            compare_custom_end_input_key = f"{compare_custom_draft_key}__custom_end_input"
             draft_restore_key = f"{range_value_key}_draft_restore"
             legacy_range_draft_start_key = f"{range_draft_key}_start"
             legacy_range_draft_end_key = f"{range_draft_key}_end"
@@ -346,27 +351,83 @@ def render_top_filters(
                 draft_preset = str(st.session_state.get(range_preset_draft_key, "custom")).strip().lower()
                 prev_preset_draft = str(st.session_state.get(range_preset_draft_last_key, "custom")).strip().lower()
                 if draft_preset != prev_preset_draft and draft_preset in date_preset_options:
-                    preset_start, preset_end = _resolve_date_preset_range(
-                        draft_preset,
-                        min_d,
-                        max_d,
-                        date_preset_all_options=date_preset_all_options,
-                    )
+                    if draft_preset == "custom":
+                        preset_start, preset_end = _normalize_date_range(
+                            st.session_state.get(range_draft_key, (start_day, end_day)),
+                            min_d,
+                            max_d,
+                        )
+                    else:
+                        preset_start, preset_end = _resolve_date_preset_range(
+                            draft_preset,
+                            min_d,
+                            max_d,
+                            date_preset_all_options=date_preset_all_options,
+                        )
                     st.session_state[range_draft_key] = (preset_start, preset_end)
+                    st.session_state[range_draft_start_input_key] = preset_start
+                    st.session_state[range_draft_end_input_key] = preset_end
                     st.session_state[range_preset_draft_last_key] = draft_preset
 
-                st.date_input(
-                    "Fecha de inicio y fin",
-                    value=st.session_state.get(range_draft_key, (start_day, end_day)),
-                    min_value=min_d,
-                    max_value=max_d,
-                    key=range_draft_key,
-                )
                 draft_start, draft_end = _normalize_date_range(
                     st.session_state.get(range_draft_key, (start_day, end_day)),
                     min_d,
                     max_d,
                 )
+                if range_draft_start_input_key not in st.session_state:
+                    st.session_state[range_draft_start_input_key] = draft_start
+                if range_draft_end_input_key not in st.session_state:
+                    st.session_state[range_draft_end_input_key] = draft_end
+                if draft_preset == "custom":
+                    range_start_col, range_end_col = st.columns(2, gap="small")
+                    with range_start_col:
+                        st.date_input(
+                            "Inicio",
+                            value=_coerce_date_value(
+                                st.session_state.get(range_draft_start_input_key, draft_start),
+                                min_d,
+                                max_d,
+                            ),
+                            min_value=min_d,
+                            max_value=max_d,
+                            key=range_draft_start_input_key,
+                        )
+                    with range_end_col:
+                        st.date_input(
+                            "Fin",
+                            value=_coerce_date_value(
+                                st.session_state.get(range_draft_end_input_key, draft_end),
+                                min_d,
+                                max_d,
+                            ),
+                            min_value=min_d,
+                            max_value=max_d,
+                            key=range_draft_end_input_key,
+                        )
+                    draft_start, draft_end = _normalize_date_range(
+                        (
+                            st.session_state.get(range_draft_start_input_key, draft_start),
+                            st.session_state.get(range_draft_end_input_key, draft_end),
+                        ),
+                        min_d,
+                        max_d,
+                    )
+                    st.session_state[range_draft_key] = (draft_start, draft_end)
+                else:
+                    st.date_input(
+                        "Fecha de inicio y fin",
+                        value=(draft_start, draft_end),
+                        min_value=min_d,
+                        max_value=max_d,
+                        key=range_draft_key,
+                    )
+                    draft_start, draft_end = _normalize_date_range(
+                        st.session_state.get(range_draft_key, (draft_start, draft_end)),
+                        min_d,
+                        max_d,
+                    )
+                    st.session_state[range_draft_start_input_key] = draft_start
+                    st.session_state[range_draft_end_input_key] = draft_end
 
                 st.divider()
                 st.toggle(
@@ -383,18 +444,57 @@ def render_top_filters(
                         key=compare_mode_draft_key,
                     )
                     if str(st.session_state.get(compare_mode_draft_key, "previous_period")) == "custom":
-                        st.date_input(
-                            "Rango comparativo",
-                            value=st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
-                            min_value=min_d,
-                            max_value=max_d,
-                            key=compare_custom_draft_key,
-                        )
                         compare_draft_start, compare_draft_end = _normalize_date_range(
                             st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
                             min_d,
                             max_d,
                         )
+                        if compare_custom_start_input_key not in st.session_state:
+                            st.session_state[compare_custom_start_input_key] = compare_draft_start
+                        if compare_custom_end_input_key not in st.session_state:
+                            st.session_state[compare_custom_end_input_key] = compare_draft_end
+                        compare_start_col, compare_end_col = st.columns(2, gap="small")
+                        with compare_start_col:
+                            st.date_input(
+                                "Inicio comparativo",
+                                value=_coerce_date_value(
+                                    st.session_state.get(compare_custom_start_input_key, compare_draft_start),
+                                    min_d,
+                                    max_d,
+                                ),
+                                min_value=min_d,
+                                max_value=max_d,
+                                key=compare_custom_start_input_key,
+                            )
+                        with compare_end_col:
+                            st.date_input(
+                                "Fin comparativo",
+                                value=_coerce_date_value(
+                                    st.session_state.get(compare_custom_end_input_key, compare_draft_end),
+                                    min_d,
+                                    max_d,
+                                ),
+                                min_value=min_d,
+                                max_value=max_d,
+                                key=compare_custom_end_input_key,
+                            )
+                        compare_draft_start, compare_draft_end = _normalize_date_range(
+                            (
+                                st.session_state.get(compare_custom_start_input_key, compare_draft_start),
+                                st.session_state.get(compare_custom_end_input_key, compare_draft_end),
+                            ),
+                            min_d,
+                            max_d,
+                        )
+                        st.session_state[compare_custom_draft_key] = (compare_draft_start, compare_draft_end)
+                    else:
+                        compare_draft_start, compare_draft_end = _normalize_date_range(
+                            st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
+                            min_d,
+                            max_d,
+                        )
+                        st.session_state[compare_custom_start_input_key] = compare_draft_start
+                        st.session_state[compare_custom_end_input_key] = compare_draft_end
 
                 if st.button("Aplicar", key=f"top_range_apply_{tenant_id}", width="stretch", type="primary"):
                     applied_start, applied_end = _normalize_date_range(
