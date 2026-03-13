@@ -1,0 +1,128 @@
+{
+  "ok": true,
+  "report_path": "G:\\Mi unidad\\CO\\IA\\MCP Juan\\tests\\fixtures\\benchmark_historical.json",
+  "iterations": 2,
+  "checks": [
+    {
+      "metric": "parquet.cold_total_ms",
+      "value": 90.12870001606643,
+      "limit": 400.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.warm_total_avg_ms",
+      "value": 11.45299997733673,
+      "limit": 80.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.warm_total_p95_ms",
+      "value": 12.279699949431233,
+      "limit": 120.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.daily",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.hourly",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.campaign_unified",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.piece_enriched",
+      "value": 1.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.cold_total_ms",
+      "value": 68.46470004529692,
+      "limit": 500.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.warm_total_avg_ms",
+      "value": 11.150399972393643,
+      "limit": 100.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.warm_total_p95_ms",
+      "value": 12.0298999681836,
+      "limit": 150.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.daily",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.hourly",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.campaign_unified",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.piece_enriched",
+      "value": 1.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "profile.overview.main:overview:render_page.avg",
+      "value": 57.36407999647781,
+      "limit": 150.0,
+      "ok": true
+    },
+    {
+      "metric": "profile.overview.main:overview:render_page.p95",
+      "value": 62.46269999246579,
+      "limit": 250.0,
+      "ok": true
+    },
+    {
+      "metric": "profile.overview.render_exec:section:trend_chart.avg",
+      "value": 20.24876000068616,
+      "limit": 90.0,
+      "ok": true
+    },
+    {
+      "metric": "profile.overview.render_exec:section:trend_chart.p95",
+      "value": 21.736900001997128,
+      "limit": 150.0,
+      "ok": true
+    },
+    {
+      "metric": "profile.traffic.main:traffic:render_page.avg",
+      "value": 28.515800001332536,
+      "limit": 120.0,
+      "ok": true
+    },
+    {
+      "metric": "profile.traffic.main:traffic:render_page.p95",
+      "value": 31.45809999841731,
+      "limit": 180.0,
+      "ok": true
+    }
+  ],
+  "failed": []
+}

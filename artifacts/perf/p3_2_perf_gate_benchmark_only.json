@@ -1,0 +1,92 @@
+{
+  "ok": true,
+  "report_path": "G:\\Mi unidad\\CO\\IA\\MCP Juan\\tests\\fixtures\\benchmark_historical.json",
+  "iterations": 2,
+  "checks": [
+    {
+      "metric": "parquet.cold_total_ms",
+      "value": 121.6796999797225,
+      "limit": 400.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.warm_total_avg_ms",
+      "value": 23.233350009832066,
+      "limit": 80.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.warm_total_p95_ms",
+      "value": 24.027500010561198,
+      "limit": 120.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.daily",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.hourly",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.campaign_unified",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "parquet.rows.piece_enriched",
+      "value": 1.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.cold_total_ms",
+      "value": 94.28369998931885,
+      "limit": 500.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.warm_total_avg_ms",
+      "value": 15.69950000703102,
+      "limit": 100.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.warm_total_p95_ms",
+      "value": 17.167799989692867,
+      "limit": 150.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.daily",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.hourly",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.campaign_unified",
+      "value": 2.0,
+      "limit": 1.0,
+      "ok": true
+    },
+    {
+      "metric": "json-fallback.rows.piece_enriched",
+      "value": 1.0,
+      "limit": 1.0,
+      "ok": true
+    }
+  ],
+  "failed": []
+}

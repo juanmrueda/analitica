@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run test suite
+        run: |
+          python -m pytest -q
+
+      - name: Dashboard benchmark smoke
+        run: |
+          python scripts/benchmark_dashboard_loaders.py --report-path tests/fixtures/benchmark_historical.json --iterations 1 --mode compare
+
+      - name: Performance regression gate
+        run: |
+          python scripts/perf_regression_gate.py --report-path tests/fixtures/benchmark_historical.json --iterations 2
