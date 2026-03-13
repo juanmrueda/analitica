@@ -710,32 +710,29 @@ def apply_theme() -> None:
             min-width: min(500px, calc(100vw - 1.2rem)) !important;
             max-width: min(500px, calc(100vw - 1.2rem)) !important;
             min-height: 0 !important;
-            max-height: calc(100vh - 0.4rem) !important;
+            max-height: none !important;
             display: flex !important;
             flex-direction: column !important;
-            overflow: hidden !important;
+            overflow: visible !important;
           }
           [data-baseweb="popover"] [data-testid="stPopoverBody"] {
             flex: 1 1 auto !important;
             max-height: none !important;
-            overflow-y: auto !important;
-            overflow-x: hidden !important;
-            scrollbar-gutter: stable both-edges !important;
+            overflow: visible !important;
             padding-right: 0.18rem !important;
-            padding-bottom: 0.3rem !important;
+            padding-bottom: 0.2rem !important;
           }
           [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] {
-            position: sticky !important;
-            bottom: 0 !important;
-            padding-top: 0.5rem !important;
-            padding-bottom: 0.22rem !important;
+            position: static !important;
+            padding-top: 0.52rem !important;
+            padding-bottom: 0 !important;
             margin-top: 0.55rem !important;
             margin-bottom: 0 !important;
-            background: linear-gradient(180deg, rgba(243,245,249,0) 0%, rgba(243,245,249,0.95) 22%, rgba(243,245,249,1) 100%) !important;
-            z-index: 6 !important;
+            background: transparent !important;
+            z-index: auto !important;
           }
           [data-baseweb="popover"] div[class*="st-key-top_compare_custom_range_"] {
-            margin-bottom: 4.4rem !important;
+            margin-bottom: 0.9rem !important;
           }
           [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] [data-testid="stButton"] {
             margin-bottom: 0 !important;
@@ -1149,19 +1146,19 @@ def apply_theme() -> None:
               min-width: min(440px, calc(100vw - 0.8rem)) !important;
               max-width: min(440px, calc(100vw - 0.8rem)) !important;
               min-height: 0 !important;
-              max-height: calc(100vh - 0.45rem) !important;
+              max-height: none !important;
             }
             [data-baseweb="popover"] [data-testid="stPopoverBody"] {
               max-height: none !important;
-              padding-bottom: 0.24rem !important;
+              overflow: visible !important;
+              padding-bottom: 0.12rem !important;
             }
             [data-baseweb="popover"] div[class*="st-key-top_range_apply_"] {
-              position: sticky !important;
-              bottom: 0 !important;
-              padding-bottom: 0.16rem !important;
+              position: static !important;
+              padding-bottom: 0 !important;
             }
             [data-baseweb="popover"] div[class*="st-key-top_compare_custom_range_"] {
-              margin-bottom: 4rem !important;
+              margin-bottom: 0.75rem !important;
             }
             .filter-chip-row {
               margin-bottom: 0.32rem;
