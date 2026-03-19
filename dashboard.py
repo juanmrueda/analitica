@@ -47,6 +47,7 @@ COCO_CHAT_STATE_PATH = BASE_DIR / "config" / "coco_chat_state.json"
 TENANT_LOGOS_DIR = BASE_DIR / "assets" / "logos"
 DEFAULT_TENANT_ID = "yap"
 LOGO_PATH = BASE_DIR / "assets" / "logo-ipalmera-growth-marketing.webp"
+FAVICON_PATH = BASE_DIR / "assets" / "login.png"
 LOGO_PLACEHOLDER = "https://via.placeholder.com/260x80/F8FAFC/0F172A?text=iPalmera+Logo"
 TENANT_LOGO_UPLOAD_WIDTH_PX = 520
 TENANT_LOGO_UPLOAD_HEIGHT_PX = 160
@@ -140,6 +141,7 @@ DEFAULT_OVERVIEW_SECTION_KEYS = [
     "kpis",
     "trend_chart",
     "media_mix",
+    "campaigns",
     "lead_demographics",
     "lead_geo_map",
     "funnel",
@@ -149,13 +151,14 @@ DEFAULT_OVERVIEW_SECTION_KEYS = [
     "top_pieces",
     "daily_fact",
 ]
-DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "top_pages", "campaigns"]
+DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "top_pages"]
 DEFAULT_CAMPAIGN_FILTER_KEYS: list[str] = []
 
 OVERVIEW_SECTION_OPTIONS: dict[str, str] = {
     "kpis": "Tarjetas KPI",
     "trend_chart": "Gráfica Performance",
     "media_mix": "Mix y Eficiencia Paid",
+    "campaigns": "Rendimiento de Campanas (Paid Media)",
     "lead_demographics": "Distribución Leads Paid: Edad y Género",
     "lead_geo_map": "Distribución Leads Paid: Mapa",
     "funnel": "Embudo de Conversión",
@@ -169,7 +172,6 @@ TRAFFIC_SECTION_OPTIONS: dict[str, str] = {
     "kpis": "Tarjetas KPI",
     "channels": "Canales / Adquisición",
     "top_pages": "Páginas Más Visitadas",
-    "campaigns": "Rendimiento de Campañas",
 }
 CAMPAIGN_FILTER_OPTIONS: dict[str, str] = {
     "advertising_channel_type": "Google: Channel Type",
@@ -2523,13 +2525,7 @@ def _prewarm_cross_view_caches(
                     selected_platform,
                     filter_key,
                 )
-        else:
-            traffic_set = set(_normalize_section_keys(traffic_sections, TRAFFIC_SECTION_OPTIONS, DEFAULT_TRAFFIC_SECTION_KEYS))
-            if "channels" in traffic_set:
-                _cached_channels_roll_from_report(path_str, modified_ns, size_bytes, start_iso, end_iso)
-            if "top_pages" in traffic_set:
-                _cached_top_pages_roll_from_report(path_str, modified_ns, size_bytes, start_iso, end_iso)
-            if "campaigns" in traffic_set:
+            if "campaigns" in overview_set:
                 _cached_campaign_roll_from_report(
                     path_str,
                     modified_ns,
@@ -2539,6 +2535,12 @@ def _prewarm_cross_view_caches(
                     selected_platform,
                     filter_key,
                 )
+        else:
+            traffic_set = set(_normalize_section_keys(traffic_sections, TRAFFIC_SECTION_OPTIONS, DEFAULT_TRAFFIC_SECTION_KEYS))
+            if "channels" in traffic_set:
+                _cached_channels_roll_from_report(path_str, modified_ns, size_bytes, start_iso, end_iso)
+            if "top_pages" in traffic_set:
+                _cached_top_pages_roll_from_report(path_str, modified_ns, size_bytes, start_iso, end_iso)
     except Exception:
         return
 
@@ -4165,6 +4167,7 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
         "traffic_kpis": list(DEFAULT_TRAFFIC_KPI_KEYS),
         "overview_sections": list(DEFAULT_OVERVIEW_SECTION_KEYS),
         "traffic_sections": list(DEFAULT_TRAFFIC_SECTION_KEYS),
+        "show_daily_fact": True,
         "campaign_filters": list(DEFAULT_CAMPAIGN_FILTER_KEYS),
         "enabled_view_modes": list(VIEW_MODE_OPTIONS),
         "default_platform": "All",
@@ -4179,6 +4182,7 @@ def default_dashboard_settings(tenants: dict[str, dict[str, Any]]) -> dict[str, 
             "traffic_kpis": list(DEFAULT_TRAFFIC_KPI_KEYS),
             "overview_sections": list(DEFAULT_OVERVIEW_SECTION_KEYS),
             "traffic_sections": list(DEFAULT_TRAFFIC_SECTION_KEYS),
+            "show_daily_fact": True,
             "campaign_filters": list(DEFAULT_CAMPAIGN_FILTER_KEYS),
             "enabled_view_modes": list(VIEW_MODE_OPTIONS),
             "default_platform": "All",
@@ -4212,6 +4216,16 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
     if not isinstance(payload, dict):
         return base
     raw_defaults = payload.get("defaults", {}) if isinstance(payload, dict) else {}
+    defaults_overview_sections = _normalize_section_keys(
+        raw_defaults.get("overview_sections", base["defaults"]["overview_sections"]),
+        OVERVIEW_SECTION_OPTIONS,
+        base["defaults"]["overview_sections"],
+    )
+    defaults_traffic_sections = _normalize_section_keys(
+        raw_defaults.get("traffic_sections", base["defaults"]["traffic_sections"]),
+        TRAFFIC_SECTION_OPTIONS,
+        base["defaults"]["traffic_sections"],
+    )
     defaults = {
         "overview_kpis": _normalize_kpi_keys(
             raw_defaults.get("overview_kpis", base["defaults"]["overview_kpis"]),
@@ -4221,15 +4235,11 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
             raw_defaults.get("traffic_kpis", base["defaults"]["traffic_kpis"]),
             base["defaults"]["traffic_kpis"],
         ),
-        "overview_sections": _normalize_section_keys(
-            raw_defaults.get("overview_sections", base["defaults"]["overview_sections"]),
-            OVERVIEW_SECTION_OPTIONS,
-            base["defaults"]["overview_sections"],
-        ),
-        "traffic_sections": _normalize_section_keys(
-            raw_defaults.get("traffic_sections", base["defaults"]["traffic_sections"]),
-            TRAFFIC_SECTION_OPTIONS,
-            base["defaults"]["traffic_sections"],
+        "overview_sections": defaults_overview_sections,
+        "traffic_sections": defaults_traffic_sections,
+        "show_daily_fact": _coerce_bool(
+            raw_defaults.get("show_daily_fact"),
+            "daily_fact" in defaults_overview_sections,
         ),
         "campaign_filters": _normalize_campaign_filter_keys(
             raw_defaults.get("campaign_filters", base["defaults"]["campaign_filters"]),
@@ -4261,6 +4271,16 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
         raw_cfg = raw_tenants.get(tenant_id, {})
         if not isinstance(raw_cfg, dict):
             raw_cfg = {}
+        tenant_overview_sections = _normalize_section_keys(
+            raw_cfg.get("overview_sections", defaults["overview_sections"]),
+            OVERVIEW_SECTION_OPTIONS,
+            defaults["overview_sections"],
+        )
+        tenant_traffic_sections = _normalize_section_keys(
+            raw_cfg.get("traffic_sections", defaults["traffic_sections"]),
+            TRAFFIC_SECTION_OPTIONS,
+            defaults["traffic_sections"],
+        )
         tenant_cfg[tenant_id] = {
             "overview_kpis": _normalize_kpi_keys(
                 raw_cfg.get("overview_kpis", defaults["overview_kpis"]),
@@ -4270,15 +4290,11 @@ def load_dashboard_settings(path: Path, tenants: dict[str, dict[str, Any]]) -> d
                 raw_cfg.get("traffic_kpis", defaults["traffic_kpis"]),
                 defaults["traffic_kpis"],
             ),
-            "overview_sections": _normalize_section_keys(
-                raw_cfg.get("overview_sections", defaults["overview_sections"]),
-                OVERVIEW_SECTION_OPTIONS,
-                defaults["overview_sections"],
-            ),
-            "traffic_sections": _normalize_section_keys(
-                raw_cfg.get("traffic_sections", defaults["traffic_sections"]),
-                TRAFFIC_SECTION_OPTIONS,
-                defaults["traffic_sections"],
+            "overview_sections": tenant_overview_sections,
+            "traffic_sections": tenant_traffic_sections,
+            "show_daily_fact": _coerce_bool(
+                raw_cfg.get("show_daily_fact"),
+                _coerce_bool(defaults.get("show_daily_fact"), "daily_fact" in tenant_overview_sections),
             ),
             "campaign_filters": _normalize_campaign_filter_keys(
                 raw_cfg.get("campaign_filters", defaults["campaign_filters"]),
@@ -4309,6 +4325,16 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
     try:
         normalized = load_dashboard_settings(path, tenants) if path.exists() else default_dashboard_settings(tenants)
         incoming_defaults = settings.get("defaults", {}) if isinstance(settings, dict) else {}
+        incoming_defaults_overview_sections = _normalize_section_keys(
+            incoming_defaults.get("overview_sections", normalized["defaults"]["overview_sections"]),
+            OVERVIEW_SECTION_OPTIONS,
+            DEFAULT_OVERVIEW_SECTION_KEYS,
+        )
+        incoming_defaults_traffic_sections = _normalize_section_keys(
+            incoming_defaults.get("traffic_sections", normalized["defaults"]["traffic_sections"]),
+            TRAFFIC_SECTION_OPTIONS,
+            DEFAULT_TRAFFIC_SECTION_KEYS,
+        )
         normalized["defaults"] = {
             "overview_kpis": _normalize_kpi_keys(
                 incoming_defaults.get("overview_kpis", normalized["defaults"]["overview_kpis"]),
@@ -4318,15 +4344,11 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                 incoming_defaults.get("traffic_kpis", normalized["defaults"]["traffic_kpis"]),
                 DEFAULT_TRAFFIC_KPI_KEYS,
             ),
-            "overview_sections": _normalize_section_keys(
-                incoming_defaults.get("overview_sections", normalized["defaults"]["overview_sections"]),
-                OVERVIEW_SECTION_OPTIONS,
-                DEFAULT_OVERVIEW_SECTION_KEYS,
-            ),
-            "traffic_sections": _normalize_section_keys(
-                incoming_defaults.get("traffic_sections", normalized["defaults"]["traffic_sections"]),
-                TRAFFIC_SECTION_OPTIONS,
-                DEFAULT_TRAFFIC_SECTION_KEYS,
+            "overview_sections": incoming_defaults_overview_sections,
+            "traffic_sections": incoming_defaults_traffic_sections,
+            "show_daily_fact": _coerce_bool(
+                incoming_defaults.get("show_daily_fact"),
+                "daily_fact" in incoming_defaults_overview_sections,
             ),
             "campaign_filters": _normalize_campaign_filter_keys(
                 incoming_defaults.get("campaign_filters", normalized["defaults"].get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS)),
@@ -4363,6 +4385,16 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
             existing_tenant_cfg = normalized.get("tenants", {}).get(tenant_id, {})
             if not isinstance(existing_tenant_cfg, dict):
                 existing_tenant_cfg = {}
+            tenant_overview_sections = _normalize_section_keys(
+                raw_cfg.get("overview_sections", normalized["defaults"]["overview_sections"]),
+                OVERVIEW_SECTION_OPTIONS,
+                normalized["defaults"]["overview_sections"],
+            )
+            tenant_traffic_sections = _normalize_section_keys(
+                raw_cfg.get("traffic_sections", normalized["defaults"]["traffic_sections"]),
+                TRAFFIC_SECTION_OPTIONS,
+                normalized["defaults"]["traffic_sections"],
+            )
             tenant_cfg[tenant_id] = {
                 "overview_kpis": _normalize_kpi_keys(
                     raw_cfg.get("overview_kpis", normalized["defaults"]["overview_kpis"]),
@@ -4372,15 +4404,11 @@ def save_dashboard_settings(path: Path, settings: dict[str, Any], tenants: dict[
                     raw_cfg.get("traffic_kpis", normalized["defaults"]["traffic_kpis"]),
                     normalized["defaults"]["traffic_kpis"],
                 ),
-                "overview_sections": _normalize_section_keys(
-                    raw_cfg.get("overview_sections", normalized["defaults"]["overview_sections"]),
-                    OVERVIEW_SECTION_OPTIONS,
-                    normalized["defaults"]["overview_sections"],
-                ),
-                "traffic_sections": _normalize_section_keys(
-                    raw_cfg.get("traffic_sections", normalized["defaults"]["traffic_sections"]),
-                    TRAFFIC_SECTION_OPTIONS,
-                    normalized["defaults"]["traffic_sections"],
+                "overview_sections": tenant_overview_sections,
+                "traffic_sections": tenant_traffic_sections,
+                "show_daily_fact": _coerce_bool(
+                    raw_cfg.get("show_daily_fact"),
+                    _coerce_bool(normalized["defaults"].get("show_daily_fact"), "daily_fact" in tenant_overview_sections),
                 ),
                 "campaign_filters": _normalize_campaign_filter_keys(
                     raw_cfg.get("campaign_filters", normalized["defaults"].get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS)),
@@ -4469,6 +4497,10 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         defaults.get("theme_colors", DEFAULT_THEME_COLORS),
         DEFAULT_THEME_COLORS,
     )
+    defaults_show_daily_fact = _coerce_bool(
+        defaults.get("show_daily_fact"),
+        "daily_fact" in defaults_overview_sections,
+    )
     enabled_view_modes = _normalize_view_mode_keys(
         raw_cfg.get("enabled_view_modes", defaults_enabled_view_modes),
         defaults_enabled_view_modes,
@@ -4500,6 +4532,10 @@ def tenant_dashboard_settings(settings: dict[str, Any], tenant_id: str) -> dict[
         "campaign_filters": _normalize_campaign_filter_keys(
             raw_cfg.get("campaign_filters", defaults_campaign_filters),
             defaults_campaign_filters,
+        ),
+        "show_daily_fact": _coerce_bool(
+            raw_cfg.get("show_daily_fact"),
+            defaults_show_daily_fact,
         ),
         "enabled_view_modes": enabled_view_modes,
         "default_platform": _normalize_platform_option(raw_cfg.get("default_platform", defaults.get("default_platform", "All"))),
@@ -6332,6 +6368,14 @@ def render_exec(
             )
 
     c = metric_cols(platform)
+    cache_path_str = ""
+    cache_modified_ns = 0
+    cache_size_bytes = 0
+    if report_cache_sig is not None:
+        cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
+    start_iso = s.isoformat()
+    end_iso = e.isoformat()
+    campaign_filter_key = _campaign_filters_cache_key(campaign_filters)
 
     def _render_trend_chart() -> None:
         compare_active = bool(str(compare_label or "").strip())
@@ -6520,6 +6564,80 @@ def render_exec(
                 c_mute=C_MUTE,
             )
 
+    if "campaigns" in section_set:
+        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+        with _profile_span(profiler, "render_exec:section:campaigns"):
+            section_title("Rendimiento de Campanas (Paid Media)")
+            if report_cache_sig is not None:
+                roll = _cached_campaign_roll_from_report(
+                    cache_path_str,
+                    cache_modified_ns,
+                    cache_size_bytes,
+                    start_iso,
+                    end_iso,
+                    platform,
+                    campaign_filter_key,
+                ).head(20)
+                if roll.empty:
+                    st.info("Sin datos de campanas para filtros actuales.")
+                else:
+                    if campaign_filters:
+                        active_labels = [
+                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                            for k, v in campaign_filters.items()
+                            if str(v).strip()
+                        ]
+                        if active_labels:
+                            st.caption(" | ".join(active_labels))
+                    st.dataframe(roll, width="stretch", hide_index=True)
+            elif camp_df.empty:
+                st.info("No hay datos de campanas en JSON.")
+            else:
+                cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
+                if platform in ("Google", "Meta"):
+                    cp = cp[cp["platform"] == platform]
+                cp = _apply_campaign_filters(cp, campaign_filters)
+                required_defaults: dict[str, Any] = {
+                    "platform": "",
+                    "campaign_id": "",
+                    "campaign_name": "",
+                    "spend": 0.0,
+                    "impressions": 0.0,
+                    "clicks": 0.0,
+                    "conversions": 0.0,
+                    "ctr": 0.0,
+                    "cpc": 0.0,
+                    "reach": 0.0,
+                    "frequency": 0.0,
+                }
+                for col, default in required_defaults.items():
+                    if col not in cp.columns:
+                        cp[col] = default
+                if cp.empty:
+                    st.info("Sin datos de campanas para filtros actuales.")
+                else:
+                    agg_map: dict[str, tuple[str, str]] = {
+                        "spend": ("spend", "sum"),
+                        "impressions": ("impressions", "sum"),
+                        "clicks": ("clicks", "sum"),
+                        "conversions": ("conversions", "sum"),
+                        "ctr": ("ctr", "mean"),
+                        "cpc": ("cpc", "mean"),
+                        "reach": ("reach", "max"),
+                        "frequency": ("frequency", "mean"),
+                    }
+                    roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(**agg_map).sort_values("spend", ascending=False)
+                    roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
+                    if campaign_filters:
+                        active_labels = [
+                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                            for k, v in campaign_filters.items()
+                            if str(v).strip()
+                        ]
+                        if active_labels:
+                            st.caption(" | ".join(active_labels))
+                    st.dataframe(roll.head(20), width="stretch", hide_index=True)
+
     if "audit_table" in section_set:
         with _profile_span(profiler, "render_exec:section:audit_table"):
             dashboard_overview_sections.render_audit_table(
@@ -6584,11 +6702,9 @@ def render_traffic(
     df_prev,
     ch_df,
     pg_df,
-    camp_df,
     platform,
     s,
     e,
-    campaign_filters: dict[str, str],
     traffic_kpi_keys: list[str],
     traffic_section_keys: list[str],
     report_cache_sig: tuple[str, int, int] | None = None,
@@ -6615,7 +6731,6 @@ def render_traffic(
         cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
     start_iso = s.isoformat()
     end_iso = e.isoformat()
-    campaign_filter_key = _campaign_filters_cache_key(campaign_filters)
 
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
@@ -6717,80 +6832,6 @@ def render_traffic(
     elif show_top_pages:
         with _profile_span(profiler, "render_traffic:section:top_pages"):
             _render_top_pages()
-
-    if "campaigns" in section_set:
-        with _profile_span(profiler, "render_traffic:section:campaigns"):
-            section_title("Rendimiento de Campanas (Paid Media)")
-            if report_cache_sig is not None:
-                roll = _cached_campaign_roll_from_report(
-                    cache_path_str,
-                    cache_modified_ns,
-                    cache_size_bytes,
-                    start_iso,
-                    end_iso,
-                    platform,
-                    campaign_filter_key,
-                ).head(20)
-                if roll.empty:
-                    st.info("Sin datos de campanas para filtros actuales.")
-                else:
-                    if campaign_filters:
-                        active_labels = [
-                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
-                            for k, v in campaign_filters.items()
-                            if str(v).strip()
-                        ]
-                        if active_labels:
-                            st.caption(" | ".join(active_labels))
-                    st.dataframe(roll, width="stretch", hide_index=True)
-            elif camp_df.empty:
-                st.info("No hay datos de campanas en JSON.")
-            else:
-                cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
-                if platform in ("Google", "Meta"):
-                    cp = cp[cp["platform"] == platform]
-                cp = _apply_campaign_filters(cp, campaign_filters)
-                required_defaults: dict[str, Any] = {
-                    "platform": "",
-                    "campaign_id": "",
-                    "campaign_name": "",
-                    "spend": 0.0,
-                    "impressions": 0.0,
-                    "clicks": 0.0,
-                    "conversions": 0.0,
-                    "ctr": 0.0,
-                    "cpc": 0.0,
-                    "reach": 0.0,
-                    "frequency": 0.0,
-                }
-                for col, default in required_defaults.items():
-                    if col not in cp.columns:
-                        cp[col] = default
-                if cp.empty:
-                    st.info("Sin datos de campanas para filtros actuales.")
-                else:
-                    agg_map: dict[str, tuple[str, str]] = {
-                        "spend": ("spend", "sum"),
-                        "impressions": ("impressions", "sum"),
-                        "clicks": ("clicks", "sum"),
-                        "conversions": ("conversions", "sum"),
-                        "ctr": ("ctr", "mean"),
-                        "cpc": ("cpc", "mean"),
-                        "reach": ("reach", "max"),
-                        "frequency": ("frequency", "mean"),
-                    }
-                    roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(**agg_map).sort_values("spend", ascending=False)
-                    roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
-                    if campaign_filters:
-                        active_labels = [
-                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
-                            for k, v in campaign_filters.items()
-                            if str(v).strip()
-                        ]
-                        if active_labels:
-                            st.caption(" | ".join(active_labels))
-                    st.dataframe(roll.head(20), width="stretch", hide_index=True)
-
 
 def _render_admin_user_create_panel(
     users: dict[str, dict[str, Any]],
@@ -9351,6 +9392,10 @@ def render_admin_panel(
             base_cfg.get("campaign_filters", DEFAULT_CAMPAIGN_FILTER_KEYS),
             DEFAULT_CAMPAIGN_FILTER_KEYS,
         )
+        show_daily_fact_default = _coerce_bool(
+            base_cfg.get("show_daily_fact"),
+            "daily_fact" in overview_sections_defaults,
+        )
         enabled_view_modes_defaults = _normalize_view_mode_keys(
             base_cfg.get("enabled_view_modes", list(VIEW_MODE_OPTIONS)),
             list(VIEW_MODE_OPTIONS),
@@ -9406,6 +9451,12 @@ def render_admin_panel(
             format_func=lambda k: str(CAMPAIGN_FILTER_OPTIONS.get(k, k)),
             key=f"adm_dash_campaign_filters_{target_scope}",
             help="Se mostrarán automáticamente solo cuando exista data para ese filtro en el tenant.",
+        )
+        show_daily_fact_selected = st.toggle(
+            "Mostrar recomendacion IA de Performance",
+            value=show_daily_fact_default,
+            key=f"adm_dash_show_daily_fact_{target_scope}",
+            help="Controla la tarjeta Insight Diario al inicio del Overview para este scope.",
         )
         enabled_view_modes_selected = st.multiselect(
             "Vistas habilitadas en menú lateral",
@@ -9520,6 +9571,7 @@ def render_admin_panel(
                 campaign_filters_selected,
                 DEFAULT_CAMPAIGN_FILTER_KEYS,
             )
+            show_daily_fact_norm = bool(show_daily_fact_selected)
             enabled_view_modes_norm = _normalize_view_mode_keys(
                 enabled_view_modes_selected,
                 list(VIEW_MODE_OPTIONS),
@@ -9566,6 +9618,7 @@ def render_admin_panel(
                     "overview_sections": overview_sections_norm,
                     "traffic_sections": traffic_sections_norm,
                     "campaign_filters": campaign_filters_norm,
+                    "show_daily_fact": show_daily_fact_norm,
                     "enabled_view_modes": enabled_view_modes_norm,
                     "default_platform": _normalize_platform_option(selected_platform),
                     "default_view_mode": selected_view_mode_norm,
@@ -9594,6 +9647,7 @@ def render_admin_panel(
                             "overview_sections": overview_sections_norm,
                             "traffic_sections": traffic_sections_norm,
                             "campaign_filters": campaign_filters_norm,
+                            "show_daily_fact": show_daily_fact_norm,
                             "enabled_view_modes": enabled_view_modes_norm,
                             "default_platform": _normalize_platform_option(selected_platform),
                             "default_view_mode": selected_view_mode_norm,
@@ -9683,8 +9737,10 @@ def render_admin_panel(
 
 
 def main() -> None:
+    favicon = str(FAVICON_PATH) if FAVICON_PATH.exists() else (str(LOGO_PATH) if LOGO_PATH.exists() else None)
     st.set_page_config(
         page_title="iPalmera IA Analítica",
+        page_icon=favicon,
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -9868,7 +9924,6 @@ def main() -> None:
         traffic_section_set = set(traffic_sections)
         _needs_channels = "channels" in traffic_section_set
         _needs_top_pages = "top_pages" in traffic_section_set
-        _needs_campaigns = "campaigns" in traffic_section_set
         needs_campaign_data = bool(coco_enabled_for_tenant)
         needs_piece_data = bool(coco_enabled_for_tenant)
         with _profile_span(profiler, "main:traffic:load_datasets"):
@@ -9902,11 +9957,9 @@ def main() -> None:
                 df_prev,
                 ch,
                 pg,
-                camp_all,
                 platform,
                 s,
                 e,
-                campaign_filters,
                 _normalize_kpi_keys(
                     tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
                     DEFAULT_TRAFFIC_KPI_KEYS,
@@ -9917,12 +9970,17 @@ def main() -> None:
             )
     else:
         overview_section_set = set(overview_sections)
+        show_daily_fact = _coerce_bool(
+            tenant_dash_cfg.get("show_daily_fact"),
+            "daily_fact" in overview_section_set,
+        )
         has_report_cache = report_cache_sig is not None
         needs_top_pieces_source = bool("top_pieces" in overview_section_set and not has_report_cache)
+        needs_campaigns_source = bool("campaigns" in overview_section_set and not has_report_cache)
         # With report cache enabled, trend payload loads hourly data lazily only when needed.
         needs_trend_hourly = bool("trend_chart" in overview_section_set and not has_report_cache)
         needs_piece_data = bool(coco_enabled_for_tenant or needs_top_pieces_source)
-        needs_campaign_data = bool(coco_enabled_for_tenant or needs_top_pieces_source)
+        needs_campaign_data = bool(coco_enabled_for_tenant or needs_top_pieces_source or needs_campaigns_source)
         needs_ga4_event = "ga4_conversion" in overview_section_set
         needs_paid_device = "device_breakdown" in overview_section_set
         needs_lead_demo = "lead_demographics" in overview_section_set
@@ -9960,7 +10018,7 @@ def main() -> None:
                 auth_user=auth_user,
                 coco_cfg=coco_cfg,
             )
-        if "daily_fact" in set(overview_sections):
+        if show_daily_fact and "daily_fact" in overview_section_set:
             with _profile_span(profiler, "main:overview:section:daily_fact"):
                 render_daily_fact(df_sel, platform)
         with _profile_span(profiler, "main:overview:render_page"):
@@ -10015,6 +10073,3 @@ def main() -> None:
     )
 if __name__ == "__main__":
     main()
-
-
-

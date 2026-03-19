@@ -257,6 +257,7 @@ def render_top_filters(
             compare_custom_start_input_key = f"{compare_custom_draft_key}__custom_start_input"
             compare_custom_end_input_key = f"{compare_custom_draft_key}__custom_end_input"
             draft_restore_key = f"{range_value_key}_draft_restore"
+            range_popover_mount_version_key = f"{range_value_key}_popover_mount_version"
             legacy_range_draft_start_key = f"{range_draft_key}_start"
             legacy_range_draft_end_key = f"{range_draft_key}_end"
             legacy_compare_draft_start_key = f"{compare_custom_draft_key}_start"
@@ -271,6 +272,8 @@ def render_top_filters(
                 st.session_state[compare_enabled_key] = False
             if st.session_state.get(compare_mode_key) not in compare_mode_options:
                 st.session_state[compare_mode_key] = "previous_period"
+            if range_popover_mount_version_key not in st.session_state:
+                st.session_state[range_popover_mount_version_key] = 0
 
             start_day, end_day = _normalize_date_range(
                 st.session_state.get(range_value_key, (default_start, default_end)),
@@ -333,42 +336,21 @@ def render_top_filters(
                 st.session_state[range_preset_draft_key] = restored_preset
                 st.session_state[range_draft_key] = restored_range
                 st.session_state[range_preset_draft_last_key] = restored_preset
+                st.session_state[range_draft_start_input_key] = restored_range[0]
+                st.session_state[range_draft_end_input_key] = restored_range[1]
                 st.session_state[compare_enabled_draft_key] = restored_compare_enabled
                 st.session_state[compare_mode_draft_key] = restored_compare_mode
                 st.session_state[compare_custom_draft_key] = restored_compare_custom
+                st.session_state[compare_custom_start_input_key] = restored_compare_custom[0]
+                st.session_state[compare_custom_end_input_key] = restored_compare_custom[1]
 
             range_display_label = f"{start_day.strftime('%Y/%m/%d')} - {end_day.strftime('%Y/%m/%d')}"
+            popover_mount_version = int(st.session_state.get(range_popover_mount_version_key, 0))
+            if popover_mount_version % 2 == 1:
+                # Add a hidden node to force a fresh popover mount after apply.
+                st.markdown("<span style='display:none'></span>", unsafe_allow_html=True)
+
             with st.popover(range_display_label, use_container_width=True):
-                st.radio(
-                    "Preset",
-                    options=list(date_preset_options),
-                    index=list(date_preset_options).index(str(st.session_state.get(range_preset_draft_key, "custom"))),
-                    format_func=lambda value: str(date_preset_labels.get(str(value), value)),
-                    key=range_preset_draft_key,
-                    label_visibility="collapsed",
-                )
-
-                draft_preset = str(st.session_state.get(range_preset_draft_key, "custom")).strip().lower()
-                prev_preset_draft = str(st.session_state.get(range_preset_draft_last_key, "custom")).strip().lower()
-                if draft_preset != prev_preset_draft and draft_preset in date_preset_options:
-                    if draft_preset == "custom":
-                        preset_start, preset_end = _normalize_date_range(
-                            st.session_state.get(range_draft_key, (start_day, end_day)),
-                            min_d,
-                            max_d,
-                        )
-                    else:
-                        preset_start, preset_end = _resolve_date_preset_range(
-                            draft_preset,
-                            min_d,
-                            max_d,
-                            date_preset_all_options=date_preset_all_options,
-                        )
-                    st.session_state[range_draft_key] = (preset_start, preset_end)
-                    st.session_state[range_draft_start_input_key] = preset_start
-                    st.session_state[range_draft_end_input_key] = preset_end
-                    st.session_state[range_preset_draft_last_key] = draft_preset
-
                 draft_start, draft_end = _normalize_date_range(
                     st.session_state.get(range_draft_key, (start_day, end_day)),
                     min_d,
@@ -378,7 +360,27 @@ def render_top_filters(
                     st.session_state[range_draft_start_input_key] = draft_start
                 if range_draft_end_input_key not in st.session_state:
                     st.session_state[range_draft_end_input_key] = draft_end
-                if draft_preset == "custom":
+
+                compare_draft_start, compare_draft_end = _normalize_date_range(
+                    st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
+                    min_d,
+                    max_d,
+                )
+                if compare_custom_start_input_key not in st.session_state:
+                    st.session_state[compare_custom_start_input_key] = compare_draft_start
+                if compare_custom_end_input_key not in st.session_state:
+                    st.session_state[compare_custom_end_input_key] = compare_draft_end
+
+                with st.form(key=f"top_range_form_{tenant_id}", clear_on_submit=False):
+                    st.radio(
+                        "Preset",
+                        options=list(date_preset_options),
+                        index=list(date_preset_options).index(str(st.session_state.get(range_preset_draft_key, "custom"))),
+                        format_func=lambda value: str(date_preset_labels.get(str(value), value)),
+                        key=range_preset_draft_key,
+                        label_visibility="collapsed",
+                    )
+
                     range_start_col, range_end_col = st.columns(2, gap="small")
                     with range_start_col:
                         st.date_input(
@@ -394,37 +396,13 @@ def render_top_filters(
                             max_value=max_d,
                             key=range_draft_end_input_key,
                         )
-                    draft_start, draft_end = _normalize_date_range(
-                        (
-                            st.session_state.get(range_draft_start_input_key, draft_start),
-                            st.session_state.get(range_draft_end_input_key, draft_end),
-                        ),
-                        min_d,
-                        max_d,
-                    )
-                    st.session_state[range_draft_key] = (draft_start, draft_end)
-                else:
-                    st.date_input(
-                        "Fecha de inicio y fin",
-                        min_value=min_d,
-                        max_value=max_d,
-                        key=range_draft_key,
-                    )
-                    draft_start, draft_end = _normalize_date_range(
-                        st.session_state.get(range_draft_key, (draft_start, draft_end)),
-                        min_d,
-                        max_d,
-                    )
-                    st.session_state[range_draft_start_input_key] = draft_start
-                    st.session_state[range_draft_end_input_key] = draft_end
 
-                st.divider()
-                st.toggle(
-                    "Comparar",
-                    value=bool(st.session_state.get(compare_enabled_draft_key, False)),
-                    key=compare_enabled_draft_key,
-                )
-                if bool(st.session_state.get(compare_enabled_draft_key, False)):
+                    st.divider()
+                    st.toggle(
+                        "Comparar",
+                        value=bool(st.session_state.get(compare_enabled_draft_key, False)),
+                        key=compare_enabled_draft_key,
+                    )
                     st.selectbox(
                         "Modo de comparacion",
                         options=list(compare_mode_options),
@@ -432,80 +410,68 @@ def render_top_filters(
                         format_func=lambda value: str(compare_mode_labels.get(str(value), value)),
                         key=compare_mode_draft_key,
                     )
-                    if str(st.session_state.get(compare_mode_draft_key, "previous_period")) == "custom":
-                        compare_draft_start, compare_draft_end = _normalize_date_range(
-                            st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
-                            min_d,
-                            max_d,
+                    compare_start_col, compare_end_col = st.columns(2, gap="small")
+                    with compare_start_col:
+                        st.date_input(
+                            "Inicio comparativo",
+                            min_value=min_d,
+                            max_value=max_d,
+                            key=compare_custom_start_input_key,
                         )
-                        if compare_custom_start_input_key not in st.session_state:
-                            st.session_state[compare_custom_start_input_key] = compare_draft_start
-                        if compare_custom_end_input_key not in st.session_state:
-                            st.session_state[compare_custom_end_input_key] = compare_draft_end
-                        compare_start_col, compare_end_col = st.columns(2, gap="small")
-                        with compare_start_col:
-                            st.date_input(
-                                "Inicio comparativo",
-                                min_value=min_d,
-                                max_value=max_d,
-                                key=compare_custom_start_input_key,
-                            )
-                        with compare_end_col:
-                            st.date_input(
-                                "Fin comparativo",
-                                min_value=min_d,
-                                max_value=max_d,
-                                key=compare_custom_end_input_key,
-                            )
-                        compare_draft_start, compare_draft_end = _normalize_date_range(
-                            (
-                                st.session_state.get(compare_custom_start_input_key, compare_draft_start),
-                                st.session_state.get(compare_custom_end_input_key, compare_draft_end),
-                            ),
-                            min_d,
-                            max_d,
+                    with compare_end_col:
+                        st.date_input(
+                            "Fin comparativo",
+                            min_value=min_d,
+                            max_value=max_d,
+                            key=compare_custom_end_input_key,
                         )
-                        st.session_state[compare_custom_draft_key] = (compare_draft_start, compare_draft_end)
-                    else:
-                        compare_draft_start, compare_draft_end = _normalize_date_range(
-                            st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
-                            min_d,
-                            max_d,
-                        )
-                        st.session_state[compare_custom_start_input_key] = compare_draft_start
-                        st.session_state[compare_custom_end_input_key] = compare_draft_end
 
-                if st.button("Aplicar", key=f"top_range_apply_{tenant_id}", width="stretch", type="primary"):
-                    applied_start, applied_end = _normalize_date_range(
-                        st.session_state.get(range_draft_key, (start_day, end_day)),
-                        min_d,
-                        max_d,
-                    )
+                    apply_clicked = st.form_submit_button("Aplicar", width="stretch", type="primary")
+
+                if apply_clicked:
                     applied_preset = str(st.session_state.get(range_preset_draft_key, "custom")).strip().lower()
                     if applied_preset not in date_preset_options:
                         applied_preset = "custom"
-                    if applied_preset != "custom":
-                        expected_start, expected_end = _resolve_date_preset_range(
+
+                    custom_range = _normalize_date_range(
+                        (
+                            st.session_state.get(range_draft_start_input_key, draft_start),
+                            st.session_state.get(range_draft_end_input_key, draft_end),
+                        ),
+                        min_d,
+                        max_d,
+                    )
+                    if applied_preset == "custom":
+                        applied_start, applied_end = custom_range
+                    else:
+                        applied_start, applied_end = _resolve_date_preset_range(
                             applied_preset,
                             min_d,
                             max_d,
                             date_preset_all_options=date_preset_all_options,
                         )
-                        if (applied_start, applied_end) != (expected_start, expected_end):
-                            applied_preset = "custom"
+
+                    st.session_state[range_draft_key] = (applied_start, applied_end)
+                    st.session_state[range_preset_draft_last_key] = applied_preset
                     st.session_state[range_preset_key] = applied_preset
                     st.session_state[range_value_key] = (applied_start, applied_end)
+
                     applied_compare_enabled = bool(st.session_state.get(compare_enabled_draft_key, False))
                     st.session_state[compare_enabled_key] = applied_compare_enabled
                     applied_compare_mode = str(st.session_state.get(compare_mode_draft_key, "previous_period")).strip().lower()
                     if applied_compare_mode not in compare_mode_options:
                         applied_compare_mode = "previous_period"
                     st.session_state[compare_mode_key] = applied_compare_mode
+
                     applied_compare_custom = _normalize_date_range(
-                        st.session_state.get(compare_custom_draft_key, (compare_default_start, compare_default_end)),
+                        (
+                            st.session_state.get(compare_custom_start_input_key, compare_draft_start),
+                            st.session_state.get(compare_custom_end_input_key, compare_draft_end),
+                        ),
                         min_d,
                         max_d,
                     )
+                    st.session_state[compare_custom_draft_key] = applied_compare_custom
                     if applied_compare_mode == "custom":
                         st.session_state[compare_custom_key] = applied_compare_custom
                     else:
@@ -514,6 +480,7 @@ def render_top_filters(
                             min_d,
                             max_d,
                         )
+
                     st.session_state[draft_restore_key] = {
                         "range_preset": applied_preset,
                         "range": (applied_start, applied_end),
@@ -521,6 +488,7 @@ def render_top_filters(
                         "compare_mode": applied_compare_mode,
                         "compare_custom": applied_compare_custom,
                     }
+                    st.session_state[range_popover_mount_version_key] = popover_mount_version + 1
                     st.rerun()
 
     start_day, end_day = _normalize_date_range(
