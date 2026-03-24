@@ -188,6 +188,7 @@ python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_hi
 - Configuracion dinamica de KPIs y secciones por tenant.
 - Vista/plataforma por defecto por tenant.
 - Upload de logo por tenant (se guarda en `assets/logos`).
+- Toggle de extraccion organica por tenant (persiste en `config/tenants.json`).
 - Toggle de salud de token Meta en sidebar.
 - Auditoria de cambios y backups de configuracion.
 

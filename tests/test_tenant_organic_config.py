@@ -76,3 +76,32 @@ def test_dashboard_loader_reads_organic_enabled_flag(tmp_path: Path) -> None:
 
     assert loaded["tenant_disabled"]["organic_enabled"] is False
     assert loaded["tenant_default"]["organic_enabled"] is True
+
+
+def test_save_tenant_operational_flags_updates_tenants_json(tmp_path: Path) -> None:
+    tenants_path = tmp_path / "tenants.json"
+    payload = {
+        "tenants": [
+            {
+                "id": "tenant_disabled",
+                "name": "Tenant Disabled",
+                "report_path": "reports/tenant_disabled/historical.json",
+                "organic_report_path": "reports/tenant_disabled/organic.json",
+                "organic_enabled": False,
+                "ga4_property_id": "",
+            }
+        ]
+    }
+    tenants_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    ok, err = dashboard.save_tenant_operational_flags(
+        tenants_path,
+        "tenant_disabled",
+        organic_enabled=True,
+    )
+
+    assert ok is True
+    assert err == ""
+    saved = json.loads(tenants_path.read_text(encoding="utf-8"))
+    assert saved["tenants"][0]["organic_enabled"] is True
+    assert saved["tenants"][0]["name"] == "Tenant Disabled"

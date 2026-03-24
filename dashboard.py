@@ -3506,6 +3506,57 @@ def save_users_config(path: Path, users: dict[str, dict[str, Any]]) -> tuple[boo
         return False, str(exc)
 
 
+def _load_raw_tenants_payload(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"tenants": []}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"tenants": []}
+    return payload if isinstance(payload, dict) else {"tenants": []}
+
+
+def save_tenant_operational_flags(
+    path: Path,
+    tenant_id: str,
+    *,
+    organic_enabled: bool,
+) -> tuple[bool, str]:
+    try:
+        tenant_key = str(tenant_id).strip().lower()
+        if not tenant_key:
+            return False, "Tenant invalido."
+
+        payload = _load_raw_tenants_payload(path)
+        entries = payload.get("tenants", [])
+        if not isinstance(entries, list):
+            return False, "Formato invalido en config/tenants.json."
+
+        target_entry: dict[str, Any] | None = None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_tenant_id = str(entry.get("id", "")).strip().lower()
+            if entry_tenant_id == tenant_key:
+                target_entry = entry
+                break
+
+        if target_entry is None:
+            return False, f"Tenant '{tenant_key}' no encontrado en config/tenants.json."
+
+        target_entry["organic_enabled"] = bool(organic_enabled)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ok_backup, backup_info = _backup_config_file(path)
+        if not ok_backup:
+            return False, f"No se pudo crear backup: {backup_info}"
+
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _normalize_platform_option(raw_value: Any) -> str:
     value = str(raw_value or "").strip()
     return value if value in PLATFORM_OPTIONS else "All"
@@ -9763,7 +9814,62 @@ def render_admin_panel(
                         st.success("Variables de dashboard guardadas.")
                     st.rerun()
 
-        st.caption(f"Fuente: {DASHBOARD_SETTINGS_PATH.name} | Scope: {'defaults' if target_scope == '__defaults__' else target_scope}")
+        st.divider()
+        st.markdown("### Operacion del tenant")
+        if target_scope == "__defaults__":
+            st.info("La extraccion organica se controla por tenant. Selecciona un tenant especifico para editarla.")
+        else:
+            tenant_runtime_cfg = tenants.get(target_scope, {})
+            organic_enabled_default = _coerce_bool(
+                tenant_runtime_cfg.get("organic_enabled"),
+                True,
+            )
+            organic_enabled_selected = st.toggle(
+                "Extraccion organica habilitada",
+                value=organic_enabled_default,
+                key=f"adm_tenant_organic_enabled_{target_scope}",
+                help=(
+                    "Controla si el pipeline genera el archivo *_organic_historical.json para este tenant. "
+                    "Si esta desactivado, el hourly solo procesa paid data."
+                ),
+            )
+            if organic_enabled_selected:
+                st.warning(
+                    "Activarlo vuelve a ejecutar llamadas extra a Facebook/Instagram en las corridas del pipeline."
+                )
+            else:
+                st.caption(
+                    "Recomendado si hoy no consumes organico en el dashboard ni en reportes operativos."
+                )
+            if st.button(
+                "Guardar operacion del tenant",
+                key=f"adm_tenant_ops_save_{target_scope}",
+                width="stretch",
+            ):
+                ok, err_msg = save_tenant_operational_flags(
+                    TENANTS_CONFIG_PATH,
+                    target_scope,
+                    organic_enabled=bool(organic_enabled_selected),
+                )
+                if not ok:
+                    st.error(f"No se pudo guardar {TENANTS_CONFIG_PATH.name}: {err_msg}")
+                else:
+                    append_admin_audit(
+                        "tenant_operational_flags_updated",
+                        str(auth_user.get("username", "unknown")),
+                        target=target_scope,
+                        details={"organic_enabled": bool(organic_enabled_selected)},
+                    )
+                    state_label = "habilitada" if organic_enabled_selected else "deshabilitada"
+                    st.success(f"Extraccion organica {state_label} para {target_scope}.")
+                    st.rerun()
+
+        if target_scope == "__defaults__":
+            st.caption(f"Fuente: {DASHBOARD_SETTINGS_PATH.name} | Scope: defaults")
+        else:
+            st.caption(
+                f"Fuentes: {DASHBOARD_SETTINGS_PATH.name} (visual) + {TENANTS_CONFIG_PATH.name} (operacion) | Scope: {target_scope}"
+            )
 
     if admin_section == "audit":
         st.markdown("### Auditoría")
