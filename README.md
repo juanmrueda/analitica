@@ -15,6 +15,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Dashboard activo como servicio systemd: `yap-dashboard.service`.
 - Pipeline automatico cada hora: `yap-pipeline.timer` -> `yap-pipeline.service`.
 - El servicio de pipeline ejecuta `scripts/run_all_tenants.py --mode auto --organic-lookback-days 30`.
+- La extraccion organica ahora es opcional por tenant via `config/tenants.json -> organic_enabled`.
 - Tenants activos en `config/tenants.json`:
   - `yap`
   - `hyundai_hn`
@@ -57,7 +58,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - `reports/yap/yap_historical.json` -> fuente principal tenant YAP.
 - `reports/hyundai_hn/hyundai_hn_historical.json` -> fuente principal tenant Hyundai.
 - `reports/racsa/racsa_historical.json` -> fuente principal tenant RACSA.
-- `reports/*/*_organic_historical.json` -> modulo organico por tenant.
+- `reports/*/*_organic_historical.json` -> modulo organico por tenant, solo si `organic_enabled=true`.
 - `config/tenants.json` -> ids, rutas y piso historico (`historical_start_date`) por tenant.
 - `config/users.json` -> usuarios y permisos.
 - `config/dashboard_settings.template.json` -> plantilla versionada de variables de dashboard.
@@ -79,6 +80,10 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python scripts\run_all_tenants.py --mode auto --bootstrap-start 2025-01-01 --organic-lookback-days 30
 ```
+
+Nota:
+- `--organic-lookback-days` solo aplica a tenants con `organic_enabled=true`.
+- Si `organic_enabled=false`, el pipeline omite completamente la extraccion organica para ese tenant.
 
 3. Ejecutar pipeline para un tenant puntual:
 
@@ -239,6 +244,7 @@ journalctl -u yap-pipeline.service -n 120 --no-pager
 
 Nota:
 - Si un tenant no tiene `ga4_property_id` (ejemplos actuales `hyundai_hn` y `racsa`), GA4 se omite para ese tenant y el pipeline continua normalmente.
+- Si un tenant tiene `organic_enabled=false` (config actual de `yap`, `hyundai_hn` y `racsa`), el modulo organico se omite para ese tenant y no se reescribe `*_organic_historical.json`.
 - `dashboard.py` bootstrapea `config/dashboard_settings.json` desde `config/dashboard_settings.template.json` cuando falta el runtime.
 - Para vista de miniaturas remotas (Meta) en "Top 10 Piezas", Caddy debe permitir `img-src ... https:`.
 

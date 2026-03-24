@@ -88,6 +88,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
 ### Pipeline and operations scripts
 - `scripts/yap_daily_cpl_report.py`
   - Main extraction/merge/export pipeline for each tenant.
+  - Respects per-tenant toggles such as `organic_enabled`.
   - External API HTTP calls + normalization + parquet export.
 - `scripts/run_all_tenants.py`
   - Multi-tenant orchestrator (iterates `config/tenants.json`).
@@ -198,7 +199,7 @@ Business logic is concentrated in:
   - Main report files: `reports/<tenant>/*_historical.json`
   - Parquet bundle: `reports/<tenant>/dashboard/*.parquet`
   - Config/runtime entities:
-    - `config/tenants.json`
+    - `config/tenants.json` (`historical_start_date`, IDs, and per-tenant toggles like `organic_enabled`)
     - `config/users.json` (runtime; template versioned)
     - `config/dashboard_settings.json` (runtime; template versioned)
   - Event/audit logs (JSONL):
@@ -274,7 +275,7 @@ Business logic is concentrated in:
 
 ### Pipeline and ops modules
 - `scripts/yap_daily_cpl_report.py`
-  - Responsibility: tenant ETL pipeline (extract from APIs, transform, aggregate, export JSON/parquet bundles).
+  - Responsibility: tenant ETL pipeline (extract from APIs, transform, aggregate, export JSON/parquet bundles, and skip optional modules such as organic when disabled per tenant).
 - `scripts/run_all_tenants.py`
   - Responsibility: iterate configured tenants and invoke per-tenant pipeline with consistent CLI arguments.
 - `scripts/backfill_tenant_paid_monthly.py`

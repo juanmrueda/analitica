@@ -163,6 +163,19 @@ def _resolve_repo_path(raw_path: Any) -> Path:
     return p if p.is_absolute() else (ROOT_DIR / p).resolve()
 
 
+def _coerce_bool(raw_value: Any, default: bool = False) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return default
+    text = str(raw_value).strip().lower()
+    if text in {"1", "true", "yes", "si", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _default_tenants_config() -> Dict[str, Dict[str, Any]]:
     return {
         "yap": {
@@ -170,6 +183,7 @@ def _default_tenants_config() -> Dict[str, Dict[str, Any]]:
             "name": "YAP",
             "report_path": str(DEFAULT_OUTPUT_PATH),
             "organic_report_path": str(DEFAULT_ORGANIC_OUTPUT_PATH),
+            "organic_enabled": True,
             "meta_ad_account_id": META_AD_ACCOUNT_ID,
             "google_ads_customer_id": GOOGLE_ADS_CUSTOMER_ID,
             "google_ads_login_customer_id": GOOGLE_ADS_CUSTOMER_ID,
@@ -210,6 +224,7 @@ def _load_tenants_config(path: Path) -> Dict[str, Dict[str, Any]]:
             "organic_report_path": str(
                 _resolve_repo_path(entry.get("organic_report_path", DEFAULT_ORGANIC_OUTPUT_PATH))
             ),
+            "organic_enabled": _coerce_bool(entry.get("organic_enabled"), True),
             "meta_ad_account_id": str(
                 entry.get(
                     "meta_ad_account_id",
@@ -3528,6 +3543,7 @@ def main() -> int:
         if args.output_path
         else _resolve_repo_path(tenant_cfg.get("report_path", DEFAULT_OUTPUT_PATH))
     )
+    organic_enabled = _coerce_bool(tenant_cfg.get("organic_enabled"), True)
     organic_output_path = (
         _resolve_repo_path(args.organic_output_path)
         if args.organic_output_path
@@ -3868,24 +3884,27 @@ def main() -> int:
         f"range={start_day.isoformat()}..{end_day.isoformat()}"
     )
 
-    organic_existing = _load_existing(organic_output_path)
-    organic_report = _build_organic_report(
-        existing=organic_existing,
-        cfg=cfg,
-        meta_token=str(meta_token),
-        meta_ad_account_id=meta_ad_account_id,
-        start_day=organic_start_day,
-        end_day=organic_end_day,
-        run_kind=run_kind,
-    )
-    organic_output_path.parent.mkdir(parents=True, exist_ok=True)
-    organic_output_path.write_text(
-        json.dumps(organic_report, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    print(
-        f"Organic report updated: {organic_output_path} | tenant={tenant_id} | "
-        f"range={organic_start_day.isoformat()}..{organic_end_day.isoformat()}"
-    )
+    if organic_enabled:
+        organic_existing = _load_existing(organic_output_path)
+        organic_report = _build_organic_report(
+            existing=organic_existing,
+            cfg=cfg,
+            meta_token=str(meta_token),
+            meta_ad_account_id=meta_ad_account_id,
+            start_day=organic_start_day,
+            end_day=organic_end_day,
+            run_kind=run_kind,
+        )
+        organic_output_path.parent.mkdir(parents=True, exist_ok=True)
+        organic_output_path.write_text(
+            json.dumps(organic_report, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(
+            f"Organic report updated: {organic_output_path} | tenant={tenant_id} | "
+            f"range={organic_start_day.isoformat()}..{organic_end_day.isoformat()}"
+        )
+    else:
+        print(f"Organic skipped: tenant={tenant_id} has organic_enabled=false")
     return 0
 
 

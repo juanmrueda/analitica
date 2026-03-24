@@ -2558,6 +2558,7 @@ def default_tenants_config() -> dict[str, dict[str, Any]]:
             "meta_account_id": META_ACCOUNT_ID,
             "google_customer_id": GOOGLE_CUSTOMER_ID,
             "ga4_conversion_event_name": GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            "organic_enabled": True,
             "logo": str(LOGO_PATH) if LOGO_PATH.exists() else LOGO_PLACEHOLDER,
         }
     }
@@ -2603,6 +2604,7 @@ def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
             "ga4_conversion_event_name": str(
                 entry.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)
             ).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            "organic_enabled": _coerce_bool(entry.get("organic_enabled"), True),
             "logo": _normalize_logo_source(
                 entry.get("logo", entry.get("logo_path", entry.get("logo_url", "")))
             ),
