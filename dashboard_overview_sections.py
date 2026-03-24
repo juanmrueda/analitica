@@ -257,7 +257,7 @@ def render_media_mix(
         mix["spend_share"] = 0.0
 
     st_module.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>4) Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>Mix y Eficiencia Paid (CPC / CPM / CVR)</div>",
         unsafe_allow_html=True,
     )
     mix_rows_html: list[str] = []
@@ -382,7 +382,7 @@ def render_lead_demographics(
     c_text: str,
 ) -> None:
     st_module.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>5) Distribuci\u00f3n de Leads Paid por Edad y G\u00e9nero</div>",
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>Distribuci\u00f3n de Leads Paid por Edad y G\u00e9nero</div>",
         unsafe_allow_html=True,
     )
     st_module.caption(
@@ -639,7 +639,7 @@ def render_lead_geo_map(
     c_text: str,
 ) -> None:
     st_module.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>6) Mapa de Distribuci\u00f3n de Leads Paid</div>",
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>Mapa de Distribuci\u00f3n de Leads Paid</div>",
         unsafe_allow_html=True,
     )
     st_module.caption(
@@ -903,7 +903,7 @@ def render_device_breakdown(
 ) -> None:
     st_module.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
     st_module.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>7) Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>Dispositivos de Pauta (Desktop / Mobile / Other)</div>",
         unsafe_allow_html=True,
     )
     if paid_dev_df.empty or "date" not in paid_dev_df.columns:
@@ -1058,7 +1058,7 @@ def render_audit_table(
 ) -> None:
     st_module.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
     st_module.markdown(
-        "<div class='viz-title' style='margin-bottom:0.35rem;'>8) Tabla Maestra de Auditoria</div>",
+        "<div class='viz-title' style='margin-bottom:0.35rem;'>Tabla Maestra de Auditoria</div>",
         unsafe_allow_html=True,
     )
     t = df_sel[
@@ -1091,19 +1091,46 @@ def render_audit_table(
     t["CTR"] = t.apply(lambda r: sdiv_fn(float(r["Clicks"]), float(r["Impressions"])), axis=1)
     t = t.sort_values("Date", ascending=False)
     display = t.copy()
-    display["Date"] = display["Date"].map(lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v))
-    display["Meta Spend"] = display["Meta Spend"].map(lambda v: fmt_money_fn(float(v)))
-    display["Google Spend"] = display["Google Spend"].map(lambda v: fmt_money_fn(float(v)))
-    display["Spend"] = display["Spend"].map(lambda v: fmt_money_fn(float(v)))
-    display["Clicks"] = display["Clicks"].map(lambda v: f"{float(v):,.0f}")
-    display["Impressions"] = display["Impressions"].map(lambda v: f"{float(v):,.0f}")
-    display["Conversions"] = display["Conversions"].map(lambda v: f"{float(v):,.2f}")
-    display["Sessions"] = display["Sessions"].map(lambda v: f"{float(v):,.0f}")
-    display["Avg Session (s)"] = display["Avg Session (s)"].map(lambda v: f"{float(v):,.1f}")
-    display["Bounce Rate"] = display["Bounce Rate"].map(lambda v: fmt_pct_fn(float(v)))
-    display["CPL"] = display["CPL"].map(lambda v: fmt_money_fn(v if pd.notna(v) else None))
-    display["CTR"] = display["CTR"].map(lambda v: fmt_pct_fn(v if pd.notna(v) else None))
-    st_module.dataframe(display, width="stretch", hide_index=True)
+    cpl_series = pd.to_numeric(display["CPL"], errors="coerce")
+    cpl_valid = cpl_series.dropna()
+    cpl_min = float(cpl_valid.min()) if not cpl_valid.empty else 0.0
+    cpl_max = float(cpl_valid.max()) if not cpl_valid.empty else 0.0
+
+    def _style_cpl_cell(value: Any) -> str:
+        try:
+            cpl_value = float(value)
+        except Exception:
+            return ""
+        if pd.isna(cpl_value):
+            return ""
+        if cpl_max <= cpl_min:
+            return "background-color: rgba(34, 197, 94, 0.22); font-weight: 600;"
+        ratio = max(0.0, min(1.0, (cpl_value - cpl_min) / (cpl_max - cpl_min)))
+        red = int(34 + ((239 - 34) * ratio))
+        green = int(197 + ((68 - 197) * ratio))
+        blue = int(94 + ((68 - 94) * ratio))
+        return f"background-color: rgba({red}, {green}, {blue}, 0.22); font-weight: 600;"
+
+    styled_display = (
+        display.style.format(
+            {
+                "Date": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
+                "Meta Spend": lambda v: fmt_money_fn(float(v)),
+                "Google Spend": lambda v: fmt_money_fn(float(v)),
+                "Spend": lambda v: fmt_money_fn(float(v)),
+                "Clicks": lambda v: f"{float(v):,.0f}",
+                "Impressions": lambda v: f"{float(v):,.0f}",
+                "Conversions": lambda v: f"{float(v):,.2f}",
+                "Sessions": lambda v: f"{float(v):,.0f}",
+                "Avg Session (s)": lambda v: f"{float(v):,.1f}",
+                "Bounce Rate": lambda v: fmt_pct_fn(float(v)),
+                "CPL": lambda v: fmt_money_fn(v if pd.notna(v) else None),
+                "CTR": lambda v: fmt_pct_fn(v if pd.notna(v) else None),
+            }
+        )
+        .applymap(_style_cpl_cell, subset=["CPL"])
+    )
+    st_module.dataframe(styled_display, width="stretch", hide_index=True)
 
 
 def render_top_pieces_section(

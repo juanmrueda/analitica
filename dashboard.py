@@ -28,6 +28,7 @@ import streamlit as st
 import dashboard_data
 import dashboard_filters
 import dashboard_overview_sections
+import dashboard_traffic_sections
 import dashboard_trends
 
 if TYPE_CHECKING:
@@ -151,7 +152,7 @@ DEFAULT_OVERVIEW_SECTION_KEYS = [
     "top_pieces",
     "daily_fact",
 ]
-DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "top_pages"]
+DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "source_medium", "top_pages"]
 DEFAULT_CAMPAIGN_FILTER_KEYS: list[str] = []
 
 OVERVIEW_SECTION_OPTIONS: dict[str, str] = {
@@ -169,8 +170,9 @@ OVERVIEW_SECTION_OPTIONS: dict[str, str] = {
     "daily_fact": "Insight Diario",
 }
 TRAFFIC_SECTION_OPTIONS: dict[str, str] = {
-    "kpis": "Tarjetas KPI",
+    "kpis": "Tarjetas de Decision",
     "channels": "Canales / Adquisición",
+    "source_medium": "Source / Medium",
     "top_pages": "Páginas Más Visitadas",
 }
 CAMPAIGN_FILTER_OPTIONS: dict[str, str] = {
@@ -6702,16 +6704,21 @@ def render_traffic(
     df_prev,
     ch_df,
     pg_df,
+    ga4_event_df,
     platform,
     s,
     e,
+    prev_s,
+    prev_e,
+    ga4_conversion_event_name: str,
     traffic_kpi_keys: list[str],
     traffic_section_keys: list[str],
     report_cache_sig: tuple[str, int, int] | None = None,
     profiler: DashboardProfiler | None = None,
 ):
+    _ = traffic_kpi_keys
     with _profile_span(profiler, "render_traffic:prepare"):
-        section_title("03 > Rendimiento de Trafico y Adquisicion")
+        section_title("Rendimiento de Trafico y Adquisicion")
         selected_sections = _normalize_section_keys(
             traffic_section_keys,
             TRAFFIC_SECTION_OPTIONS,
@@ -6720,116 +6727,209 @@ def render_traffic(
         section_set = set(selected_sections)
         sm = summary(df_sel, platform)
         sm_prev = summary(df_prev, platform)
-        kpi_payload = build_kpi_payload(sm, sm_prev, max(len(df_sel), 1), len(df_prev))
+        cur_fallback_metrics = {
+            "sessions": float(sm.get("sessions") or 0.0),
+            "users": float(sm.get("users") or 0.0),
+            "bounce": float(sm.get("bounce") or 0.0),
+            "avg_sess": float(sm.get("avg_sess") or 0.0),
+            "conv": float(sm.get("conv") or 0.0),
+        }
+        prev_fallback_metrics = {
+            "sessions": float(sm_prev.get("sessions") or 0.0),
+            "users": float(sm_prev.get("users") or 0.0),
+            "bounce": float(sm_prev.get("bounce") or 0.0),
+            "avg_sess": float(sm_prev.get("avg_sess") or 0.0),
+            "conv": float(sm_prev.get("conv") or 0.0),
+        }
+
+    needs_channel_data = bool({"kpis", "channels", "source_medium"} & section_set)
+    needs_source_medium = "source_medium" in section_set
+    needs_top_pages = "top_pages" in section_set
+    needs_event_data = bool({"kpis", "source_medium", "channels"} & section_set)
+
+    channel_raw = ch_df.copy() if isinstance(ch_df, pd.DataFrame) else pd.DataFrame()
+    top_pages_raw = pg_df.copy() if isinstance(pg_df, pd.DataFrame) else pd.DataFrame()
+    ga4_event_raw = ga4_event_df.copy() if isinstance(ga4_event_df, pd.DataFrame) else pd.DataFrame()
+
+    if report_cache_sig is not None and (needs_channel_data or needs_top_pages or needs_event_data):
+        cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
+        if needs_channel_data:
+            channel_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_channel_daily",
+            )
+        if needs_top_pages:
+            top_pages_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_top_pages_daily",
+            )
+        if needs_event_data:
+            ga4_event_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_event_daily",
+            )
+
     if "kpis" in section_set:
         with _profile_span(profiler, "render_traffic:section:kpis"):
-            render_kpi_cards(traffic_kpi_keys, kpi_payload, DEFAULT_TRAFFIC_KPI_KEYS)
-    cache_path_str = ""
-    cache_modified_ns = 0
-    cache_size_bytes = 0
-    if report_cache_sig is not None:
-        cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
-    start_iso = s.isoformat()
-    end_iso = e.isoformat()
+            current_snapshot = dashboard_traffic_sections.compute_traffic_quality_snapshot(
+                channel_df=channel_raw,
+                event_df=ga4_event_raw,
+                platform=platform,
+                start_date=s,
+                end_date=e,
+                ga4_event_name=ga4_conversion_event_name,
+                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+                source_platform_fn=_ga4_source_platform,
+                fallback_metrics=cur_fallback_metrics,
+            )
+            previous_snapshot = dashboard_traffic_sections.compute_traffic_quality_snapshot(
+                channel_df=channel_raw,
+                event_df=ga4_event_raw,
+                platform=platform,
+                start_date=prev_s,
+                end_date=prev_e,
+                ga4_event_name=ga4_conversion_event_name,
+                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+                source_platform_fn=_ga4_source_platform,
+                fallback_metrics=prev_fallback_metrics,
+            )
+            dashboard_traffic_sections.render_decision_cards(
+                st_module=st,
+                current_snapshot=current_snapshot,
+                previous_snapshot=previous_snapshot,
+                pct_delta_fn=pct_delta,
+                fmt_compact_fn=fmt_compact,
+                fmt_duration_fn=fmt_duration,
+                fmt_pct_fn=fmt_pct,
+                fmt_delta_compact_fn=fmt_delta_compact,
+                c_accent=C_ACCENT,
+            )
 
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
-        def _plot_channels(frame: pd.DataFrame) -> None:
-            go_mod = _load_plotly_graph_objects()
-            fig = go_mod.Figure()
-            fig.add_trace(
-                go_mod.Bar(
-                    x=frame["sessionDefaultChannelGroup"],
-                    y=frame["sessions"],
-                    name="Sessions",
-                    marker={"color": C_ACCENT},
-                    hovertemplate="%{x}<br>Sessions: %{y:,.0f}<extra></extra>",
-                )
-            )
-            fig.add_trace(
-                go_mod.Scatter(
-                    x=frame["sessionDefaultChannelGroup"],
-                    y=frame["conversions"],
-                    name="Conversions",
-                    mode="lines+markers",
-                    line={"color": C_META, "width": 2},
-                    yaxis="y2",
-                    hovertemplate="%{x}<br>Conversions: %{y:,.0f}<extra></extra>",
-                )
-            )
-            pbi_layout(fig, yaxis_title="Sessions", xaxis_title="Canal", y2_title="Conversions")
-            st.plotly_chart(fig, width="stretch")
-
-        if report_cache_sig is not None:
-            b = _cached_channels_roll_from_report(
-                cache_path_str,
-                cache_modified_ns,
-                cache_size_bytes,
-                start_iso,
-                end_iso,
-            ).head(10)
-            if b.empty:
-                st.info("Sin datos para el rango seleccionado.")
-            else:
-                _plot_channels(b)
-        elif ch_df.empty:
+        if channel_raw.empty:
             st.info("No hay datos de canales en JSON.")
+            return
+        channel_roll, channel_meta = dashboard_traffic_sections.build_channel_roll(
+            channel_df=channel_raw,
+            event_df=ga4_event_raw,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            ga4_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            source_platform_fn=_ga4_source_platform,
+        )
+        channel_roll = channel_roll.head(10)
+        if channel_roll.empty:
+            st.info("Sin datos para el rango seleccionado.")
+            return
+
+        go_mod = _load_plotly_graph_objects()
+        fig = go_mod.Figure()
+        fig.add_trace(
+            go_mod.Bar(
+                x=channel_roll["sessionDefaultChannelGroup"],
+                y=channel_roll["sessions"],
+                name="Sesiones",
+                marker={"color": C_ACCENT},
+                hovertemplate="%{x}<br>Sesiones: %{y:,.0f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go_mod.Scatter(
+                x=channel_roll["sessionDefaultChannelGroup"],
+                y=channel_roll["cvr_sess_conv"],
+                name="CVR Sesion->Conv",
+                mode="lines+markers",
+                line={"color": C_META, "width": 2},
+                yaxis="y2",
+                hovertemplate="%{x}<br>CVR: %{y:.2%}<extra></extra>",
+            )
+        )
+        pbi_layout(fig, yaxis_title="Sesiones", xaxis_title="Canal", y2_title="CVR Sesion->Conv")
+        fig.update_layout(yaxis2={"tickformat": ".0%"})
+        st.plotly_chart(fig, width="stretch")
+        if bool(channel_meta.get("used_event_conversions")):
+            st.caption("CVR por canal usando conversiones del evento GA4 configurado para el tenant.")
         else:
-            ch = ch_df[(ch_df["date"] >= s) & (ch_df["date"] <= e)].copy()
-            if ch.empty:
-                st.info("Sin datos para el rango seleccionado.")
-            else:
-                b = (
-                    ch.groupby("sessionDefaultChannelGroup", as_index=False)
-                    .agg(sessions=("sessions", "sum"), conversions=("conversions", "sum"))
-                    .sort_values("sessions", ascending=False)
-                    .head(10)
-                )
-                _plot_channels(b)
+            st.caption("CVR por canal usando conversiones GA4 globales.")
+        if bool(channel_meta.get("attribution_limited")):
+            st.caption("Atribucion limitada por fuente para segmentacion de plataforma.")
+
+    def _render_source_medium() -> None:
+        section_title("Source / Medium")
+        if channel_raw.empty:
+            st.info("No hay datos de source / medium en JSON.")
+            return
+        source_roll, source_meta = dashboard_traffic_sections.build_source_medium_roll(
+            channel_df=channel_raw,
+            event_df=ga4_event_raw,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            ga4_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            source_platform_fn=_ga4_source_platform,
+        )
+        dashboard_traffic_sections.render_source_medium_table(
+            st_module=st,
+            roll=source_roll.head(20),
+            fmt_duration_fn=fmt_duration,
+            fmt_pct_fn=fmt_pct,
+        )
+        if bool(source_meta.get("used_event_conversions")):
+            st.caption("Tabla Source / Medium usando conversiones del evento GA4 configurado.")
+        else:
+            st.caption("Tabla Source / Medium usando conversiones GA4 globales.")
+        if bool(source_meta.get("attribution_limited")):
+            st.caption("Atribucion limitada por fuente para segmentacion de plataforma.")
 
     def _render_top_pages() -> None:
         section_title("Paginas Mas Visitadas")
-        if report_cache_sig is not None:
-            top_p = _cached_top_pages_roll_from_report(
-                cache_path_str,
-                cache_modified_ns,
-                cache_size_bytes,
-                start_iso,
-                end_iso,
-            ).head(10)
-            if top_p.empty:
-                st.info("Sin datos para el rango seleccionado.")
-            else:
-                st.dataframe(top_p, width="stretch", hide_index=True)
-        elif pg_df.empty:
+        if top_pages_raw.empty:
             st.info("No hay datos de paginas en JSON.")
+            return
+        top_p = dashboard_traffic_sections.build_top_pages_roll(
+            top_pages_raw,
+            start_date=s,
+            end_date=e,
+        ).head(10)
+        if top_p.empty:
+            st.info("Sin datos para el rango seleccionado.")
         else:
-            pg = pg_df[(pg_df["date"] >= s) & (pg_df["date"] <= e)].copy()
-            if pg.empty:
-                st.info("Sin datos para el rango seleccionado.")
-            else:
-                top_p = (
-                    pg.groupby(["pagePath", "pageTitle"], as_index=False)
-                    .agg(views=("screenPageViews", "sum"), sessions=("sessions", "sum"), avg_session=("averageSessionDuration", "mean"))
-                    .sort_values("views", ascending=False)
-                    .head(10)
-                )
-                st.dataframe(top_p, width="stretch", hide_index=True)
+            st.dataframe(
+                top_p.style.format(
+                    {
+                        "views": lambda value: f"{float(value):,.0f}",
+                        "sessions": lambda value: f"{float(value):,.0f}",
+                        "avg_session": lambda value: fmt_duration(float(value)),
+                        "views_per_session": "{:.2f}",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
     show_channels = "channels" in section_set
-    show_top_pages = "top_pages" in section_set
-    if show_channels and show_top_pages:
-        c1, c2 = st.columns(2)
-        with c1:
-            with _profile_span(profiler, "render_traffic:section:channels"):
-                _render_channels()
-        with c2:
-            with _profile_span(profiler, "render_traffic:section:top_pages"):
-                _render_top_pages()
-    elif show_channels:
+    show_source_medium = "source_medium" in section_set
+    show_top_pages = needs_top_pages
+
+    if show_channels:
         with _profile_span(profiler, "render_traffic:section:channels"):
             _render_channels()
-    elif show_top_pages:
+
+    if show_source_medium:
+        with _profile_span(profiler, "render_traffic:section:source_medium"):
+            _render_source_medium()
+
+    if show_top_pages:
         with _profile_span(profiler, "render_traffic:section:top_pages"):
             _render_top_pages()
 
@@ -9922,8 +10022,11 @@ def main() -> None:
 
     if view_mode == VIEW_MODE_OPTIONS[1]:
         traffic_section_set = set(traffic_sections)
-        _needs_channels = "channels" in traffic_section_set
+        _needs_kpis = "kpis" in traffic_section_set
+        _needs_source_medium = "source_medium" in traffic_section_set
+        _needs_channels = bool("channels" in traffic_section_set or _needs_kpis or _needs_source_medium)
         _needs_top_pages = "top_pages" in traffic_section_set
+        _needs_ga4_event = bool(_needs_kpis or _needs_source_medium or ("channels" in traffic_section_set))
         needs_campaign_data = bool(coco_enabled_for_tenant)
         needs_piece_data = bool(coco_enabled_for_tenant)
         with _profile_span(profiler, "main:traffic:load_datasets"):
@@ -9931,11 +10034,14 @@ def main() -> None:
             piece = load_piece_enriched_df_from_report_path(report_path) if needs_piece_data else pd.DataFrame()
             ch = pd.DataFrame()
             pg = pd.DataFrame()
+            ga4_event_daily = pd.DataFrame()
             if report_cache_sig is None:
                 if _needs_channels:
                     ch = load_acq_df_from_report_path(report_path, "ga4_channel_daily")
                 if _needs_top_pages:
                     pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
+                if _needs_ga4_event:
+                    ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily")
         with _profile_span(profiler, "main:traffic:render_coco"):
             render_coco_ia_widget(
                 df_base=df,
@@ -9957,9 +10063,13 @@ def main() -> None:
                 df_prev,
                 ch,
                 pg,
+                ga4_event_daily,
                 platform,
                 s,
                 e,
+                prev_s,
+                prev_e,
+                ga4_conversion_event_name,
                 _normalize_kpi_keys(
                     tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
                     DEFAULT_TRAFFIC_KPI_KEYS,
