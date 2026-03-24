@@ -27,6 +27,19 @@
       "historical_start_date": "2025-01-01",
       "ga4_property_id": "",
       "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
+    },
+    {
+      "id": "racsa",
+      "name": "RACSA",
+      "report_path": "reports/racsa/racsa_historical.json",
+      "organic_report_path": "reports/racsa/racsa_organic_historical.json",
+      "meta_ad_account_id": "act_947496952304590",
+      "meta_account_id": "947496952304590",
+      "google_ads_customer_id": "2997603531",
+      "google_customer_id": "2997603531",
+      "historical_start_date": "2025-01-01",
+      "ga4_property_id": "",
+      "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
     }
   ]
 }
