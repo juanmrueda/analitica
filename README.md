@@ -1,6 +1,6 @@
 # MCP Juan (GA4 + Google Ads + Meta Ads)
 
-Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai HN):
+Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai HN + RACSA):
 
 - `analytics-mcp` (GA4)
 - `google-ads-mcp` (Google Ads)
@@ -8,7 +8,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Dashboard en Streamlit (`dashboard.py`)
 - Pipeline orquestado por tenant (`scripts/run_all_tenants.py`)
 
-## Estado actual (2026-03-13)
+## Estado actual (2026-03-24)
 
 - Produccion desplegada en DigitalOcean (Droplet Ubuntu).
 - Dominio: `analitica.ipalmera.com` (Cloudflare al frente).
@@ -18,10 +18,11 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Tenants activos en `config/tenants.json`:
   - `yap`
   - `hyundai_hn`
+  - `racsa`
 - El tenant `ipalmera_regional` fue retirado de la configuracion activa.
-- Estado de rama local:
-  - `main` con 1 commit por delante de `origin/main`.
-  - Ultimo commit local: `67890e9` (`docs: add repo map and agent workflow guidelines`).
+- Cambios locales recientes:
+  - `edd3a3a` (`feat: onboard RACSA tenant with monthly backfill workflow`)
+  - `dc6e953` (`feat: revamp traffic dashboard sections`)
 
 ### Avance local COCO IA y arquitectura (2026-03-13)
 
@@ -47,12 +48,15 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 
 - `dashboard.py` -> UI principal.
 - `dashboard_data.py` -> capa de datos (IO de reportes/parquet + normalizacion de tablas para dashboard).
+- `dashboard_traffic_sections.py` -> secciones especializadas de Trafico y Adquisicion (decision cards, canales, source/medium, top pages).
 - `assets/dashboard.css` -> estilos principales del dashboard (antes embebidos en `apply_theme()`).
 - `coco_agent/` -> modulo de agente COCO IA (engine, workflow, resolvers, context builder, tools).
 - `scripts/run_all_tenants.py` -> ejecuta el pipeline para todos los tenants configurados.
 - `scripts/yap_daily_cpl_report.py` -> extraccion y consolidacion por tenant.
+- `scripts/backfill_tenant_paid_monthly.py` -> bootstrap pagado mensual por tenant nuevo con validacion por mes contra Meta/Google.
 - `reports/yap/yap_historical.json` -> fuente principal tenant YAP.
 - `reports/hyundai_hn/hyundai_hn_historical.json` -> fuente principal tenant Hyundai.
+- `reports/racsa/racsa_historical.json` -> fuente principal tenant RACSA.
 - `reports/*/*_organic_historical.json` -> modulo organico por tenant.
 - `config/tenants.json` -> ids, rutas y piso historico (`historical_start_date`) por tenant.
 - `config/users.json` -> usuarios y permisos.
@@ -82,7 +86,13 @@ python -m venv .venv
 .\.venv\Scripts\python scripts\yap_daily_cpl_report.py --tenant-id hyundai_hn --mode auto
 ```
 
-4. Levantar dashboard local:
+4. Bootstrap mensual para un tenant nuevo:
+
+```powershell
+.\.venv\Scripts\python scripts\backfill_tenant_paid_monthly.py --tenant-id racsa --bootstrap-start 2025-01-01 --monthly-through 2025-12-31 --catchup-end 2026-03-24 --python-executable .\.venv\Scripts\python --refresh-lookback-days 0
+```
+
+5. Levantar dashboard local:
 
 ```powershell
 .\.venv\Scripts\streamlit run dashboard.py
@@ -102,7 +112,7 @@ Flags utiles:
 - `-RelaunchOnAntigravityRestart`: vuelve a disparar Streamlit si cierras y reabres Antigravity.
 - `-AntigravityProcess <nombre>`: cambia el nombre del proceso a vigilar.
 
-5. Login local:
+6. Login local:
 
 ```powershell
 copy config\users.template.json config\users.json
@@ -228,7 +238,7 @@ journalctl -u yap-pipeline.service -n 120 --no-pager
 5. Streamlit consume esos JSONs en cada recarga.
 
 Nota:
-- Si un tenant no tiene `ga4_property_id` (ejemplo actual `hyundai_hn`), GA4 se omite para ese tenant y el pipeline continua normalmente.
+- Si un tenant no tiene `ga4_property_id` (ejemplos actuales `hyundai_hn` y `racsa`), GA4 se omite para ese tenant y el pipeline continua normalmente.
 - `dashboard.py` bootstrapea `config/dashboard_settings.json` desde `config/dashboard_settings.template.json` cuando falta el runtime.
 - Para vista de miniaturas remotas (Meta) en "Top 10 Piezas", Caddy debe permitir `img-src ... https:`.
 

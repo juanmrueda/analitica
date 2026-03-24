@@ -12,7 +12,7 @@ This repository is a **multi-tenant marketing analytics platform** with 3 main r
 2. **Application layer (Streamlit UI)**
    - Loads tenant reports.
    - Applies date/platform/campaign filters.
-   - Renders KPI cards, trend charts, funnel, acquisition tables, demographics, geo, and top pieces.
+   - Renders KPI cards, trend charts, funnel, acquisition tables, traffic quality cards, source/medium views, demographics, geo, and top pieces.
    - Provides admin settings, auth, audit logs, and COCO IA chat widget.
 
 3. **Assistant layer (COCO IA)**
@@ -34,6 +34,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
     - `dashboard_data`
     - `dashboard_trends`
     - `dashboard_overview_sections`
+    - `dashboard_traffic_sections`
   - Integrates COCO IA (`coco_agent` package).
 
 ### Data shaping/normalization
@@ -60,6 +61,12 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - Lead demographics, lead geo map, device breakdown.
   - Audit table and top pieces sections.
 
+### Traffic sections
+- `dashboard_traffic_sections.py`
+  - Traffic decision cards.
+  - Source / medium rollups.
+  - Top pages rollups and supporting traffic section calculations.
+
 ### COCO IA package
 - `coco_agent/engine.py`
   - OpenAI request loop, tool-call execution loop, usage accounting.
@@ -84,6 +91,9 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - External API HTTP calls + normalization + parquet export.
 - `scripts/run_all_tenants.py`
   - Multi-tenant orchestrator (iterates `config/tenants.json`).
+- `scripts/backfill_tenant_paid_monthly.py`
+  - Month-by-month paid backfill validator for onboarding new tenants.
+  - Runs `yap_daily_cpl_report.py` incrementally and compares each window against Meta/Google source totals.
 - `scripts/benchmark_dashboard_loaders.py`
   - Cold/warm benchmark for data loaders + rollups.
 - `scripts/perf_regression_gate.py`
@@ -112,13 +122,14 @@ dashboard.py
   -> dashboard_filters.py (top filters and date compare logic)
   -> dashboard_trends.py (trend payload/chart)
   -> dashboard_overview_sections.py (overview section rendering)
+  -> dashboard_traffic_sections.py (traffic section rendering/calculations)
   -> coco_agent/* (assistant workflow)
 ```
 
 ### Internal package coupling
 
 - `dashboard.py` depends on:
-  - `dashboard_data`, `dashboard_filters`, `dashboard_trends`, `dashboard_overview_sections`
+  - `dashboard_data`, `dashboard_filters`, `dashboard_trends`, `dashboard_overview_sections`, `dashboard_traffic_sections`
   - `coco_agent.workflow`, `coco_agent.context_builder`, `coco_agent.engine`
 
 - `coco_agent/workflow.py` depends on:
@@ -162,6 +173,10 @@ Business logic is concentrated in:
 - **Trend logic**
   - `dashboard_trends.py` (hourly-vs-daily trend behavior, downsampling rules).
 
+- **Traffic quality and acquisition section logic**
+  - `dashboard_traffic_sections.py`
+  - Key areas: decision-card metrics, source/medium aggregation, traffic page rollups, platform-aware GA4 filtering.
+
 - **COCO IA deterministic analytics interpretation**
   - `coco_agent/deterministic_resolvers.py`
   - Key areas: period parsing in Spanish, follow-up context handling, structured comparisons.
@@ -204,6 +219,7 @@ Business logic is concentrated in:
 ### Utilities and support scripts
 - `scripts/run_all_tenants.py`: multi-tenant orchestration.
 - `scripts/yap_daily_cpl_report.py`: ETL core.
+- `scripts/backfill_tenant_paid_monthly.py`: month-by-month onboarding backfill with paid-source validation.
 - `scripts/benchmark_dashboard_loaders.py`: loader benchmark.
 - `scripts/perf_regression_gate.py`: regression gate.
 - `scripts/profile_dashboard_e2e.py`: E2E profiling.
@@ -217,6 +233,7 @@ Business logic is concentrated in:
   2. parquet bundle generation in `scripts/yap_daily_cpl_report.py`
   3. normalization in `dashboard_data.py`
 - For date/filter issues, inspect `dashboard_filters.py` + filter session-state wiring in `dashboard.py`.
+- For traffic-section issues, inspect `dashboard_traffic_sections.py` and then the `render_traffic()` wiring in `dashboard.py`.
 - For COCO answers, inspect `coco_agent/workflow.py` and then:
   - `deterministic_resolvers.py` (primary)
   - `intent_workflow.py` / `intent_classifier.py` (if intent path enabled)
@@ -234,6 +251,8 @@ Business logic is concentrated in:
   - Responsibility: build/render trend payloads (daily/hourly), compare-series shaping, and chart downsampling.
 - `dashboard_overview_sections.py`
   - Responsibility: rendering and local calculations for major overview sections (funnel, media mix, lead demographics/geo/device, audit table, top pieces).
+- `dashboard_traffic_sections.py`
+  - Responsibility: traffic decision cards, source/medium aggregation, top pages rollups, and related traffic-quality computations.
 
 ### COCO assistant modules
 - `coco_agent/engine.py`
@@ -258,6 +277,8 @@ Business logic is concentrated in:
   - Responsibility: tenant ETL pipeline (extract from APIs, transform, aggregate, export JSON/parquet bundles).
 - `scripts/run_all_tenants.py`
   - Responsibility: iterate configured tenants and invoke per-tenant pipeline with consistent CLI arguments.
+- `scripts/backfill_tenant_paid_monthly.py`
+  - Responsibility: orchestrate month-by-month paid backfill for new tenants and stop on validation mismatches before advancing.
 - `scripts/benchmark_dashboard_loaders.py`
   - Responsibility: cold/warm performance measurements for dashboard loader and rollup paths.
 - `scripts/perf_regression_gate.py`
@@ -274,6 +295,8 @@ Business logic is concentrated in:
   - Responsibility: smoke-check rollup outputs used by UI sections.
 - `tests/test_dashboard_parquet_guardrail.py`
   - Responsibility: verify parquet bundle health, stale/missing detection.
+- `tests/test_dashboard_traffic_sections.py`
+  - Responsibility: validate traffic decision-card metrics, source/medium filtering, and top-pages rollup behavior.
 - `.github/workflows/ci.yml`
   - Responsibility: run tests, benchmark smoke, and perf gate in automated CI.
 
@@ -295,7 +318,7 @@ scripts/yap_daily_cpl_report.py
 dashboard.py
   -> dashboard_data.py (load + normalize DataFrames)
   -> dashboard_filters.py (resolve active ranges/platform/filter state)
-  -> dashboard_trends.py + dashboard_overview_sections.py (render content)
+  -> dashboard_trends.py + dashboard_overview_sections.py + dashboard_traffic_sections.py (render content)
         |
         +--> coco_agent/context_builder.py (context payload)
                 -> coco_agent/workflow.py
@@ -318,6 +341,8 @@ Operational cadence:
   - `python scripts/run_all_tenants.py --mode auto ...`
 - Per-tenant ETL:
   - `python scripts/yap_daily_cpl_report.py --tenant-id <id> --mode auto ...`
+- Monthly onboarding backfill:
+  - `python scripts/backfill_tenant_paid_monthly.py --tenant-id <id> --bootstrap-start 2025-01-01 --monthly-through 2025-12-31 --catchup-end <date> ...`
 - Benchmark:
   - `python scripts/benchmark_dashboard_loaders.py --report-path ...`
 - Perf gate:
