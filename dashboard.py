@@ -137,7 +137,7 @@ COMPARE_MODE_LABELS: dict[str, str] = {
     "custom": "Personalizado",
 }
 DEFAULT_OVERVIEW_KPI_KEYS = ["spend", "conv", "cpl", "cvr", "cpm", "cpc"]
-DEFAULT_TRAFFIC_KPI_KEYS = ["sessions", "users", "avg_sess", "bounce"]
+DEFAULT_TRAFFIC_KPI_KEYS = ["sessions", "users", "bounce", "avg_sess", "conv_acq", "cvr_sess_conv"]
 DEFAULT_OVERVIEW_SECTION_KEYS = [
     "kpis",
     "trend_chart",
@@ -152,7 +152,16 @@ DEFAULT_OVERVIEW_SECTION_KEYS = [
     "top_pieces",
     "daily_fact",
 ]
-DEFAULT_TRAFFIC_SECTION_KEYS = ["kpis", "channels", "source_medium", "top_pages"]
+DEFAULT_TRAFFIC_SECTION_KEYS = [
+    "kpis",
+    "channels",
+    "source_medium",
+    "top_pages",
+    "hourly_active_users",
+    "country_users",
+    "city_users",
+    "tech_breakdown",
+]
 DEFAULT_CAMPAIGN_FILTER_KEYS: list[str] = []
 
 OVERVIEW_SECTION_OPTIONS: dict[str, str] = {
@@ -173,6 +182,10 @@ TRAFFIC_SECTION_OPTIONS: dict[str, str] = {
     "kpis": "Tarjetas de Decision",
     "channels": "Canales / Adquisición",
     "source_medium": "Source / Medium",
+    "hourly_active_users": "Usuarios Activos por Hora",
+    "country_users": "Usuarios por Pais",
+    "city_users": "Top 10 Ciudades",
+    "tech_breakdown": "Tecnologia de Usuario",
     "top_pages": "Páginas Más Visitadas",
 }
 CAMPAIGN_FILTER_OPTIONS: dict[str, str] = {
@@ -423,6 +436,8 @@ KPI_CATALOG: dict[str, dict[str, str]] = {
     "impr": {"label": "Impresiones", "fmt": "compact", "delta_mode": "direct", "delta_color": "normal"},
     "sessions": {"label": "Sesiones", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
     "users": {"label": "Usuarios", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
+    "conv_acq": {"label": "Conversiones de Adquisicion", "fmt": "int", "delta_mode": "direct", "delta_color": "normal"},
+    "cvr_sess_conv": {"label": "CVR Sesion -> Conversion", "fmt": "pct", "delta_mode": "direct", "delta_color": "normal"},
     "avg_sess": {
         "label": "Tiempo Promedio de Interacción",
         "fmt": "duration",
@@ -6763,13 +6778,13 @@ def render_traffic(
     e,
     prev_s,
     prev_e,
+    compare_label: str,
     ga4_conversion_event_name: str,
     traffic_kpi_keys: list[str],
     traffic_section_keys: list[str],
     report_cache_sig: tuple[str, int, int] | None = None,
     profiler: DashboardProfiler | None = None,
 ):
-    _ = traffic_kpi_keys
     with _profile_span(profiler, "render_traffic:prepare"):
         section_title("Rendimiento de Trafico y Adquisicion")
         selected_sections = _normalize_section_keys(
@@ -6794,17 +6809,37 @@ def render_traffic(
             "avg_sess": float(sm_prev.get("avg_sess") or 0.0),
             "conv": float(sm_prev.get("conv") or 0.0),
         }
+        traffic_card_keys = list(dashboard_traffic_sections.TRAFFIC_DECISION_CARD_KEYS)
+        selected_traffic_card_keys = [key for key in traffic_kpi_keys if key in traffic_card_keys] or traffic_card_keys
 
     needs_channel_data = bool({"kpis", "channels", "source_medium"} & section_set)
     needs_source_medium = "source_medium" in section_set
     needs_top_pages = "top_pages" in section_set
     needs_event_data = bool({"kpis", "source_medium", "channels"} & section_set)
+    needs_hourly_active_users = "hourly_active_users" in section_set
+    needs_country_users = "country_users" in section_set
+    needs_city_users = "city_users" in section_set
+    needs_tech_breakdown = "tech_breakdown" in section_set
 
     channel_raw = ch_df.copy() if isinstance(ch_df, pd.DataFrame) else pd.DataFrame()
     top_pages_raw = pg_df.copy() if isinstance(pg_df, pd.DataFrame) else pd.DataFrame()
     ga4_event_raw = ga4_event_df.copy() if isinstance(ga4_event_df, pd.DataFrame) else pd.DataFrame()
+    hourly_active_users_raw = pd.DataFrame()
+    country_users_raw = pd.DataFrame()
+    city_users_raw = pd.DataFrame()
+    device_users_raw = pd.DataFrame()
+    operating_system_users_raw = pd.DataFrame()
+    browser_users_raw = pd.DataFrame()
 
-    if report_cache_sig is not None and (needs_channel_data or needs_top_pages or needs_event_data):
+    if report_cache_sig is not None and (
+        needs_channel_data
+        or needs_top_pages
+        or needs_event_data
+        or needs_hourly_active_users
+        or needs_country_users
+        or needs_city_users
+        or needs_tech_breakdown
+    ):
         cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
         if needs_channel_data:
             channel_raw = _load_acq_df_cached(
@@ -6827,6 +6862,167 @@ def render_traffic(
                 cache_size_bytes,
                 "ga4_event_daily",
             )
+        if needs_hourly_active_users:
+            hourly_active_users_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_active_users_hourly",
+            )
+        if needs_country_users:
+            country_users_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_country_users_daily",
+            )
+        if needs_city_users:
+            city_users_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_city_users_daily",
+            )
+        if needs_tech_breakdown:
+            device_users_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_device_users_daily",
+            )
+            operating_system_users_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_operating_system_users_daily",
+            )
+            browser_users_raw = _load_acq_df_cached(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                "ga4_browser_users_daily",
+            )
+
+    def _format_traffic_metric_value(metric_key: str, value: float | None) -> str:
+        if metric_key in {"bounce", "cvr_sess_conv"}:
+            return fmt_pct(value)
+        if metric_key == "avg_sess":
+            return fmt_duration(value)
+        return fmt_compact(value)
+
+    def _render_traffic_metric_trend(
+        metric_key: str,
+        current_trend: pd.DataFrame,
+        previous_trend: pd.DataFrame,
+    ) -> None:
+        if current_trend.empty:
+            st.info("Sin datos suficientes para la tendencia de trafico en el rango seleccionado.")
+            return
+        metric_meta = KPI_CATALOG.get(metric_key, {})
+        metric_label = str(metric_meta.get("label", metric_key))
+        current_plot = current_trend.copy()
+        current_plot["formatted_value"] = current_plot["value"].map(
+            lambda value: _format_traffic_metric_value(metric_key, float(value) if pd.notna(value) else None)
+        )
+        compare_active = bool(str(compare_label or "").strip()) and not previous_trend.empty
+
+        def _align_compare_series(target_x: list[Any], compare_df: pd.DataFrame) -> tuple[list[Any], list[float], list[str]]:
+            if not target_x:
+                return [], [], []
+            compare_plot = compare_df.copy()
+            compare_plot["value"] = pd.to_numeric(compare_plot.get("value"), errors="coerce").fillna(0.0)
+            compare_plot = compare_plot.dropna(subset=["date"]).reset_index(drop=True)
+            if compare_plot.empty:
+                return [], [], []
+            source_values = [float(value) for value in compare_plot["value"].tolist()]
+            source_dates = [pd.to_datetime(value, errors="coerce") for value in compare_plot["date"].tolist()]
+            target_len = len(target_x)
+            if target_len <= 0:
+                return [], [], []
+            if len(source_values) == target_len:
+                aligned_values = source_values
+            elif target_len == 1:
+                aligned_values = [float(sum(source_values) / max(len(source_values), 1))]
+            elif len(source_values) == 1:
+                aligned_values = [source_values[0]] * target_len
+            else:
+                src_last = len(source_values) - 1
+                dst_last = target_len - 1
+                aligned_values = []
+                for idx in range(target_len):
+                    position = (idx / float(dst_last)) * float(src_last)
+                    lo = int(math.floor(position))
+                    hi = int(math.ceil(position))
+                    if lo == hi:
+                        aligned_values.append(source_values[lo])
+                        continue
+                    weight = position - float(lo)
+                    interpolated = (source_values[lo] * (1.0 - weight)) + (source_values[hi] * weight)
+                    aligned_values.append(float(interpolated))
+            aligned_labels = []
+            for raw_date in source_dates:
+                if pd.isna(raw_date):
+                    aligned_labels.append("")
+                else:
+                    aligned_labels.append(pd.Timestamp(raw_date).strftime("%d %b %Y"))
+            if len(aligned_labels) == target_len:
+                return target_x, aligned_values, aligned_labels
+            if target_len == 1:
+                return target_x, aligned_values, [aligned_labels[0] if aligned_labels else ""]
+            if len(aligned_labels) == 1:
+                return target_x, aligned_values, [aligned_labels[0]] * target_len
+            src_last = len(aligned_labels) - 1
+            dst_last = target_len - 1
+            resampled_labels: list[str] = []
+            for idx in range(target_len):
+                position = (idx / float(dst_last)) * float(src_last)
+                nearest = int(round(position))
+                nearest = min(max(nearest, 0), src_last)
+                resampled_labels.append(aligned_labels[nearest])
+            return target_x, aligned_values, resampled_labels
+
+        go_mod = _load_plotly_graph_objects()
+        fig = go_mod.Figure()
+        fig.add_trace(
+            go_mod.Scatter(
+                x=current_plot["date"],
+                y=current_plot["value"],
+                name=metric_label,
+                mode="lines+markers",
+                line={"color": C_ACCENT, "width": 3},
+                customdata=current_plot[["formatted_value"]],
+                hovertemplate="%{x|%d %b %Y}<br>" + metric_label + ": %{customdata[0]}<extra></extra>",
+            )
+        )
+        if compare_active:
+            compare_x, compare_values, compare_date_labels = _align_compare_series(
+                list(current_plot["date"]),
+                previous_trend,
+            )
+            compare_formatted = [
+                _format_traffic_metric_value(metric_key, float(value) if value is not None else None)
+                for value in compare_values
+            ]
+            fig.add_trace(
+                go_mod.Scatter(
+                    x=compare_x,
+                    y=compare_values,
+                    name=str(compare_label or "Comparativo"),
+                    mode="lines+markers",
+                    line={"color": C_MUTE, "width": 2, "dash": "dash"},
+                    opacity=0.85,
+                    customdata=list(zip(compare_formatted, compare_date_labels, strict=False)),
+                    hovertemplate=(
+                        "%{x|%d %b %Y}<br>"
+                        + str(compare_label or "Comparativo")
+                        + ": %{customdata[0]}<br>Origen comparativo: %{customdata[1]}<extra></extra>"
+                    ),
+                )
+            )
+        pbi_layout(fig, yaxis_title=metric_label, xaxis_title="")
+        if metric_key in {"bounce", "cvr_sess_conv"}:
+            fig.update_layout(yaxis={"tickformat": ".0%"})
+        st.plotly_chart(fig, width="stretch")
 
     if "kpis" in section_set:
         with _profile_span(profiler, "render_traffic:section:kpis"):
@@ -6852,17 +7048,57 @@ def render_traffic(
                 source_platform_fn=_ga4_source_platform,
                 fallback_metrics=prev_fallback_metrics,
             )
-            dashboard_traffic_sections.render_decision_cards(
-                st_module=st,
-                current_snapshot=current_snapshot,
-                previous_snapshot=previous_snapshot,
-                pct_delta_fn=pct_delta,
-                fmt_compact_fn=fmt_compact,
-                fmt_duration_fn=fmt_duration,
-                fmt_pct_fn=fmt_pct,
-                fmt_delta_compact_fn=fmt_delta_compact,
-                c_accent=C_ACCENT,
+            st.markdown("### Tarjetas de Decision (Calidad de Trafico)")
+            traffic_kpi_payload = build_kpi_payload(current_snapshot, previous_snapshot, 1, 1)
+            active_traffic_kpi = render_kpi_cards(
+                selected_traffic_card_keys,
+                traffic_kpi_payload,
+                selected_traffic_card_keys,
+                interactive=True,
+                state_key="traffic_chart_metric",
+                preferred_active_key=selected_traffic_card_keys[0] if selected_traffic_card_keys else "sessions",
             )
+            if bool(current_snapshot.get("attribution_limited")):
+                st.caption(
+                    "Atribucion limitada por fuente: faltan campos para segmentar plataforma con precision."
+                )
+            conversion_source_label = str(current_snapshot.get("conversion_source_label", "")).strip()
+            if conversion_source_label:
+                st.caption(f"Fuente de conversion en tarjetas: {conversion_source_label}.")
+
+            current_trend, current_trend_meta = dashboard_traffic_sections.build_traffic_metric_timeseries(
+                channel_df=channel_raw,
+                event_df=ga4_event_raw,
+                fallback_daily_df=df_sel,
+                platform=platform,
+                start_date=s,
+                end_date=e,
+                ga4_event_name=ga4_conversion_event_name,
+                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+                source_platform_fn=_ga4_source_platform,
+                metric_key=active_traffic_kpi,
+            )
+            previous_trend, _previous_trend_meta = dashboard_traffic_sections.build_traffic_metric_timeseries(
+                channel_df=channel_raw,
+                event_df=ga4_event_raw,
+                fallback_daily_df=df_prev,
+                platform=platform,
+                start_date=prev_s,
+                end_date=prev_e,
+                ga4_event_name=ga4_conversion_event_name,
+                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+                source_platform_fn=_ga4_source_platform,
+                metric_key=active_traffic_kpi,
+            )
+            _render_traffic_metric_trend(
+                active_traffic_kpi,
+                current_trend,
+                previous_trend,
+            )
+            if active_traffic_kpi in {"conv_acq", "cvr_sess_conv"}:
+                source_label = str(current_trend_meta.get("conversion_source_label", "")).strip()
+                if source_label:
+                    st.caption(f"Tendencia usando conversiones desde: {source_label}.")
 
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
@@ -6970,9 +7206,222 @@ def render_traffic(
                 hide_index=True,
             )
 
+    def _hour_label(hour_value: int) -> str:
+        if hour_value == 0:
+            return "12AM"
+        if hour_value < 12:
+            return f"{hour_value}AM"
+        if hour_value == 12:
+            return "12PM"
+        return f"{hour_value - 12}PM"
+
+    def _render_hourly_active_users() -> None:
+        section_title("Usuarios Activos por Hora")
+        if hourly_active_users_raw.empty:
+            st.info("No hay datos horarios de usuarios activos en GA4 para el rango seleccionado.")
+            return
+        hourly_matrix = dashboard_traffic_sections.build_hourly_active_users_matrix(
+            hourly_active_users_raw,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            source_platform_fn=_ga4_source_platform,
+        )
+        if hourly_matrix.empty or float(hourly_matrix.to_numpy().sum()) <= 0:
+            st.info("Sin actividad horaria de usuarios para el rango seleccionado.")
+            return
+
+        y_labels = [_hour_label(int(hour_value)) for hour_value in hourly_matrix.index.tolist()]
+        go_mod = _load_plotly_graph_objects()
+        fig = go_mod.Figure(
+            data=[
+                go_mod.Heatmap(
+                    z=hourly_matrix.to_numpy(),
+                    x=list(hourly_matrix.columns),
+                    y=y_labels,
+                    colorscale=[
+                        [0.0, "#F6F2FF"],
+                        [0.2, "#E3D7FF"],
+                        [0.45, "#BEA5FF"],
+                        [0.7, "#8F5BFF"],
+                        [1.0, "#5A189A"],
+                    ],
+                    customdata=hourly_matrix.to_numpy(),
+                    hovertemplate="%{x}<br>%{y}<br>Usuarios activos: %{customdata:,.0f}<extra></extra>",
+                    colorbar={"title": "Usuarios"},
+                )
+            ]
+        )
+        pbi_layout(fig, yaxis_title="Hora", xaxis_title="")
+        fig.update_yaxes(autorange="reversed")
+        fig.update_layout(margin={"l": 20, "r": 10, "t": 14, "b": 10})
+        st.plotly_chart(fig, width="stretch")
+
+    def _render_country_users() -> None:
+        section_title("Usuarios por Pais")
+        if country_users_raw.empty:
+            st.info("No hay datos de pais en GA4 para el rango seleccionado.")
+            return
+        country_roll = dashboard_traffic_sections.build_country_users_roll(
+            country_users_raw,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            source_platform_fn=_ga4_source_platform,
+        ).head(5)
+        if country_roll.empty:
+            st.info("Sin usuarios por pais para el rango seleccionado.")
+            return
+
+        leader = country_roll.iloc[0]
+        leader_label = str(leader.get("country_label", leader.get("country", "Unknown"))).strip()
+        leader_users = float(leader.get("users", 0.0))
+        st.markdown(
+            (
+                "<div style='padding:0.8rem 1rem;border:1px solid rgba(32,29,29,0.08);"
+                "border-radius:18px;background:rgba(255,255,255,0.84);box-shadow:0 10px 22px rgba(15,23,42,0.05);"
+                "margin-bottom:0.8rem;'>"
+                f"<div style='font-size:0.78rem;color:{C_MUTE};font-weight:700;'>Pais lider</div>"
+                f"<div style='font-size:1.45rem;color:{C_TEXT};font-weight:800;'>{html.escape(leader_label)}</div>"
+                f"<div style='font-size:0.92rem;color:{C_MUTE};'>"
+                f"{html.escape(fmt_compact(leader_users))} usuarios en el periodo"
+                "</div></div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+        plot_df = country_roll.sort_values("users", ascending=True).copy()
+        go_mod = _load_plotly_graph_objects()
+        fig = go_mod.Figure(
+            data=[
+                go_mod.Bar(
+                    x=plot_df["users"],
+                    y=plot_df["country_label"],
+                    orientation="h",
+                    marker={
+                        "color": [C_ACCENT if idx == len(plot_df) - 1 else C_META for idx in range(len(plot_df))]
+                    },
+                    hovertemplate="%{y}<br>Usuarios: %{x:,.0f}<extra></extra>",
+                )
+            ]
+        )
+        pbi_layout(fig, yaxis_title="", xaxis_title="Usuarios", legend_h=False)
+        st.plotly_chart(fig, width="stretch")
+
+    def _render_city_users() -> None:
+        section_title("Top 10 Ciudades")
+        if city_users_raw.empty:
+            st.info("No hay datos de ciudad en GA4 para el rango seleccionado.")
+            return
+        city_roll = dashboard_traffic_sections.build_city_users_roll(
+            city_users_raw,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            source_platform_fn=_ga4_source_platform,
+        ).head(10)
+        if city_roll.empty:
+            st.info("Sin usuarios por ciudad para el rango seleccionado.")
+            return
+
+        plot_df = city_roll.sort_values("users", ascending=True).copy()
+        go_mod = _load_plotly_graph_objects()
+        fig = go_mod.Figure(
+            data=[
+                go_mod.Bar(
+                    x=plot_df["users"],
+                    y=plot_df["city_label"],
+                    orientation="h",
+                    marker={"color": C_ACCENT},
+                    hovertemplate="%{y}<br>Usuarios: %{x:,.0f}<extra></extra>",
+                )
+            ]
+        )
+        pbi_layout(fig, yaxis_title="", xaxis_title="Usuarios", legend_h=False)
+        st.plotly_chart(fig, width="stretch")
+
+    def _render_tech_pie(
+        *,
+        title: str,
+        tech_df: pd.DataFrame,
+        label_column: str,
+        colors: list[str],
+    ) -> None:
+        if tech_df.empty:
+            st.info(f"Sin datos de {title.lower()} para el rango seleccionado.")
+            return
+        roll = dashboard_traffic_sections.build_tech_roll(
+            tech_df,
+            label_column=label_column,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            source_platform_fn=_ga4_source_platform,
+        )
+        if roll.empty or float(roll["users"].sum()) <= 0:
+            st.info(f"Sin datos de {title.lower()} para el rango seleccionado.")
+            return
+        go_mod = _load_plotly_graph_objects()
+        fig = go_mod.Figure(
+            data=[
+                go_mod.Pie(
+                    labels=roll[label_column],
+                    values=roll["users"],
+                    hole=0.56,
+                    sort=False,
+                    marker={"colors": colors[: len(roll)]},
+                    textinfo="percent",
+                    hovertemplate="%{label}<br>Usuarios: %{value:,.0f}<br>Share: %{percent}<extra></extra>",
+                )
+            ]
+        )
+        fig.update_layout(
+            template="plotly_white",
+            paper_bgcolor=C_PANEL_BG,
+            plot_bgcolor=C_PANEL_BG,
+            margin={"l": 10, "r": 10, "t": 36, "b": 10},
+            font={"family": "SF Pro Display, SF Pro Text, Avenir Next, Helvetica Neue, sans-serif", "color": C_TEXT},
+            title={"text": title, "x": 0.02, "xanchor": "left", "font": {"size": 15}},
+            showlegend=True,
+            legend={"orientation": "h", "x": 0.0, "y": -0.08},
+        )
+        st.plotly_chart(fig, width="stretch")
+
+    def _render_tech_breakdown() -> None:
+        section_title("Tecnologia de Usuario")
+        cols = st.columns(3, gap="medium")
+        palette_device = [C_ACCENT, "#8F5BFF", "#F97316", "#94A3B8", "#CBD5E1", "#E2E8F0"]
+        palette_os = [C_META, "#7C3AED", "#10B981", "#F59E0B", "#64748B", "#CBD5E1"]
+        palette_browser = ["#2563EB", C_ACCENT, "#EC4899", "#F97316", "#64748B", "#CBD5E1"]
+        with cols[0]:
+            _render_tech_pie(
+                title="Tipo de Dispositivo",
+                tech_df=device_users_raw,
+                label_column="deviceCategory",
+                colors=palette_device,
+            )
+        with cols[1]:
+            _render_tech_pie(
+                title="Sistema Operativo",
+                tech_df=operating_system_users_raw,
+                label_column="operatingSystem",
+                colors=palette_os,
+            )
+        with cols[2]:
+            _render_tech_pie(
+                title="Navegador",
+                tech_df=browser_users_raw,
+                label_column="browser",
+                colors=palette_browser,
+            )
+
     show_channels = "channels" in section_set
     show_source_medium = "source_medium" in section_set
     show_top_pages = needs_top_pages
+    show_hourly_active_users = needs_hourly_active_users
+    show_country_users = needs_country_users
+    show_city_users = needs_city_users
+    show_tech_breakdown = needs_tech_breakdown
 
     if show_channels:
         with _profile_span(profiler, "render_traffic:section:channels"):
@@ -6985,6 +7434,22 @@ def render_traffic(
     if show_top_pages:
         with _profile_span(profiler, "render_traffic:section:top_pages"):
             _render_top_pages()
+
+    if show_hourly_active_users:
+        with _profile_span(profiler, "render_traffic:section:hourly_active_users"):
+            _render_hourly_active_users()
+
+    if show_country_users:
+        with _profile_span(profiler, "render_traffic:section:country_users"):
+            _render_country_users()
+
+    if show_city_users:
+        with _profile_span(profiler, "render_traffic:section:city_users"):
+            _render_city_users()
+
+    if show_tech_breakdown:
+        with _profile_span(profiler, "render_traffic:section:tech_breakdown"):
+            _render_tech_breakdown()
 
 def _render_admin_user_create_panel(
     users: dict[str, dict[str, Any]],
@@ -10177,6 +10642,7 @@ def main() -> None:
                 e,
                 prev_s,
                 prev_e,
+                compare_label,
                 ga4_conversion_event_name,
                 _normalize_kpi_keys(
                     tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),

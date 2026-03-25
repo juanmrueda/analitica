@@ -11,8 +11,10 @@
     "traffic_kpis": [
       "sessions",
       "users",
+      "bounce",
       "avg_sess",
-      "bounce"
+      "conv_acq",
+      "cvr_sess_conv"
     ],
     "overview_sections": [
       "kpis",
@@ -30,8 +32,12 @@
     "traffic_sections": [
       "kpis",
       "channels",
+      "source_medium",
       "top_pages",
-      "campaigns"
+      "hourly_active_users",
+      "country_users",
+      "city_users",
+      "tech_breakdown"
     ],
     "campaign_filters": [],
     "enabled_view_modes": [
@@ -78,8 +84,12 @@
       "traffic_sections": [
         "kpis",
         "channels",
+        "source_medium",
         "top_pages",
-        "campaigns"
+        "hourly_active_users",
+        "country_users",
+        "city_users",
+        "tech_breakdown"
       ],
       "campaign_filters": [],
       "enabled_view_modes": [
@@ -154,8 +164,10 @@
       "traffic_kpis": [
         "sessions",
         "users",
+        "bounce",
         "avg_sess",
-        "bounce"
+        "conv_acq",
+        "cvr_sess_conv"
       ],
       "overview_sections": [
         "kpis",

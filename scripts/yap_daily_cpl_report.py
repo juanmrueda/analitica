@@ -51,6 +51,12 @@ PARQUET_ACQ_DATASETS: Tuple[str, ...] = (
     "ga4_channel_daily",
     "ga4_top_pages_daily",
     "ga4_event_daily",
+    "ga4_active_users_hourly",
+    "ga4_country_users_daily",
+    "ga4_city_users_daily",
+    "ga4_device_users_daily",
+    "ga4_operating_system_users_daily",
+    "ga4_browser_users_daily",
     "meta_campaign_daily",
     "google_campaign_daily",
     "paid_piece_daily",
@@ -2543,7 +2549,7 @@ def _fetch_ga4_device_range(
         ga4_property_id=ga4_property_id,
         start_day=start_day,
         end_day=end_day,
-        dimensions=["date", "deviceCategory"],
+        dimensions=["date", "deviceCategory", "sessionSourceMedium"],
         metrics=["totalUsers"],
         quota_project=quota_project,
     )
@@ -2553,6 +2559,7 @@ def _fetch_ga4_device_range(
             {
                 "date": str(row.get("date", "")),
                 "deviceCategory": str(row.get("deviceCategory", "")),
+                "sessionSourceMedium": str(row.get("sessionSourceMedium", "")),
                 "totalUsers": _safe_float(row.get("totalUsers")),
             }
         )
@@ -2571,7 +2578,7 @@ def _fetch_ga4_country_range(
         ga4_property_id=ga4_property_id,
         start_day=start_day,
         end_day=end_day,
-        dimensions=["date", "country"],
+        dimensions=["date", "country", "countryId", "sessionSourceMedium"],
         metrics=["totalUsers"],
         quota_project=quota_project,
     )
@@ -2581,9 +2588,43 @@ def _fetch_ga4_country_range(
             {
                 "date": str(row.get("date", "")),
                 "country": str(row.get("country", "")),
+                "countryId": str(row.get("countryId", "")),
+                "sessionSourceMedium": str(row.get("sessionSourceMedium", "")),
                 "totalUsers": _safe_float(row.get("totalUsers")),
             }
         )
+    return out
+
+
+def _fetch_ga4_city_range(
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
+        rows = _fetch_ga4_run_report(
+            access_token=access_token,
+            ga4_property_id=ga4_property_id,
+            start_day=chunk_start,
+            end_day=chunk_end,
+            dimensions=["date", "country", "countryId", "city", "sessionSourceMedium"],
+            metrics=["totalUsers"],
+            quota_project=quota_project,
+        )
+        for row in rows:
+            out.append(
+                {
+                    "date": str(row.get("date", "")),
+                    "country": str(row.get("country", "")),
+                    "countryId": str(row.get("countryId", "")),
+                    "city": str(row.get("city", "")),
+                    "sessionSourceMedium": str(row.get("sessionSourceMedium", "")),
+                    "totalUsers": _safe_float(row.get("totalUsers")),
+                }
+            )
     return out
 
 
@@ -3049,6 +3090,97 @@ def _flatten_daily_for_dashboard(daily_rows: List[Dict[str, Any]]) -> List[Dict[
                 "ga4_bounce": _safe_float(ga4.get("bounceRate")),
             }
         )
+    return out
+
+
+def _fetch_ga4_active_users_hourly_range(
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 14):
+        rows = _fetch_ga4_run_report(
+            access_token=access_token,
+            ga4_property_id=ga4_property_id,
+            start_day=chunk_start,
+            end_day=chunk_end,
+            dimensions=["date", "dayOfWeekName", "hour", "sessionSourceMedium"],
+            metrics=["activeUsers"],
+            quota_project=quota_project,
+        )
+        for row in rows:
+            out.append(
+                {
+                    "date": str(row.get("date", "")),
+                    "dayOfWeekName": str(row.get("dayOfWeekName", "")),
+                    "hour": _safe_int(row.get("hour")),
+                    "sessionSourceMedium": str(row.get("sessionSourceMedium", "")),
+                    "activeUsers": _safe_float(row.get("activeUsers")),
+                }
+            )
+    return out
+
+
+def _fetch_ga4_operating_system_range(
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
+        rows = _fetch_ga4_run_report(
+            access_token=access_token,
+            ga4_property_id=ga4_property_id,
+            start_day=chunk_start,
+            end_day=chunk_end,
+            dimensions=["date", "operatingSystem", "sessionSourceMedium"],
+            metrics=["totalUsers"],
+            quota_project=quota_project,
+        )
+        for row in rows:
+            out.append(
+                {
+                    "date": str(row.get("date", "")),
+                    "operatingSystem": str(row.get("operatingSystem", "")),
+                    "sessionSourceMedium": str(row.get("sessionSourceMedium", "")),
+                    "totalUsers": _safe_float(row.get("totalUsers")),
+                }
+            )
+    return out
+
+
+def _fetch_ga4_browser_range(
+    access_token: str,
+    ga4_property_id: str,
+    start_day: date,
+    end_day: date,
+    quota_project: str | None,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
+        rows = _fetch_ga4_run_report(
+            access_token=access_token,
+            ga4_property_id=ga4_property_id,
+            start_day=chunk_start,
+            end_day=chunk_end,
+            dimensions=["date", "browser", "sessionSourceMedium"],
+            metrics=["totalUsers"],
+            quota_project=quota_project,
+        )
+        for row in rows:
+            out.append(
+                {
+                    "date": str(row.get("date", "")),
+                    "browser": str(row.get("browser", "")),
+                    "sessionSourceMedium": str(row.get("sessionSourceMedium", "")),
+                    "totalUsers": _safe_float(row.get("totalUsers")),
+                }
+            )
     return out
 
 
@@ -3700,6 +3832,10 @@ def main() -> int:
     ga4_channel: List[Dict[str, Any]] = []
     ga4_top_pages: List[Dict[str, Any]] = []
     ga4_event_daily: List[Dict[str, Any]] = []
+    ga4_active_users_hourly: List[Dict[str, Any]] = []
+    ga4_city_users_daily: List[Dict[str, Any]] = []
+    ga4_operating_system_users_daily: List[Dict[str, Any]] = []
+    ga4_browser_users_daily: List[Dict[str, Any]] = []
     if tenant_ga4_property_id:
         (
             ga4_client_id,
@@ -3722,7 +3858,19 @@ def main() -> int:
         ga4_channel = _fetch_ga4_channel_range(
             ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
         )
+        ga4_active_users_hourly = _fetch_ga4_active_users_hourly_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_city_users_daily = _fetch_ga4_city_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
         ga4_top_pages = _fetch_ga4_top_pages_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_operating_system_users_daily = _fetch_ga4_operating_system_range(
+            ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
+        )
+        ga4_browser_users_daily = _fetch_ga4_browser_range(
             ga4_access_token, tenant_ga4_property_id, start_day, end_day, ga4_quota_project
         )
         ga4_event_daily = _fetch_ga4_event_range(
@@ -3754,14 +3902,14 @@ def main() -> int:
         new_rows=ga4_device,
         start_day=start_day,
         end_day=end_day,
-        key_fields=("date", "deviceCategory"),
+        key_fields=("date", "deviceCategory", "sessionSourceMedium"),
     )
     all_country = _merge_breakdown_rows(
         existing=existing.get("ga4_breakdowns", {}).get("country_daily", []),
         new_rows=ga4_country,
         start_day=start_day,
         end_day=end_day,
-        key_fields=("date", "country"),
+        key_fields=("date", "country", "countryId", "sessionSourceMedium"),
     )
     all_ga4_channel = _merge_breakdown_rows(
         existing=existing.get("traffic_acquisition", {}).get("ga4_channel_daily", []),
@@ -3769,6 +3917,48 @@ def main() -> int:
         start_day=start_day,
         end_day=end_day,
         key_fields=("date", "sessionDefaultChannelGroup", "sessionSourceMedium"),
+    )
+    all_ga4_active_users_hourly = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("ga4_active_users_hourly", []),
+        new_rows=ga4_active_users_hourly,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "dayOfWeekName", "hour", "sessionSourceMedium"),
+    )
+    all_ga4_country_users_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("ga4_country_users_daily", []),
+        new_rows=ga4_country,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "countryId", "country", "sessionSourceMedium"),
+    )
+    all_ga4_city_users_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("ga4_city_users_daily", []),
+        new_rows=ga4_city_users_daily,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "countryId", "country", "city", "sessionSourceMedium"),
+    )
+    all_ga4_device_users_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("ga4_device_users_daily", []),
+        new_rows=ga4_device,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "deviceCategory", "sessionSourceMedium"),
+    )
+    all_ga4_operating_system_users_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("ga4_operating_system_users_daily", []),
+        new_rows=ga4_operating_system_users_daily,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "operatingSystem", "sessionSourceMedium"),
+    )
+    all_ga4_browser_users_daily = _merge_breakdown_rows(
+        existing=existing.get("traffic_acquisition", {}).get("ga4_browser_users_daily", []),
+        new_rows=ga4_browser_users_daily,
+        start_day=start_day,
+        end_day=end_day,
+        key_fields=("date", "browser", "sessionSourceMedium"),
     )
     all_ga4_top_pages = _merge_breakdown_rows(
         existing=existing.get("traffic_acquisition", {}).get("ga4_top_pages_daily", []),
@@ -3849,6 +4039,12 @@ def main() -> int:
         },
         "traffic_acquisition": {
             "ga4_channel_daily": all_ga4_channel,
+            "ga4_active_users_hourly": all_ga4_active_users_hourly,
+            "ga4_country_users_daily": all_ga4_country_users_daily,
+            "ga4_city_users_daily": all_ga4_city_users_daily,
+            "ga4_device_users_daily": all_ga4_device_users_daily,
+            "ga4_operating_system_users_daily": all_ga4_operating_system_users_daily,
+            "ga4_browser_users_daily": all_ga4_browser_users_daily,
             "ga4_top_pages_daily": all_ga4_top_pages,
             "ga4_event_daily": all_ga4_event_daily,
             "meta_campaign_daily": all_meta_campaign_daily,

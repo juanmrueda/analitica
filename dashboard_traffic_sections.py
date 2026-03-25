@@ -12,6 +12,24 @@ FmtDurationFn = Callable[[float | None], str]
 FmtPctFn = Callable[[float | None], str]
 FmtDeltaFn = Callable[[float | None], str]
 
+TRAFFIC_DECISION_CARD_KEYS: tuple[str, ...] = (
+    "sessions",
+    "users",
+    "bounce",
+    "avg_sess",
+    "conv_acq",
+    "cvr_sess_conv",
+)
+WEEKDAY_ORDER: tuple[str, ...] = (
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+)
+
 
 def _sdiv(numerator: float, denominator: float) -> float | None:
     try:
@@ -212,6 +230,30 @@ def _resolve_event_df(
     else:
         out["conversions"] = _num_series(out, "conversions", 0.0)
     out["sessionSourceMedium"] = _text_series(out, "sessionSourceMedium", "(sin source / medium)")
+    return out, attr_limited
+
+
+def _resolve_dimension_df(
+    raw_df: pd.DataFrame,
+    *,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    source_platform_fn: SourcePlatformFn,
+) -> tuple[pd.DataFrame, bool]:
+    base = _filter_by_date_range(raw_df, start_date, end_date)
+    filtered, attr_limited = _filter_by_platform(
+        base,
+        platform=platform,
+        source_platform_fn=source_platform_fn,
+        source_column="sessionSourceMedium",
+        platform_column="platform",
+    )
+    if filtered.empty:
+        return filtered, attr_limited
+    out = filtered.copy()
+    if "sessionSourceMedium" in out.columns:
+        out["sessionSourceMedium"] = _text_series(out, "sessionSourceMedium", "(sin source / medium)")
     return out, attr_limited
 
 
@@ -501,6 +543,309 @@ def build_top_pages_roll(
     return roll
 
 
+def _build_fallback_daily_roll(fallback_daily_df: pd.DataFrame, platform: str) -> pd.DataFrame:
+    if fallback_daily_df.empty:
+        return pd.DataFrame(columns=["date", "sessions", "users", "avg_sess", "bounce", "fallback_conv"])
+    out = fallback_daily_df.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+    out = out.dropna(subset=["date"]).copy()
+    out["sessions"] = _num_series(out, "ga4_sessions", 0.0)
+    out["users"] = _num_series(out, "ga4_users", 0.0)
+    out["avg_sess"] = _num_series(out, "ga4_avg_sess", 0.0)
+    out["bounce"] = _num_series(out, "ga4_bounce", 0.0)
+    if str(platform or "All").strip() == "Google":
+        out["fallback_conv"] = _num_series(out, "google_conv", 0.0)
+    elif str(platform or "All").strip() == "Meta":
+        out["fallback_conv"] = _num_series(out, "meta_conv", 0.0)
+    else:
+        out["fallback_conv"] = _num_series(out, "total_conv", 0.0)
+    return out[["date", "sessions", "users", "avg_sess", "bounce", "fallback_conv"]]
+
+
+def _group_channel_daily_roll(ch: pd.DataFrame) -> pd.DataFrame:
+    if ch.empty:
+        return pd.DataFrame(
+            columns=["date", "sessions", "users", "avg_sess", "bounce", "channel_conversions"]
+        )
+    rows: list[dict[str, Any]] = []
+    grouped = ch.groupby("date", dropna=False)
+    for raw_day, day_df in grouped:
+        sessions = float(_num_series(day_df, "sessions", 0.0).sum())
+        rows.append(
+            {
+                "date": raw_day,
+                "sessions": sessions,
+                "users": float(_num_series(day_df, "totalUsers", 0.0).sum()),
+                "avg_sess": _weighted_average(
+                    _num_series(day_df, "averageSessionDuration", 0.0),
+                    _num_series(day_df, "sessions", 0.0),
+                )
+                or 0.0,
+                "bounce": _weighted_average(
+                    _num_series(day_df, "bounceRate", 0.0),
+                    _num_series(day_df, "sessions", 0.0),
+                )
+                or 0.0,
+                "channel_conversions": float(_num_series(day_df, "conversions", 0.0).sum()),
+            }
+        )
+    out = pd.DataFrame(rows)
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+    return out.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+
+def _group_event_daily_roll(ev: pd.DataFrame) -> pd.DataFrame:
+    if ev.empty:
+        return pd.DataFrame(columns=["date", "event_conversions"])
+    grouped = (
+        ev.groupby("date", as_index=False)
+        .agg(event_conversions=("conversions", "sum"))
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+    grouped["date"] = pd.to_datetime(grouped["date"], errors="coerce").dt.date
+    return grouped.dropna(subset=["date"]).reset_index(drop=True)
+
+
+def build_traffic_metric_timeseries(
+    *,
+    channel_df: pd.DataFrame,
+    event_df: pd.DataFrame,
+    fallback_daily_df: pd.DataFrame,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    ga4_event_name: str,
+    default_ga4_event_name: str,
+    source_platform_fn: SourcePlatformFn,
+    metric_key: str,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    start_day, end_day = _normalize_range(start_date, end_date)
+    if start_day is None or end_day is None:
+        return pd.DataFrame(columns=["date", "value"]), {
+            "conversion_source_label": "",
+            "used_event_conversions": False,
+            "attribution_limited": False,
+        }
+
+    ch, ch_attr_limited = _resolve_base_channel_df(
+        channel_df,
+        platform=platform,
+        start_date=start_day,
+        end_date=end_day,
+        source_platform_fn=source_platform_fn,
+    )
+    ev, ev_attr_limited = _resolve_event_df(
+        event_df,
+        platform=platform,
+        start_date=start_day,
+        end_date=end_day,
+        ga4_event_name=ga4_event_name,
+        default_ga4_event_name=default_ga4_event_name,
+        source_platform_fn=source_platform_fn,
+    )
+    channel_roll = _group_channel_daily_roll(ch)
+    event_roll = _group_event_daily_roll(ev)
+    fallback_roll = _build_fallback_daily_roll(_filter_by_date_range(fallback_daily_df, start_day, end_day), platform)
+
+    date_frame = pd.DataFrame({"date": pd.date_range(start=start_day, end=end_day, freq="D").date})
+    merged = (
+        date_frame.merge(channel_roll, on="date", how="left")
+        .merge(event_roll, on="date", how="left")
+        .merge(fallback_roll, on="date", how="left", suffixes=("", "_fallback"))
+    )
+    for column in (
+        "sessions",
+        "users",
+        "avg_sess",
+        "bounce",
+        "channel_conversions",
+        "event_conversions",
+        "fallback_conv",
+    ):
+        merged[column] = _num_series(merged, column, 0.0)
+
+    total_event_conversions = float(merged["event_conversions"].sum())
+    total_channel_conversions = float(merged["channel_conversions"].sum())
+    resolved_event_name = _resolve_event_name(ga4_event_name, default_ga4_event_name)
+    if total_event_conversions > 0:
+        merged["conv_acq"] = merged["event_conversions"]
+        conversion_source_label = f"Evento GA4: {resolved_event_name}"
+        used_event_conversions = True
+    elif total_channel_conversions > 0:
+        merged["conv_acq"] = merged["channel_conversions"]
+        conversion_source_label = "Conversiones GA4 globales"
+        used_event_conversions = False
+    else:
+        merged["conv_acq"] = merged["fallback_conv"]
+        conversion_source_label = "Conversiones fallback (paid)"
+        used_event_conversions = False
+
+    merged["sessions"] = merged["sessions"].where(merged["sessions"] > 0, merged["sessions_fallback"])
+    merged["users"] = merged["users"].where(merged["users"] > 0, merged["users_fallback"])
+    merged["avg_sess"] = merged["avg_sess"].where(merged["avg_sess"] > 0, merged["avg_sess_fallback"])
+    merged["bounce"] = merged["bounce"].where(merged["bounce"] > 0, merged["bounce_fallback"])
+    merged["cvr_sess_conv"] = merged.apply(
+        lambda row: _sdiv(float(row.get("conv_acq", 0.0)), float(row.get("sessions", 0.0))) or 0.0,
+        axis=1,
+    )
+
+    metric_column = metric_key if metric_key in TRAFFIC_DECISION_CARD_KEYS else "sessions"
+    out = merged[["date", metric_column]].rename(columns={metric_column: "value"}).copy()
+    meta = {
+        "conversion_source_label": conversion_source_label,
+        "used_event_conversions": used_event_conversions,
+        "attribution_limited": bool(ch_attr_limited or ev_attr_limited),
+    }
+    return out, meta
+
+
+def build_hourly_active_users_matrix(
+    hourly_users_df: pd.DataFrame,
+    *,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    source_platform_fn: SourcePlatformFn,
+) -> pd.DataFrame:
+    base, _ = _resolve_dimension_df(
+        hourly_users_df,
+        platform=platform,
+        start_date=start_date,
+        end_date=end_date,
+        source_platform_fn=source_platform_fn,
+    )
+    if base.empty:
+        return pd.DataFrame(index=list(range(24)), columns=list(WEEKDAY_ORDER)).fillna(0.0)
+    out = base.copy()
+    out["dayOfWeekName"] = _text_series(out, "dayOfWeekName", "Unknown")
+    out["hour"] = _num_series(out, "hour", 0.0).astype(int)
+    out["activeUsers"] = _num_series(out, "activeUsers", 0.0)
+    pivot = (
+        out.groupby(["hour", "dayOfWeekName"], as_index=False)
+        .agg(activeUsers=("activeUsers", "sum"))
+        .pivot(index="hour", columns="dayOfWeekName", values="activeUsers")
+        .reindex(index=list(range(24)), columns=list(WEEKDAY_ORDER))
+        .fillna(0.0)
+    )
+    return pivot
+
+
+def _flag_emoji(country_id: Any) -> str:
+    raw = str(country_id or "").strip().upper()
+    if len(raw) != 2 or not raw.isalpha():
+        return ""
+    return chr(127397 + ord(raw[0])) + chr(127397 + ord(raw[1]))
+
+
+def build_country_users_roll(
+    country_df: pd.DataFrame,
+    *,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    source_platform_fn: SourcePlatformFn,
+) -> pd.DataFrame:
+    base, _ = _resolve_dimension_df(
+        country_df,
+        platform=platform,
+        start_date=start_date,
+        end_date=end_date,
+        source_platform_fn=source_platform_fn,
+    )
+    if base.empty:
+        return pd.DataFrame(columns=["country", "countryId", "users", "flag", "country_label"])
+    out = base.copy()
+    out["country"] = _text_series(out, "country", "Unknown")
+    out["countryId"] = _text_series(out, "countryId", "")
+    out["totalUsers"] = _num_series(out, "totalUsers", 0.0)
+    grouped = (
+        out.groupby(["country", "countryId"], as_index=False)
+        .agg(users=("totalUsers", "sum"))
+        .sort_values("users", ascending=False)
+        .reset_index(drop=True)
+    )
+    grouped["flag"] = grouped["countryId"].map(_flag_emoji)
+    grouped["country_label"] = grouped.apply(
+        lambda row: f"{row['flag']} {row['country']}".strip(),
+        axis=1,
+    )
+    return grouped
+
+
+def build_city_users_roll(
+    city_df: pd.DataFrame,
+    *,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    source_platform_fn: SourcePlatformFn,
+) -> pd.DataFrame:
+    base, _ = _resolve_dimension_df(
+        city_df,
+        platform=platform,
+        start_date=start_date,
+        end_date=end_date,
+        source_platform_fn=source_platform_fn,
+    )
+    if base.empty:
+        return pd.DataFrame(columns=["city", "country", "countryId", "users", "city_label"])
+    out = base.copy()
+    out["city"] = _text_series(out, "city", "Unknown")
+    out["country"] = _text_series(out, "country", "Unknown")
+    out["countryId"] = _text_series(out, "countryId", "")
+    out["totalUsers"] = _num_series(out, "totalUsers", 0.0)
+    grouped = (
+        out.groupby(["city", "country", "countryId"], as_index=False)
+        .agg(users=("totalUsers", "sum"))
+        .sort_values("users", ascending=False)
+        .reset_index(drop=True)
+    )
+    grouped["city_label"] = grouped.apply(
+        lambda row: f"{row['city']} ({row['country']})".strip(),
+        axis=1,
+    )
+    return grouped
+
+
+def build_tech_roll(
+    tech_df: pd.DataFrame,
+    *,
+    label_column: str,
+    platform: str,
+    start_date: Any,
+    end_date: Any,
+    source_platform_fn: SourcePlatformFn,
+    top_n: int = 6,
+) -> pd.DataFrame:
+    base, _ = _resolve_dimension_df(
+        tech_df,
+        platform=platform,
+        start_date=start_date,
+        end_date=end_date,
+        source_platform_fn=source_platform_fn,
+    )
+    if base.empty:
+        return pd.DataFrame(columns=[label_column, "users"])
+    out = base.copy()
+    out[label_column] = _text_series(out, label_column, "Unknown")
+    out["totalUsers"] = _num_series(out, "totalUsers", 0.0)
+    grouped = (
+        out.groupby(label_column, as_index=False)
+        .agg(users=("totalUsers", "sum"))
+        .sort_values("users", ascending=False)
+        .reset_index(drop=True)
+    )
+    if len(grouped) <= max(int(top_n), 1):
+        return grouped
+    head = grouped.head(max(int(top_n), 1)).copy()
+    other_value = float(grouped.iloc[max(int(top_n), 1):]["users"].sum())
+    if other_value > 0:
+        other_row = pd.DataFrame([{label_column: "Other", "users": other_value}])
+        head = pd.concat([head, other_row], ignore_index=True)
+    return head
+
+
 def render_decision_cards(
     *,
     st_module: Any,
@@ -700,4 +1045,3 @@ def render_source_medium_table(
         )
     )
     st_module.dataframe(styled, width="stretch", hide_index=True)
-
