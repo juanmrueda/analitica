@@ -3969,6 +3969,68 @@ def _normalize_kpi_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
     return normalized[:6]
 
 
+def _merge_ordered_selection(selected_keys: list[str], ordered_keys: Any) -> list[str]:
+    selected = [str(key).strip().lower() for key in selected_keys if str(key).strip()]
+    current = []
+    if isinstance(ordered_keys, list):
+        current = [str(key).strip().lower() for key in ordered_keys if str(key).strip()]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for key in current:
+        if key in selected and key not in seen:
+            seen.add(key)
+            merged.append(key)
+    for key in selected:
+        if key not in seen:
+            seen.add(key)
+            merged.append(key)
+    return merged
+
+
+def _render_ordered_kpi_editor(
+    *,
+    title: str,
+    selected_keys: list[str],
+    state_key: str,
+    label_fn: Callable[[str], str],
+) -> list[str]:
+    ordered_keys = _merge_ordered_selection(selected_keys, st.session_state.get(state_key, []))
+    st.session_state[state_key] = ordered_keys
+    if not ordered_keys:
+        return []
+
+    st.caption(title)
+    for idx, key in enumerate(ordered_keys):
+        safe_key = _widget_safe_key(key)
+        row_cols = st.columns([0.08, 0.08, 0.84], gap="small")
+        if row_cols[0].button("↑", key=f"{state_key}_up_{safe_key}", disabled=idx == 0, width="stretch"):
+            swapped = list(ordered_keys)
+            swapped[idx - 1], swapped[idx] = swapped[idx], swapped[idx - 1]
+            st.session_state[state_key] = swapped
+            st.rerun()
+        if row_cols[1].button(
+            "↓",
+            key=f"{state_key}_down_{safe_key}",
+            disabled=idx >= len(ordered_keys) - 1,
+            width="stretch",
+        ):
+            swapped = list(ordered_keys)
+            swapped[idx], swapped[idx + 1] = swapped[idx + 1], swapped[idx]
+            st.session_state[state_key] = swapped
+            st.rerun()
+        row_cols[2].markdown(
+            (
+                "<div style='padding:0.55rem 0.8rem;border:1px solid rgba(32,29,29,0.08);"
+                "border-radius:14px;background:rgba(255,255,255,0.82);margin-bottom:0.3rem;'>"
+                f"<span style='font-weight:700;color:{C_TEXT};'>{html.escape(label_fn(key))}</span>"
+                f"<span style='color:{C_MUTE};margin-left:0.45rem;'>#{idx + 1}</span>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+    return list(st.session_state.get(state_key, ordered_keys))
+
+
 def _normalize_campaign_filter_keys(raw_keys: Any, fallback_keys: list[str]) -> list[str]:
     allowed = set(CAMPAIGN_FILTER_OPTIONS.keys())
     values: list[str] = []
@@ -10048,6 +10110,18 @@ def render_admin_panel(
             key=f"adm_dash_traffic_{target_scope}",
             help="Selecciona entre 1 y 6 KPIs para las tarjetas superiores de Tráfico.",
         )
+        overview_ordered = _render_ordered_kpi_editor(
+            title="Orden de cards en Overview",
+            selected_keys=overview_selected,
+            state_key=f"adm_dash_overview_order_{target_scope}",
+            label_fn=lambda k: str(KPI_CATALOG.get(k, {}).get("label", k)),
+        )
+        traffic_ordered = _render_ordered_kpi_editor(
+            title="Orden de cards en Tráfico y Adquisición",
+            selected_keys=traffic_selected,
+            state_key=f"adm_dash_traffic_order_{target_scope}",
+            label_fn=lambda k: str(KPI_CATALOG.get(k, {}).get("label", k)),
+        )
         overview_sections_selected = st.multiselect(
             "Secciones Overview",
             options=overview_section_options,
@@ -10173,8 +10247,8 @@ def render_admin_panel(
         )
         if save_dashboard_button:
             errors: list[str] = []
-            overview_norm = _normalize_kpi_keys(overview_selected, DEFAULT_OVERVIEW_KPI_KEYS)
-            traffic_norm = _normalize_kpi_keys(traffic_selected, DEFAULT_TRAFFIC_KPI_KEYS)
+            overview_norm = _normalize_kpi_keys(overview_ordered, DEFAULT_OVERVIEW_KPI_KEYS)
+            traffic_norm = _normalize_kpi_keys(traffic_ordered, DEFAULT_TRAFFIC_KPI_KEYS)
             overview_sections_norm = _normalize_section_keys(
                 overview_sections_selected,
                 OVERVIEW_SECTION_OPTIONS,

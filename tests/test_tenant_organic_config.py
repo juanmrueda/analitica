@@ -105,3 +105,19 @@ def test_save_tenant_operational_flags_updates_tenants_json(tmp_path: Path) -> N
     saved = json.loads(tenants_path.read_text(encoding="utf-8"))
     assert saved["tenants"][0]["organic_enabled"] is True
     assert saved["tenants"][0]["name"] == "Tenant Disabled"
+
+
+def test_merge_ordered_selection_preserves_existing_order() -> None:
+    merged = dashboard._merge_ordered_selection(
+        ["cpl", "spend", "conv"],
+        ["spend", "conv", "cpl"],
+    )
+    assert merged == ["spend", "conv", "cpl"]
+
+
+def test_merge_ordered_selection_appends_new_items_and_removes_deselected() -> None:
+    merged = dashboard._merge_ordered_selection(
+        ["conv", "ctr", "cpl"],
+        ["spend", "conv", "cpl"],
+    )
+    assert merged == ["conv", "cpl", "ctr"]
