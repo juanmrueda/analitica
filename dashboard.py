@@ -3987,7 +3987,7 @@ def _merge_ordered_selection(selected_keys: list[str], ordered_keys: Any) -> lis
     return merged
 
 
-def _render_ordered_kpi_editor(
+def _render_ordered_key_editor(
     *,
     title: str,
     selected_keys: list[str],
@@ -6468,6 +6468,7 @@ def render_exec(
     prev_e,
     compare_label: str,
     overview_chart_state_key: str,
+    show_daily_fact: bool,
     hourly_sel: pd.DataFrame | None = None,
     hourly_prev_sel: pd.DataFrame | None = None,
     report_cache_sig: tuple[str, int, int] | None = None,
@@ -6488,17 +6489,6 @@ def render_exec(
     if active_overview_kpi not in valid_overview_kpis:
         active_overview_kpi = "spend" if "spend" in valid_overview_kpis else (valid_overview_kpis[0] if valid_overview_kpis else "spend")
         st.session_state[overview_chart_state_key] = active_overview_kpi
-    if "kpis" in section_set:
-        with _profile_span(profiler, "render_exec:section:kpis"):
-            active_overview_kpi = render_kpi_cards(
-                overview_kpi_keys,
-                kpi_payload,
-                DEFAULT_OVERVIEW_KPI_KEYS,
-                interactive=True,
-                state_key=overview_chart_state_key,
-                preferred_active_key=active_overview_kpi,
-            )
-
     c = metric_cols(platform)
     cache_path_str = ""
     cache_modified_ns = 0
@@ -6644,157 +6634,211 @@ def render_exec(
             c_text=C_TEXT,
         )
 
-    show_trend = "trend_chart" in section_set
-    show_right_stack = ("funnel" in section_set) or ("ga4_conversion" in section_set)
-    if show_trend and show_right_stack:
-        chart_col, funnel_col = st.columns([3.1, 1.2], gap="large")
-        with chart_col:
+    def _render_device_breakdown() -> None:
+        dashboard_overview_sections.render_device_breakdown(
+            st_module=st,
+            paid_dev_df=paid_dev_df,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            prev_start_date=prev_s,
+            prev_end_date=prev_e,
+            sdiv_fn=sdiv,
+            pct_delta_fn=pct_delta,
+            fmt_delta_compact_fn=fmt_delta_compact,
+            fmt_money_fn=fmt_money,
+            fmt_pct_fn=fmt_pct,
+            c_google=C_GOOGLE,
+            c_meta=C_META,
+            c_mute=C_MUTE,
+        )
+
+    def _render_campaigns() -> None:
+        section_title("Rendimiento de Campanas (Paid Media)")
+        if report_cache_sig is not None:
+            roll = _cached_campaign_roll_from_report(
+                cache_path_str,
+                cache_modified_ns,
+                cache_size_bytes,
+                start_iso,
+                end_iso,
+                platform,
+                campaign_filter_key,
+            ).head(20)
+            if roll.empty:
+                st.info("Sin datos de campanas para filtros actuales.")
+            else:
+                if campaign_filters:
+                    active_labels = [
+                        f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                        for k, v in campaign_filters.items()
+                        if str(v).strip()
+                    ]
+                    if active_labels:
+                        st.caption(" | ".join(active_labels))
+                st.dataframe(roll, width="stretch", hide_index=True)
+            return
+        if camp_df.empty:
+            st.info("No hay datos de campanas en JSON.")
+            return
+        cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
+        if platform in ("Google", "Meta"):
+            cp = cp[cp["platform"] == platform]
+        cp = _apply_campaign_filters(cp, campaign_filters)
+        required_defaults: dict[str, Any] = {
+            "platform": "",
+            "campaign_id": "",
+            "campaign_name": "",
+            "spend": 0.0,
+            "impressions": 0.0,
+            "clicks": 0.0,
+            "conversions": 0.0,
+            "ctr": 0.0,
+            "cpc": 0.0,
+            "reach": 0.0,
+            "frequency": 0.0,
+        }
+        for col, default in required_defaults.items():
+            if col not in cp.columns:
+                cp[col] = default
+        if cp.empty:
+            st.info("Sin datos de campanas para filtros actuales.")
+            return
+        agg_map: dict[str, tuple[str, str]] = {
+            "spend": ("spend", "sum"),
+            "impressions": ("impressions", "sum"),
+            "clicks": ("clicks", "sum"),
+            "conversions": ("conversions", "sum"),
+            "ctr": ("ctr", "mean"),
+            "cpc": ("cpc", "mean"),
+            "reach": ("reach", "max"),
+            "frequency": ("frequency", "mean"),
+        }
+        roll = (
+            cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False)
+            .agg(**agg_map)
+            .sort_values("spend", ascending=False)
+        )
+        roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
+        if campaign_filters:
+            active_labels = [
+                f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
+                for k, v in campaign_filters.items()
+                if str(v).strip()
+            ]
+            if active_labels:
+                st.caption(" | ".join(active_labels))
+        st.dataframe(roll.head(20), width="stretch", hide_index=True)
+
+    def _render_audit_table() -> None:
+        dashboard_overview_sections.render_audit_table(
+            st_module=st,
+            df_sel=df_sel,
+            metric_cols=c,
+            sdiv_fn=sdiv,
+            fmt_money_fn=fmt_money,
+            fmt_pct_fn=fmt_pct,
+        )
+
+    def _render_top_pieces() -> None:
+        dashboard_overview_sections.render_top_pieces_section(
+            render_top_pieces_range_fn=render_top_pieces_range,
+            camp_df=camp_df,
+            piece_df=piece_df,
+            platform=platform,
+            start_ref=s,
+            end_ref=e,
+            tenant_meta_account_id=tenant_meta_account_id,
+            tenant_google_customer_id=tenant_google_customer_id,
+            campaign_filters=campaign_filters,
+            report_cache_sig=report_cache_sig,
+        )
+
+    def _render_daily_fact_section() -> None:
+        render_daily_fact(df_sel, platform)
+
+    def _render_trend_stack() -> None:
+        show_trend = "trend_chart" in section_set
+        show_right_stack = ("funnel" in section_set) or ("ga4_conversion" in section_set)
+        if show_trend and show_right_stack:
+            chart_col, funnel_col = st.columns([3.1, 1.2], gap="large")
+            with chart_col:
+                with _profile_span(profiler, "render_exec:section:trend_chart"):
+                    _render_trend_chart()
+            with funnel_col:
+                with _profile_span(profiler, "render_exec:section:funnel_ga4"):
+                    _render_funnel_and_ga4()
+        elif show_trend:
             with _profile_span(profiler, "render_exec:section:trend_chart"):
                 _render_trend_chart()
-        with funnel_col:
+        elif show_right_stack:
             with _profile_span(profiler, "render_exec:section:funnel_ga4"):
                 _render_funnel_and_ga4()
-    elif show_trend:
-        with _profile_span(profiler, "render_exec:section:trend_chart"):
-            _render_trend_chart()
-    elif show_right_stack:
-        with _profile_span(profiler, "render_exec:section:funnel_ga4"):
-            _render_funnel_and_ga4()
 
-    if "media_mix" in section_set:
-        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        with _profile_span(profiler, "render_exec:section:media_mix"):
-            _render_media_mix()
-
-    if "lead_demographics" in section_set:
-        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        with _profile_span(profiler, "render_exec:section:lead_demographics"):
-            _render_lead_demographics()
-
-    if "lead_geo_map" in section_set:
-        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        with _profile_span(profiler, "render_exec:section:lead_geo_map"):
-            _render_lead_geo_map()
-
-    if "device_breakdown" in section_set:
-        with _profile_span(profiler, "render_exec:section:device_breakdown"):
-            dashboard_overview_sections.render_device_breakdown(
-                st_module=st,
-                paid_dev_df=paid_dev_df,
-                platform=platform,
-                start_date=s,
-                end_date=e,
-                prev_start_date=prev_s,
-                prev_end_date=prev_e,
-                sdiv_fn=sdiv,
-                pct_delta_fn=pct_delta,
-                fmt_delta_compact_fn=fmt_delta_compact,
-                fmt_money_fn=fmt_money,
-                fmt_pct_fn=fmt_pct,
-                c_google=C_GOOGLE,
-                c_meta=C_META,
-                c_mute=C_MUTE,
-            )
-
-    if "campaigns" in section_set:
-        st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        with _profile_span(profiler, "render_exec:section:campaigns"):
-            section_title("Rendimiento de Campanas (Paid Media)")
-            if report_cache_sig is not None:
-                roll = _cached_campaign_roll_from_report(
-                    cache_path_str,
-                    cache_modified_ns,
-                    cache_size_bytes,
-                    start_iso,
-                    end_iso,
-                    platform,
-                    campaign_filter_key,
-                ).head(20)
-                if roll.empty:
-                    st.info("Sin datos de campanas para filtros actuales.")
-                else:
-                    if campaign_filters:
-                        active_labels = [
-                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
-                            for k, v in campaign_filters.items()
-                            if str(v).strip()
-                        ]
-                        if active_labels:
-                            st.caption(" | ".join(active_labels))
-                    st.dataframe(roll, width="stretch", hide_index=True)
-            elif camp_df.empty:
-                st.info("No hay datos de campanas en JSON.")
-            else:
-                cp = camp_df[(camp_df["date"] >= s) & (camp_df["date"] <= e)].copy()
-                if platform in ("Google", "Meta"):
-                    cp = cp[cp["platform"] == platform]
-                cp = _apply_campaign_filters(cp, campaign_filters)
-                required_defaults: dict[str, Any] = {
-                    "platform": "",
-                    "campaign_id": "",
-                    "campaign_name": "",
-                    "spend": 0.0,
-                    "impressions": 0.0,
-                    "clicks": 0.0,
-                    "conversions": 0.0,
-                    "ctr": 0.0,
-                    "cpc": 0.0,
-                    "reach": 0.0,
-                    "frequency": 0.0,
-                }
-                for col, default in required_defaults.items():
-                    if col not in cp.columns:
-                        cp[col] = default
-                if cp.empty:
-                    st.info("Sin datos de campanas para filtros actuales.")
-                else:
-                    agg_map: dict[str, tuple[str, str]] = {
-                        "spend": ("spend", "sum"),
-                        "impressions": ("impressions", "sum"),
-                        "clicks": ("clicks", "sum"),
-                        "conversions": ("conversions", "sum"),
-                        "ctr": ("ctr", "mean"),
-                        "cpc": ("cpc", "mean"),
-                        "reach": ("reach", "max"),
-                        "frequency": ("frequency", "mean"),
-                    }
-                    roll = cp.groupby(["platform", "campaign_id", "campaign_name"], as_index=False).agg(**agg_map).sort_values("spend", ascending=False)
-                    roll["cpl"] = roll.apply(lambda r: sdiv(float(r["spend"]), float(r["conversions"])), axis=1)
-                    if campaign_filters:
-                        active_labels = [
-                            f"{CAMPAIGN_FILTER_OPTIONS.get(k, k)}: {v}"
-                            for k, v in campaign_filters.items()
-                            if str(v).strip()
-                        ]
-                        if active_labels:
-                            st.caption(" | ".join(active_labels))
-                    st.dataframe(roll.head(20), width="stretch", hide_index=True)
-
-    if "audit_table" in section_set:
-        with _profile_span(profiler, "render_exec:section:audit_table"):
-            dashboard_overview_sections.render_audit_table(
-                st_module=st,
-                df_sel=df_sel,
-                metric_cols=c,
-                sdiv_fn=sdiv,
-                fmt_money_fn=fmt_money,
-                fmt_pct_fn=fmt_pct,
-            )
-
-    if "top_pieces" in section_set:
-        with _profile_span(profiler, "render_exec:section:top_pieces"):
-            dashboard_overview_sections.render_top_pieces_section(
-                render_top_pieces_range_fn=render_top_pieces_range,
-                camp_df=camp_df,
-                piece_df=piece_df,
-                platform=platform,
-                start_ref=s,
-                end_ref=e,
-                tenant_meta_account_id=tenant_meta_account_id,
-                tenant_google_customer_id=tenant_google_customer_id,
-                campaign_filters=campaign_filters,
-                report_cache_sig=report_cache_sig,
-            )
+    rendered_any = False
+    trend_group_keys = {"trend_chart", "funnel", "ga4_conversion"}
+    trend_group_rendered = False
+    def _section_gap() -> None:
+        if rendered_any:
+            st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+    for section_key in selected_sections:
+        if section_key == "daily_fact" and not show_daily_fact:
+            continue
+        if section_key == "kpis":
+            with _profile_span(profiler, "render_exec:section:kpis"):
+                active_overview_kpi = render_kpi_cards(
+                    overview_kpi_keys,
+                    kpi_payload,
+                    DEFAULT_OVERVIEW_KPI_KEYS,
+                    interactive=True,
+                    state_key=overview_chart_state_key,
+                    preferred_active_key=active_overview_kpi,
+                )
+            rendered_any = True
+            continue
+        if section_key in trend_group_keys:
+            if trend_group_rendered:
+                continue
+            _section_gap()
+            _render_trend_stack()
+            trend_group_rendered = True
+            rendered_any = True
+            continue
+        if section_key == "media_mix":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:media_mix"):
+                _render_media_mix()
+        elif section_key == "lead_demographics":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:lead_demographics"):
+                _render_lead_demographics()
+        elif section_key == "lead_geo_map":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:lead_geo_map"):
+                _render_lead_geo_map()
+        elif section_key == "device_breakdown":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:device_breakdown"):
+                _render_device_breakdown()
+        elif section_key == "campaigns":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:campaigns"):
+                _render_campaigns()
+        elif section_key == "audit_table":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:audit_table"):
+                _render_audit_table()
+        elif section_key == "top_pieces":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:top_pieces"):
+                _render_top_pieces()
+        elif section_key == "daily_fact":
+            _section_gap()
+            with _profile_span(profiler, "render_exec:section:daily_fact"):
+                _render_daily_fact_section()
+        else:
+            continue
+        rendered_any = True
 
 def render_top_pieces_range(
     camp_df: pd.DataFrame,
@@ -7086,81 +7130,80 @@ def render_traffic(
             fig.update_layout(yaxis={"tickformat": ".0%"})
         st.plotly_chart(fig, width="stretch")
 
-    if "kpis" in section_set:
-        with _profile_span(profiler, "render_traffic:section:kpis"):
-            current_snapshot = dashboard_traffic_sections.compute_traffic_quality_snapshot(
-                channel_df=channel_raw,
-                event_df=ga4_event_raw,
-                platform=platform,
-                start_date=s,
-                end_date=e,
-                ga4_event_name=ga4_conversion_event_name,
-                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
-                source_platform_fn=_ga4_source_platform,
-                fallback_metrics=cur_fallback_metrics,
+    def _render_kpis() -> None:
+        current_snapshot = dashboard_traffic_sections.compute_traffic_quality_snapshot(
+            channel_df=channel_raw,
+            event_df=ga4_event_raw,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            ga4_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            source_platform_fn=_ga4_source_platform,
+            fallback_metrics=cur_fallback_metrics,
+        )
+        previous_snapshot = dashboard_traffic_sections.compute_traffic_quality_snapshot(
+            channel_df=channel_raw,
+            event_df=ga4_event_raw,
+            platform=platform,
+            start_date=prev_s,
+            end_date=prev_e,
+            ga4_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            source_platform_fn=_ga4_source_platform,
+            fallback_metrics=prev_fallback_metrics,
+        )
+        st.markdown("### Tarjetas de Decision (Calidad de Trafico)")
+        traffic_kpi_payload = build_kpi_payload(current_snapshot, previous_snapshot, 1, 1)
+        active_traffic_kpi = render_kpi_cards(
+            selected_traffic_card_keys,
+            traffic_kpi_payload,
+            selected_traffic_card_keys,
+            interactive=True,
+            state_key="traffic_chart_metric",
+            preferred_active_key=selected_traffic_card_keys[0] if selected_traffic_card_keys else "sessions",
+        )
+        if bool(current_snapshot.get("attribution_limited")):
+            st.caption(
+                "Atribucion limitada por fuente: faltan campos para segmentar plataforma con precision."
             )
-            previous_snapshot = dashboard_traffic_sections.compute_traffic_quality_snapshot(
-                channel_df=channel_raw,
-                event_df=ga4_event_raw,
-                platform=platform,
-                start_date=prev_s,
-                end_date=prev_e,
-                ga4_event_name=ga4_conversion_event_name,
-                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
-                source_platform_fn=_ga4_source_platform,
-                fallback_metrics=prev_fallback_metrics,
-            )
-            st.markdown("### Tarjetas de Decision (Calidad de Trafico)")
-            traffic_kpi_payload = build_kpi_payload(current_snapshot, previous_snapshot, 1, 1)
-            active_traffic_kpi = render_kpi_cards(
-                selected_traffic_card_keys,
-                traffic_kpi_payload,
-                selected_traffic_card_keys,
-                interactive=True,
-                state_key="traffic_chart_metric",
-                preferred_active_key=selected_traffic_card_keys[0] if selected_traffic_card_keys else "sessions",
-            )
-            if bool(current_snapshot.get("attribution_limited")):
-                st.caption(
-                    "Atribucion limitada por fuente: faltan campos para segmentar plataforma con precision."
-                )
-            conversion_source_label = str(current_snapshot.get("conversion_source_label", "")).strip()
-            if conversion_source_label:
-                st.caption(f"Fuente de conversion en tarjetas: {conversion_source_label}.")
+        conversion_source_label = str(current_snapshot.get("conversion_source_label", "")).strip()
+        if conversion_source_label:
+            st.caption(f"Fuente de conversion en tarjetas: {conversion_source_label}.")
 
-            current_trend, current_trend_meta = dashboard_traffic_sections.build_traffic_metric_timeseries(
-                channel_df=channel_raw,
-                event_df=ga4_event_raw,
-                fallback_daily_df=df_sel,
-                platform=platform,
-                start_date=s,
-                end_date=e,
-                ga4_event_name=ga4_conversion_event_name,
-                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
-                source_platform_fn=_ga4_source_platform,
-                metric_key=active_traffic_kpi,
-            )
-            previous_trend, _previous_trend_meta = dashboard_traffic_sections.build_traffic_metric_timeseries(
-                channel_df=channel_raw,
-                event_df=ga4_event_raw,
-                fallback_daily_df=df_prev,
-                platform=platform,
-                start_date=prev_s,
-                end_date=prev_e,
-                ga4_event_name=ga4_conversion_event_name,
-                default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
-                source_platform_fn=_ga4_source_platform,
-                metric_key=active_traffic_kpi,
-            )
-            _render_traffic_metric_trend(
-                active_traffic_kpi,
-                current_trend,
-                previous_trend,
-            )
-            if active_traffic_kpi in {"conv_acq", "cvr_sess_conv"}:
-                source_label = str(current_trend_meta.get("conversion_source_label", "")).strip()
-                if source_label:
-                    st.caption(f"Tendencia usando conversiones desde: {source_label}.")
+        current_trend, current_trend_meta = dashboard_traffic_sections.build_traffic_metric_timeseries(
+            channel_df=channel_raw,
+            event_df=ga4_event_raw,
+            fallback_daily_df=df_sel,
+            platform=platform,
+            start_date=s,
+            end_date=e,
+            ga4_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            source_platform_fn=_ga4_source_platform,
+            metric_key=active_traffic_kpi,
+        )
+        previous_trend, _previous_trend_meta = dashboard_traffic_sections.build_traffic_metric_timeseries(
+            channel_df=channel_raw,
+            event_df=ga4_event_raw,
+            fallback_daily_df=df_prev,
+            platform=platform,
+            start_date=prev_s,
+            end_date=prev_e,
+            ga4_event_name=ga4_conversion_event_name,
+            default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            source_platform_fn=_ga4_source_platform,
+            metric_key=active_traffic_kpi,
+        )
+        _render_traffic_metric_trend(
+            active_traffic_kpi,
+            current_trend,
+            previous_trend,
+        )
+        if active_traffic_kpi in {"conv_acq", "cvr_sess_conv"}:
+            source_label = str(current_trend_meta.get("conversion_source_label", "")).strip()
+            if source_label:
+                st.caption(f"Tendencia usando conversiones desde: {source_label}.")
 
     def _render_channels() -> None:
         section_title("Canales / Adquisicion")
@@ -7477,41 +7520,37 @@ def render_traffic(
                 colors=palette_browser,
             )
 
-    show_channels = "channels" in section_set
-    show_source_medium = "source_medium" in section_set
-    show_top_pages = needs_top_pages
-    show_hourly_active_users = needs_hourly_active_users
-    show_country_users = needs_country_users
-    show_city_users = needs_city_users
-    show_tech_breakdown = needs_tech_breakdown
-
-    if show_channels:
-        with _profile_span(profiler, "render_traffic:section:channels"):
-            _render_channels()
-
-    if show_source_medium:
-        with _profile_span(profiler, "render_traffic:section:source_medium"):
-            _render_source_medium()
-
-    if show_top_pages:
-        with _profile_span(profiler, "render_traffic:section:top_pages"):
-            _render_top_pages()
-
-    if show_hourly_active_users:
-        with _profile_span(profiler, "render_traffic:section:hourly_active_users"):
-            _render_hourly_active_users()
-
-    if show_country_users:
-        with _profile_span(profiler, "render_traffic:section:country_users"):
-            _render_country_users()
-
-    if show_city_users:
-        with _profile_span(profiler, "render_traffic:section:city_users"):
-            _render_city_users()
-
-    if show_tech_breakdown:
-        with _profile_span(profiler, "render_traffic:section:tech_breakdown"):
-            _render_tech_breakdown()
+    rendered_any = False
+    for section_key in selected_sections:
+        if rendered_any and section_key != "kpis":
+            st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
+        if section_key == "kpis":
+            with _profile_span(profiler, "render_traffic:section:kpis"):
+                _render_kpis()
+        elif section_key == "channels":
+            with _profile_span(profiler, "render_traffic:section:channels"):
+                _render_channels()
+        elif section_key == "source_medium":
+            with _profile_span(profiler, "render_traffic:section:source_medium"):
+                _render_source_medium()
+        elif section_key == "top_pages":
+            with _profile_span(profiler, "render_traffic:section:top_pages"):
+                _render_top_pages()
+        elif section_key == "hourly_active_users":
+            with _profile_span(profiler, "render_traffic:section:hourly_active_users"):
+                _render_hourly_active_users()
+        elif section_key == "country_users":
+            with _profile_span(profiler, "render_traffic:section:country_users"):
+                _render_country_users()
+        elif section_key == "city_users":
+            with _profile_span(profiler, "render_traffic:section:city_users"):
+                _render_city_users()
+        elif section_key == "tech_breakdown":
+            with _profile_span(profiler, "render_traffic:section:tech_breakdown"):
+                _render_tech_breakdown()
+        else:
+            continue
+        rendered_any = True
 
 def _render_admin_user_create_panel(
     users: dict[str, dict[str, Any]],
@@ -10110,13 +10149,13 @@ def render_admin_panel(
             key=f"adm_dash_traffic_{target_scope}",
             help="Selecciona entre 1 y 6 KPIs para las tarjetas superiores de Tráfico.",
         )
-        overview_ordered = _render_ordered_kpi_editor(
+        overview_ordered = _render_ordered_key_editor(
             title="Orden de cards en Overview",
             selected_keys=overview_selected,
             state_key=f"adm_dash_overview_order_{target_scope}",
             label_fn=lambda k: str(KPI_CATALOG.get(k, {}).get("label", k)),
         )
-        traffic_ordered = _render_ordered_kpi_editor(
+        traffic_ordered = _render_ordered_key_editor(
             title="Orden de cards en Tráfico y Adquisición",
             selected_keys=traffic_selected,
             state_key=f"adm_dash_traffic_order_{target_scope}",
@@ -10135,6 +10174,18 @@ def render_admin_panel(
             default=traffic_sections_defaults,
             format_func=lambda k: str(TRAFFIC_SECTION_OPTIONS.get(k, k)),
             key=f"adm_dash_traffic_sections_{target_scope}",
+        )
+        overview_sections_ordered = _render_ordered_key_editor(
+            title="Orden de bloques en Overview",
+            selected_keys=overview_sections_selected,
+            state_key=f"adm_dash_overview_sections_order_{target_scope}",
+            label_fn=lambda k: str(OVERVIEW_SECTION_OPTIONS.get(k, k)),
+        )
+        traffic_sections_ordered = _render_ordered_key_editor(
+            title="Orden de bloques en Trafico y Adquisicion",
+            selected_keys=traffic_sections_selected,
+            state_key=f"adm_dash_traffic_sections_order_{target_scope}",
+            label_fn=lambda k: str(TRAFFIC_SECTION_OPTIONS.get(k, k)),
         )
         campaign_filters_selected = st.multiselect(
             "Filtros dinámicos de campañas",
@@ -10250,12 +10301,12 @@ def render_admin_panel(
             overview_norm = _normalize_kpi_keys(overview_ordered, DEFAULT_OVERVIEW_KPI_KEYS)
             traffic_norm = _normalize_kpi_keys(traffic_ordered, DEFAULT_TRAFFIC_KPI_KEYS)
             overview_sections_norm = _normalize_section_keys(
-                overview_sections_selected,
+                overview_sections_ordered,
                 OVERVIEW_SECTION_OPTIONS,
                 DEFAULT_OVERVIEW_SECTION_KEYS,
             )
             traffic_sections_norm = _normalize_section_keys(
-                traffic_sections_selected,
+                traffic_sections_ordered,
                 TRAFFIC_SECTION_OPTIONS,
                 DEFAULT_TRAFFIC_SECTION_KEYS,
             )
@@ -10776,9 +10827,6 @@ def main() -> None:
                 auth_user=auth_user,
                 coco_cfg=coco_cfg,
             )
-        if show_daily_fact and "daily_fact" in overview_section_set:
-            with _profile_span(profiler, "main:overview:section:daily_fact"):
-                render_daily_fact(df_sel, platform)
         with _profile_span(profiler, "main:overview:render_page"):
             render_exec(
                 df_sel,
@@ -10805,6 +10853,7 @@ def main() -> None:
                 prev_e,
                 compare_label,
                 f"overview_chart_metric_{tenant_id}",
+                show_daily_fact,
                 hourly_sel,
                 hourly_prev_sel,
                 report_cache_sig=report_cache_sig,

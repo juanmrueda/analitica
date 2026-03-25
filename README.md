@@ -24,6 +24,8 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 - Cambios locales recientes:
   - `edd3a3a` (`feat: onboard RACSA tenant with monthly backfill workflow`)
   - `dc6e953` (`feat: revamp traffic dashboard sections`)
+  - `0b9ee15` (`feat: expand traffic acquisition insights`)
+  - `fa76022` (`feat: allow manual KPI ordering in admin`)
 
 ### Avance local COCO IA y arquitectura (2026-03-13)
 
@@ -49,7 +51,7 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
 
 - `dashboard.py` -> UI principal.
 - `dashboard_data.py` -> capa de datos (IO de reportes/parquet + normalizacion de tablas para dashboard).
-- `dashboard_traffic_sections.py` -> secciones especializadas de Trafico y Adquisicion (decision cards, canales, source/medium, top pages).
+- `dashboard_traffic_sections.py` -> secciones especializadas de Trafico y Adquisicion (decision cards, canales, source/medium, top pages, heatmap horario, pais/ciudad y tecnologia de usuario).
 - `assets/dashboard.css` -> estilos principales del dashboard (antes embebidos en `apply_theme()`).
 - `coco_agent/` -> modulo de agente COCO IA (engine, workflow, resolvers, context builder, tools).
 - `scripts/run_all_tenants.py` -> ejecuta el pipeline para todos los tenants configurados.
@@ -186,11 +188,27 @@ python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_hi
 - Gestion de usuarios por tenant.
 - Activacion/desactivacion de vistas del menu lateral.
 - Configuracion dinamica de KPIs y secciones por tenant.
+- Orden manual de cards KPI en `Overview` y `Trafico y Adquisicion`.
+- Orden manual de bloques/secciones por tenant para `Overview` y `Trafico y Adquisicion`.
 - Vista/plataforma por defecto por tenant.
 - Upload de logo por tenant (se guarda en `assets/logos`).
 - Toggle de extraccion organica por tenant (persiste en `config/tenants.json`).
 - Toggle de salud de token Meta en sidebar.
 - Auditoria de cambios y backups de configuracion.
+
+## Trafico y Adquisicion
+
+- Las cards superiores son interactivas: al hacer clic en una card cambia la tendencia inferior, igual que en `Overview`.
+- La vista usa tablas GA4 del bundle `traffic_acquisition` cuando el tenant tiene `ga4_property_id`.
+- Secciones nuevas soportadas:
+  - `Usuarios Activos por Hora`
+  - `Usuarios por Pais` (top 5)
+  - `Top 10 Ciudades`
+  - `Tecnologia de Usuario`:
+    - tipo de dispositivo
+    - sistema operativo
+    - navegador
+- Si el tenant no tiene GA4, estas secciones no cargan data y la vista puede limitarse a paid/acquisition segun configuracion.
 
 ## Operacion en produccion (DigitalOcean)
 

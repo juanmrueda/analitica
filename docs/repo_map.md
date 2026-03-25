@@ -12,7 +12,7 @@ This repository is a **multi-tenant marketing analytics platform** with 3 main r
 2. **Application layer (Streamlit UI)**
    - Loads tenant reports.
    - Applies date/platform/campaign filters.
-   - Renders KPI cards, trend charts, funnel, acquisition tables, traffic quality cards, source/medium views, demographics, geo, and top pieces.
+   - Renders KPI cards, trend charts, funnel, acquisition tables, traffic quality cards, source/medium views, hourly active users, country/city user views, tech pies, demographics, geo, and top pieces.
    - Provides admin settings, auth, audit logs, and COCO IA chat widget.
 
 3. **Assistant layer (COCO IA)**
@@ -65,7 +65,10 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
 - `dashboard_traffic_sections.py`
   - Traffic decision cards.
   - Source / medium rollups.
-  - Top pages rollups and supporting traffic section calculations.
+  - Top pages rollups.
+  - Hourly active-users heatmap matrix.
+  - Country/city user rollups and tech breakdowns.
+  - Supporting traffic section calculations and compare-series shaping for clickable KPI cards.
 
 ### COCO IA package
 - `coco_agent/engine.py`
@@ -89,6 +92,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
 - `scripts/yap_daily_cpl_report.py`
   - Main extraction/merge/export pipeline for each tenant.
   - Respects per-tenant toggles such as `organic_enabled`.
+  - Exports GA4 traffic-acquisition datasets used by the dashboard, including hourly active users, country/city users, and browser/OS/device breakdowns.
   - External API HTTP calls + normalization + parquet export.
 - `scripts/run_all_tenants.py`
   - Multi-tenant orchestrator (iterates `config/tenants.json`).
@@ -170,13 +174,14 @@ Business logic is concentrated in:
 
 - **KPI and section behavior in dashboard flow**
   - `dashboard.py` (summary/KPI helpers, settings logic, tenant/user scope logic, cache strategy).
+  - Admin settings now persist explicit order for KPI cards and section blocks per scope/tenant.
 
 - **Trend logic**
   - `dashboard_trends.py` (hourly-vs-daily trend behavior, downsampling rules).
 
 - **Traffic quality and acquisition section logic**
   - `dashboard_traffic_sections.py`
-  - Key areas: decision-card metrics, source/medium aggregation, traffic page rollups, platform-aware GA4 filtering.
+  - Key areas: decision-card metrics, clickable KPI trend helpers, source/medium aggregation, traffic page rollups, hourly/country/city/tech aggregations, platform-aware GA4 filtering.
 
 - **COCO IA deterministic analytics interpretation**
   - `coco_agent/deterministic_resolvers.py`
@@ -243,7 +248,7 @@ Business logic is concentrated in:
 
 ### Core app modules
 - `dashboard.py`
-  - Responsibility: Streamlit application composition, auth/session state, tenant selection, admin panel, cache orchestration, and page-level rendering flow.
+  - Responsibility: Streamlit application composition, auth/session state, tenant selection, admin panel, cache orchestration, page-level rendering flow, and per-tenant ordering of KPI cards/section blocks.
 - `dashboard_data.py`
   - Responsibility: canonical loading/parsing/normalization of report JSON and parquet datasets into stable DataFrame contracts.
 - `dashboard_filters.py`
@@ -253,7 +258,7 @@ Business logic is concentrated in:
 - `dashboard_overview_sections.py`
   - Responsibility: rendering and local calculations for major overview sections (funnel, media mix, lead demographics/geo/device, audit table, top pieces).
 - `dashboard_traffic_sections.py`
-  - Responsibility: traffic decision cards, source/medium aggregation, top pages rollups, and related traffic-quality computations.
+  - Responsibility: traffic decision cards, source/medium aggregation, top pages rollups, hourly/country/city/tech traffic computations, and related traffic-quality helpers.
 
 ### COCO assistant modules
 - `coco_agent/engine.py`
@@ -297,7 +302,7 @@ Business logic is concentrated in:
 - `tests/test_dashboard_parquet_guardrail.py`
   - Responsibility: verify parquet bundle health, stale/missing detection.
 - `tests/test_dashboard_traffic_sections.py`
-  - Responsibility: validate traffic decision-card metrics, source/medium filtering, and top-pages rollup behavior.
+  - Responsibility: validate traffic decision-card metrics, source/medium filtering, top-pages rollup behavior, and hourly/country/tech aggregations.
 - `.github/workflows/ci.yml`
   - Responsibility: run tests, benchmark smoke, and perf gate in automated CI.
 
