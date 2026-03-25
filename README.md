@@ -286,6 +286,7 @@ sudo systemctl start yap-pipeline.service
 
 Nota deploy:
 - `config/users.json` y `config/dashboard_settings.json` no se versionan, por lo que `git pull` no los reemplaza.
+- Los bundles de `reports/<tenant>/` son estado runtime. Un `git pull` no backfillea datasets nuevos ni crea historicos faltantes por tenant.
 - Guardrail de historico: el pipeline protege contra bootstrap-start mayor al piso historico del tenant (por defecto `2025-01-01`) salvo que se use `--allow-historical-truncation`.
 
 ### Infraestructura (Caddy) versionada
@@ -306,12 +307,72 @@ sudo systemctl status yap-pipeline.timer --no-pager
 curl -I https://analitica.ipalmera.com
 ```
 
+### Sync manual de runtime y reportes a DO
+
+Usar este flujo cuando:
+- se crea un tenant nuevo y ya existe historico local en `reports/<tenant>/`
+- se agregan datasets nuevos al pipeline/dashboard y produccion no tiene cobertura historica para un tenant
+- se ajusta `config/dashboard_settings.json`, logos u otros archivos runtime no versionados
+
+Flujo recomendado:
+
+1. Validar localmente el tenant afectado.
+2. Respaldar en DO antes de pisar archivos runtime o `reports/<tenant>/`.
+3. Subir solo el tenant afectado, no todo `reports/`.
+4. Ejecutar un refresh corto del tenant en DO para traer el dia actual.
+5. Verificar cobertura y UI.
+
+Ejemplo operativo:
+
+```bash
+# 1) Backup remoto
+ssh juanm@<droplet_ip> "mkdir -p /opt/yap/app/reports_backups && cp -a /opt/yap/app/reports/yap /opt/yap/app/reports_backups/yap_$(date +%Y%m%d_%H%M%S)"
+
+# 2) Subir reportes del tenant desde local
+scp reports/yap/yap_historical.json juanm@<droplet_ip>:/tmp/yap_sync/yap_historical.json
+scp reports/yap/dashboard/*.parquet juanm@<droplet_ip>:/tmp/yap_sync/dashboard/
+
+# 3) Aplicar en DO
+ssh juanm@<droplet_ip> "cp /tmp/yap_sync/yap_historical.json /opt/yap/app/reports/yap/yap_historical.json && cp /tmp/yap_sync/dashboard/*.parquet /opt/yap/app/reports/yap/dashboard/"
+
+# 4) Refresh corto del tenant
+ssh juanm@<droplet_ip> "/opt/yap/venv/bin/python /opt/yap/app/scripts/yap_daily_cpl_report.py --tenant-id yap --tenants-config-path /opt/yap/app/config/tenants.json --mode auto --bootstrap-start 2025-01-01 --end-date $(date +%F) --refresh-lookback-days 1"
+```
+
+Notas:
+- Para `config/dashboard_settings.json`, logos o `config/users.json`, subir esos archivos por separado porque son runtime y no entran por `git pull`.
+- Si el tenant no existe todavia en `reports/` de DO, copiar primero el folder completo local del tenant (`reports/<tenant>/`) evita que el hourly intente bootstrap completo.
+- Si un rerun historico local falla por Meta/Google pero el JSON/parquet local ya quedo correcto, se puede sincronizar ese estado validado a DO y luego hacer solo un refresh corto.
+
 Validar datos para rango de un dia (hora real + top piezas):
 
 ```bash
 cd /opt/yap/app
 jq '.hourly|length' reports/yap/yap_historical.json
 jq '.traffic_acquisition.paid_piece_daily|length' reports/yap/yap_historical.json
+```
+
+Validar cobertura de datasets nuevos por tenant:
+
+```bash
+cd /opt/yap/app
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path("reports/yap/yap_historical.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+for key in [
+    "ga4_active_users_hourly",
+    "ga4_country_users_daily",
+    "ga4_city_users_daily",
+    "ga4_device_users_daily",
+    "ga4_operating_system_users_daily",
+    "ga4_browser_users_daily",
+]:
+    rows = data.get("traffic_acquisition", {}).get(key, [])
+    dates = sorted({str(r.get("date", ""))[:10] for r in rows if r.get("date")})
+    print(key, dates[0] if dates else None, dates[-1] if dates else None, len(rows))
+PY
 ```
 
 ## Configuracion sensible (no versionar)

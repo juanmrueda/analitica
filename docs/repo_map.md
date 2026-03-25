@@ -203,6 +203,7 @@ Business logic is concentrated in:
 - Data model is file-backed and implicit in JSON/Parquet schemas:
   - Main report files: `reports/<tenant>/*_historical.json`
   - Parquet bundle: `reports/<tenant>/dashboard/*.parquet`
+  - These report bundles are operational state as well as local artifacts; production may require manual tenant-level sync when a new tenant is seeded or a new dataset is added historically.
   - Config/runtime entities:
     - `config/tenants.json` (`historical_start_date`, IDs, and per-tenant toggles like `organic_enabled`)
     - `config/users.json` (runtime; template versioned)
@@ -238,6 +239,11 @@ Business logic is concentrated in:
   1. `reports/<tenant>/*_historical.json`
   2. parquet bundle generation in `scripts/yap_daily_cpl_report.py`
   3. normalization in `dashboard_data.py`
+- For production drift on a single tenant, prefer this ops order:
+  1. validate/fix the tenant locally
+  2. back up `/opt/yap/app/reports/<tenant>` in DO
+  3. sync only `reports/<tenant>/` (and runtime files like `config/dashboard_settings.json` or tenant logos if needed)
+  4. run a short tenant-only refresh in DO
 - For date/filter issues, inspect `dashboard_filters.py` + filter session-state wiring in `dashboard.py`.
 - For traffic-section issues, inspect `dashboard_traffic_sections.py` and then the `render_traffic()` wiring in `dashboard.py`.
 - For COCO answers, inspect `coco_agent/workflow.py` and then:
