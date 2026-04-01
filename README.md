@@ -262,7 +262,7 @@ journalctl -u yap-pipeline.service -n 120 --no-pager
 5. Streamlit consume esos JSONs en cada recarga.
 
 Nota:
-- Si un tenant no tiene `ga4_property_id` (ejemplos actuales `hyundai_hn` y `racsa`), GA4 se omite para ese tenant y el pipeline continua normalmente.
+- Si un tenant no tiene `ga4_property_id` (ejemplo actual `hyundai_hn`), GA4 se omite para ese tenant y el pipeline continua normalmente.
 - Si un tenant tiene `organic_enabled=false` (config actual de `yap`, `hyundai_hn` y `racsa`), el modulo organico se omite para ese tenant y no se reescribe `*_organic_historical.json`.
 - `dashboard.py` bootstrapea `config/dashboard_settings.json` desde `config/dashboard_settings.template.json` cuando falta el runtime.
 - Para vista de miniaturas remotas (Meta) en "Top 10 Piezas", Caddy debe permitir `img-src ... https:`.

@@ -182,11 +182,19 @@
         "daily_fact"
       ],
       "traffic_sections": [
-        "campaigns"
+        "kpis",
+        "channels",
+        "source_medium",
+        "top_pages",
+        "hourly_active_users",
+        "country_users",
+        "city_users",
+        "tech_breakdown"
       ],
       "campaign_filters": [],
       "enabled_view_modes": [
-        "Overview"
+        "Overview",
+        "Tráfico y Adquisición"
       ],
       "default_platform": "All",
       "default_view_mode": "Overview",
