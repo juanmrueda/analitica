@@ -969,21 +969,6 @@ def render_source_medium_table(
         st_module.info("Sin datos de Source / Medium para el rango seleccionado.")
         return
 
-    def _style_high_good(value: Any, *, reverse: bool = False) -> str:
-        try:
-            val = float(value)
-        except Exception:
-            return ""
-        if pd.isna(val):
-            return ""
-        if reverse:
-            green = int(34 + ((239 - 34) * val))
-            red = int(197 + ((68 - 197) * val))
-        else:
-            red = int(34 + ((239 - 34) * val))
-            green = int(197 + ((68 - 197) * val))
-        return f"background-color: rgba({red}, {green}, 94, 0.22); font-weight: 600;"
-
     display = roll.copy()
     display = display.rename(
         columns={
@@ -1009,39 +994,26 @@ def render_source_medium_table(
         ]
     ]
 
-    cvr = pd.to_numeric(display["CVR Sesion -> Conv"], errors="coerce")
-    bounce = pd.to_numeric(display["Rebote"], errors="coerce")
-    cvr_min, cvr_max = float(cvr.min(skipna=True) or 0.0), float(cvr.max(skipna=True) or 0.0)
-    bounce_min, bounce_max = float(bounce.min(skipna=True) or 0.0), float(bounce.max(skipna=True) or 0.0)
-
-    def _normalize_value(value: Any, min_value: float, max_value: float) -> float:
-        try:
-            current = float(value)
-        except Exception:
-            return 0.0
-        if max_value <= min_value:
-            return 0.5
-        return max(0.0, min(1.0, (current - min_value) / (max_value - min_value)))
-
-    styled = (
-        display.style.format(
-            {
-                "Sesiones": lambda v: f"{float(v):,.0f}",
-                "Usuarios": lambda v: f"{float(v):,.0f}",
-                "Rebote": lambda v: fmt_pct_fn(float(v)),
-                "Tiempo Promedio": lambda v: fmt_duration_fn(float(v)),
-                "Conversiones": lambda v: f"{float(v):,.0f}",
-                "CVR Sesion -> Conv": lambda v: fmt_pct_fn(float(v)),
-                "Share Sesiones": lambda v: fmt_pct_fn(float(v)),
-            }
-        )
-        .applymap(
-            lambda value: _style_high_good(_normalize_value(value, cvr_min, cvr_max), reverse=False),
-            subset=["CVR Sesion -> Conv"],
-        )
-        .applymap(
-            lambda value: _style_high_good(_normalize_value(value, bounce_min, bounce_max), reverse=True),
-            subset=["Rebote"],
-        )
+    display["Sesiones"] = pd.to_numeric(display["Sesiones"], errors="coerce").fillna(0.0).map(
+        lambda value: f"{float(value):,.0f}"
     )
-    st_module.dataframe(styled, width="stretch", hide_index=True)
+    display["Usuarios"] = pd.to_numeric(display["Usuarios"], errors="coerce").fillna(0.0).map(
+        lambda value: f"{float(value):,.0f}"
+    )
+    display["Rebote"] = pd.to_numeric(display["Rebote"], errors="coerce").fillna(0.0).map(
+        lambda value: fmt_pct_fn(float(value))
+    )
+    display["Tiempo Promedio"] = pd.to_numeric(
+        display["Tiempo Promedio"], errors="coerce"
+    ).fillna(0.0).map(lambda value: fmt_duration_fn(float(value)))
+    display["Conversiones"] = pd.to_numeric(display["Conversiones"], errors="coerce").fillna(0.0).map(
+        lambda value: f"{float(value):,.0f}"
+    )
+    display["CVR Sesion -> Conv"] = pd.to_numeric(
+        display["CVR Sesion -> Conv"], errors="coerce"
+    ).fillna(0.0).map(lambda value: fmt_pct_fn(float(value)))
+    display["Share Sesiones"] = pd.to_numeric(
+        display["Share Sesiones"], errors="coerce"
+    ).fillna(0.0).map(lambda value: fmt_pct_fn(float(value)))
+
+    st_module.dataframe(display, width="stretch", hide_index=True)

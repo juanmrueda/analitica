@@ -105,6 +105,17 @@ Nota:
 .\.venv\Scripts\streamlit run dashboard.py
 ```
 
+Para corrida local headless con puerto fijo:
+
+```powershell
+.\.venv\Scripts\streamlit run dashboard.py --server.headless true --server.port 8501
+```
+
+Notas operativas de esta corrida local:
+- URL esperada: `http://localhost:8501`
+- stdout manual: `tmp_streamlit_stdout_manual.log`
+- stderr manual: `tmp_streamlit_stderr_manual.log`
+
 Opcional (Windows): auto-arrancar Streamlit cuando abras Antigravity:
 
 ```powershell
@@ -200,6 +211,9 @@ python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_hi
 
 - Las cards superiores son interactivas: al hacer clic en una card cambia la tendencia inferior, igual que en `Overview`.
 - La vista usa tablas GA4 del bundle `traffic_acquisition` cuando el tenant tiene `ga4_property_id`.
+- Cuando existen bundles Parquet en `reports/<tenant>/dashboard/`, la vista prioriza esas tablas sobre el JSON historico para reducir latencia.
+- La tabla `Source / Medium` evita `pandas.Styler` en runtime para recortar el costo de primera carga/cambio de vista en tenants grandes como `yap`.
+- El body principal usa un placeholder temporal al cambiar entre `Overview` y `Trafico y Adquisicion` para disminuir la mezcla visual de bloques viejos mientras Streamlit completa el rerun.
 - Secciones nuevas soportadas:
   - `Usuarios Activos por Hora`
   - `Usuarios por Pais` (top 5)

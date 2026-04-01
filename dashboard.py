@@ -2345,6 +2345,20 @@ def _load_acq_df_cached(path_str: str, modified_ns: int, size_bytes: int, key: s
 
 
 @st.cache_data(show_spinner=False)
+def _load_acq_df_prefer_parquet_cached(
+    path_str: str,
+    modified_ns: int,
+    size_bytes: int,
+    key: str,
+) -> pd.DataFrame:
+    report_path = Path(path_str)
+    pq_sig = _parquet_cache_signature(report_path, key)
+    if pq_sig is not None:
+        return _load_acq_parquet_df_cached(*pq_sig)
+    return _load_acq_df_cached(path_str, modified_ns, size_bytes, key)
+
+
+@st.cache_data(show_spinner=False)
 def _load_campaign_unified_df_cached(path_str: str, modified_ns: int, size_bytes: int) -> pd.DataFrame:
     report_path = Path(path_str)
     pq_sig = _parquet_cache_signature(report_path, PARQUET_CAMPAIGN_UNIFIED_DATASET)
@@ -2394,7 +2408,7 @@ def load_acq_df_from_report_path(path: Path, key: str) -> pd.DataFrame:
     if pq_sig is not None:
         return _load_acq_parquet_df_cached(*pq_sig)
     path_str, modified_ns, size_bytes = _report_cache_signature(path)
-    return _load_acq_df_cached(path_str, modified_ns, size_bytes, key)
+    return _load_acq_df_prefer_parquet_cached(path_str, modified_ns, size_bytes, key)
 
 
 def load_campaign_unified_df_from_report_path(path: Path) -> pd.DataFrame:
@@ -5542,7 +5556,7 @@ def _cached_channels_roll_from_report(
     end_iso: str,
 ) -> pd.DataFrame:
     start_day, end_day = _resolve_cached_range(start_iso, end_iso)
-    ch = _load_acq_df_cached(path_str, modified_ns, size_bytes, "ga4_channel_daily")
+    ch = _load_acq_df_prefer_parquet_cached(path_str, modified_ns, size_bytes, "ga4_channel_daily")
     if ch.empty:
         return pd.DataFrame(columns=["sessionDefaultChannelGroup", "sessions", "conversions"])
     if "date" in ch.columns:
@@ -5572,7 +5586,7 @@ def _cached_top_pages_roll_from_report(
     end_iso: str,
 ) -> pd.DataFrame:
     start_day, end_day = _resolve_cached_range(start_iso, end_iso)
-    pg = _load_acq_df_cached(path_str, modified_ns, size_bytes, "ga4_top_pages_daily")
+    pg = _load_acq_df_prefer_parquet_cached(path_str, modified_ns, size_bytes, "ga4_top_pages_daily")
     if pg.empty:
         return pd.DataFrame(columns=["pagePath", "pageTitle", "views", "sessions", "avg_session"])
     if "date" in pg.columns:
@@ -6948,61 +6962,61 @@ def render_traffic(
     ):
         cache_path_str, cache_modified_ns, cache_size_bytes = report_cache_sig
         if needs_channel_data:
-            channel_raw = _load_acq_df_cached(
+            channel_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_channel_daily",
             )
         if needs_top_pages:
-            top_pages_raw = _load_acq_df_cached(
+            top_pages_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_top_pages_daily",
             )
         if needs_event_data:
-            ga4_event_raw = _load_acq_df_cached(
+            ga4_event_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_event_daily",
             )
         if needs_hourly_active_users:
-            hourly_active_users_raw = _load_acq_df_cached(
+            hourly_active_users_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_active_users_hourly",
             )
         if needs_country_users:
-            country_users_raw = _load_acq_df_cached(
+            country_users_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_country_users_daily",
             )
         if needs_city_users:
-            city_users_raw = _load_acq_df_cached(
+            city_users_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_city_users_daily",
             )
         if needs_tech_breakdown:
-            device_users_raw = _load_acq_df_cached(
+            device_users_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_device_users_daily",
             )
-            operating_system_users_raw = _load_acq_df_cached(
+            operating_system_users_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
                 "ga4_operating_system_users_daily",
             )
-            browser_users_raw = _load_acq_df_cached(
+            browser_users_raw = _load_acq_df_prefer_parquet_cached(
                 cache_path_str,
                 cache_modified_ns,
                 cache_size_bytes,
@@ -10703,6 +10717,24 @@ def main() -> None:
         TRAFFIC_SECTION_OPTIONS,
         DEFAULT_TRAFFIC_SECTION_KEYS,
     )
+    page_view_slot = st.empty()
+    loading_view_label = "Tráfico y Adquisición" if view_mode == VIEW_MODE_OPTIONS[1] else "Overview"
+    with page_view_slot.container():
+        st.markdown(
+            (
+                "<div style='padding:1.1rem 1.15rem;border:1px solid rgba(32,29,29,0.08);"
+                "border-radius:18px;background:rgba(255,255,255,0.72);"
+                "box-shadow:0 12px 28px rgba(15,23,42,0.04);margin:0.35rem 0 0.95rem 0;'>"
+                f"<div style='font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;"
+                "font-weight:800;color:#7A879D;margin-bottom:0.32rem;'>Cargando vista</div>"
+                f"<div style='font-size:1.02rem;font-weight:800;color:#201D1D;'>{html.escape(loading_view_label)}</div>"
+                "<div style='margin-top:0.25rem;font-size:0.88rem;color:#55657B;'>"
+                "Preparando datos y componentes visuales..."
+                "</div></div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
     with _profile_span(profiler, "main:prewarm:cross_view"):
         _prewarm_cross_view_caches(
             report_cache_sig,
@@ -10740,43 +10772,6 @@ def main() -> None:
                     pg = load_acq_df_from_report_path(report_path, "ga4_top_pages_daily")
                 if _needs_ga4_event:
                     ga4_event_daily = load_acq_df_from_report_path(report_path, "ga4_event_daily")
-        with _profile_span(profiler, "main:traffic:render_coco"):
-            render_coco_ia_widget(
-                df_base=df,
-                camp_df=camp_all,
-                piece_df=piece,
-                df_sel=df_sel,
-                df_prev=df_prev,
-                platform=platform,
-                s=s,
-                e=e,
-                tenant_id=tenant_id,
-                tenant_name=tenant_name,
-                auth_user=auth_user,
-                coco_cfg=coco_cfg,
-            )
-        with _profile_span(profiler, "main:traffic:render_page"):
-            render_traffic(
-                df_sel,
-                df_prev,
-                ch,
-                pg,
-                ga4_event_daily,
-                platform,
-                s,
-                e,
-                prev_s,
-                prev_e,
-                compare_label,
-                ga4_conversion_event_name,
-                _normalize_kpi_keys(
-                    tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
-                    DEFAULT_TRAFFIC_KPI_KEYS,
-                ),
-                traffic_sections,
-                report_cache_sig=report_cache_sig,
-                profiler=profiler,
-            )
     else:
         overview_section_set = set(overview_sections)
         show_daily_fact = _coerce_bool(
@@ -10812,65 +10807,107 @@ def main() -> None:
             else:
                 hourly_sel = pd.DataFrame()
                 hourly_prev_sel = pd.DataFrame()
-        with _profile_span(profiler, "main:overview:render_coco"):
-            render_coco_ia_widget(
-                df_base=df,
-                camp_df=camp_all,
-                piece_df=piece,
-                df_sel=df_sel,
-                df_prev=df_prev,
-                platform=platform,
-                s=s,
-                e=e,
-                tenant_id=tenant_id,
-                tenant_name=tenant_name,
-                auth_user=auth_user,
-                coco_cfg=coco_cfg,
-            )
-        with _profile_span(profiler, "main:overview:render_page"):
-            render_exec(
-                df_sel,
-                df_prev,
-                platform,
-                _normalize_kpi_keys(
-                    tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
-                    DEFAULT_OVERVIEW_KPI_KEYS,
-                ),
-                overview_sections,
-                paid_dev,
-                lead_demo,
-                lead_geo,
-                camp_all,
-                piece,
-                ga4_event_daily,
-                ga4_conversion_event_name,
-                tenant_meta_account_id,
-                tenant_google_customer_id,
-                campaign_filters,
-                s,
-                e,
-                prev_s,
-                prev_e,
-                compare_label,
-                f"overview_chart_metric_{tenant_id}",
-                show_daily_fact,
-                hourly_sel,
-                hourly_prev_sel,
-                report_cache_sig=report_cache_sig,
-                profiler=profiler,
-            )
 
-    if profiler.enabled:
-        profile_rows = profiler.report(top_n=50)
-        st.session_state["dashboard_profile_last"] = profile_rows
-        st.session_state["dashboard_profile_top3"] = profile_rows[:3]
-        if profile_rows:
-            top3_text = " | ".join(
-                f"{row.get('span')}: {float(row.get('ms', 0.0)):.1f} ms"
-                for row in profile_rows[:3]
-            )
-            st.caption(f"[PROFILE] Top 3: {top3_text}")
-            print(f"[dashboard-profile] top3={top3_text}")
+    page_view_slot.empty()
+    with page_view_slot.container():
+        if view_mode == VIEW_MODE_OPTIONS[1]:
+            with _profile_span(profiler, "main:traffic:render_coco"):
+                render_coco_ia_widget(
+                    df_base=df,
+                    camp_df=camp_all,
+                    piece_df=piece,
+                    df_sel=df_sel,
+                    df_prev=df_prev,
+                    platform=platform,
+                    s=s,
+                    e=e,
+                    tenant_id=tenant_id,
+                    tenant_name=tenant_name,
+                    auth_user=auth_user,
+                    coco_cfg=coco_cfg,
+                )
+            with _profile_span(profiler, "main:traffic:render_page"):
+                render_traffic(
+                    df_sel,
+                    df_prev,
+                    ch,
+                    pg,
+                    ga4_event_daily,
+                    platform,
+                    s,
+                    e,
+                    prev_s,
+                    prev_e,
+                    compare_label,
+                    ga4_conversion_event_name,
+                    _normalize_kpi_keys(
+                        tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
+                        DEFAULT_TRAFFIC_KPI_KEYS,
+                    ),
+                    traffic_sections,
+                    report_cache_sig=report_cache_sig,
+                    profiler=profiler,
+                )
+        else:
+            with _profile_span(profiler, "main:overview:render_coco"):
+                render_coco_ia_widget(
+                    df_base=df,
+                    camp_df=camp_all,
+                    piece_df=piece,
+                    df_sel=df_sel,
+                    df_prev=df_prev,
+                    platform=platform,
+                    s=s,
+                    e=e,
+                    tenant_id=tenant_id,
+                    tenant_name=tenant_name,
+                    auth_user=auth_user,
+                    coco_cfg=coco_cfg,
+                )
+            with _profile_span(profiler, "main:overview:render_page"):
+                render_exec(
+                    df_sel,
+                    df_prev,
+                    platform,
+                    _normalize_kpi_keys(
+                        tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
+                        DEFAULT_OVERVIEW_KPI_KEYS,
+                    ),
+                    overview_sections,
+                    paid_dev,
+                    lead_demo,
+                    lead_geo,
+                    camp_all,
+                    piece,
+                    ga4_event_daily,
+                    ga4_conversion_event_name,
+                    tenant_meta_account_id,
+                    tenant_google_customer_id,
+                    campaign_filters,
+                    s,
+                    e,
+                    prev_s,
+                    prev_e,
+                    compare_label,
+                    f"overview_chart_metric_{tenant_id}",
+                    show_daily_fact,
+                    hourly_sel,
+                    hourly_prev_sel,
+                    report_cache_sig=report_cache_sig,
+                    profiler=profiler,
+                )
+
+        if profiler.enabled:
+            profile_rows = profiler.report(top_n=50)
+            st.session_state["dashboard_profile_last"] = profile_rows
+            st.session_state["dashboard_profile_top3"] = profile_rows[:3]
+            if profile_rows:
+                top3_text = " | ".join(
+                    f"{row.get('span')}: {float(row.get('ms', 0.0)):.1f} ms"
+                    for row in profile_rows[:3]
+                )
+                st.caption(f"[PROFILE] Top 3: {top3_text}")
+                print(f"[dashboard-profile] top3={top3_text}")
 
     render_sidebar_logout_button()
 

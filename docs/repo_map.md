@@ -29,6 +29,8 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - Main Streamlit app (`main()`).
   - Auth/session/admin/config management.
   - Cache wrappers for report/parquet loading and heavy rollups.
+  - Uses a page-level replacement slot (`st.empty()`) and lightweight loading placeholder during main-view switches to reduce stale-content overlap.
+  - Prefers parquet-backed traffic acquisition datasets when available instead of forcing the full historical JSON path.
   - Delegates domain UI work to specialized modules:
     - `dashboard_filters`
     - `dashboard_data`
@@ -69,6 +71,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - Hourly active-users heatmap matrix.
   - Country/city user rollups and tech breakdowns.
   - Supporting traffic section calculations and compare-series shaping for clickable KPI cards.
+  - Renders `Source / Medium` as a formatted DataFrame instead of a styled pandas `Styler` object to avoid cold-switch latency spikes.
 
 ### COCO IA package
 - `coco_agent/engine.py`
@@ -254,7 +257,7 @@ Business logic is concentrated in:
 
 ### Core app modules
 - `dashboard.py`
-  - Responsibility: Streamlit application composition, auth/session state, tenant selection, admin panel, cache orchestration, page-level rendering flow, and per-tenant ordering of KPI cards/section blocks.
+  - Responsibility: Streamlit application composition, auth/session state, tenant selection, admin panel, cache orchestration, page-level rendering flow, per-tenant ordering of KPI cards/section blocks, and transition placeholder management between main views.
 - `dashboard_data.py`
   - Responsibility: canonical loading/parsing/normalization of report JSON and parquet datasets into stable DataFrame contracts.
 - `dashboard_filters.py`
@@ -264,7 +267,7 @@ Business logic is concentrated in:
 - `dashboard_overview_sections.py`
   - Responsibility: rendering and local calculations for major overview sections (funnel, media mix, lead demographics/geo/device, audit table, top pieces).
 - `dashboard_traffic_sections.py`
-  - Responsibility: traffic decision cards, source/medium aggregation, top pages rollups, hourly/country/city/tech traffic computations, and related traffic-quality helpers.
+  - Responsibility: traffic decision cards, source/medium aggregation, top pages rollups, hourly/country/city/tech traffic computations, related traffic-quality helpers, and low-latency rendering for traffic acquisition tables.
 
 ### COCO assistant modules
 - `coco_agent/engine.py`
