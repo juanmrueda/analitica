@@ -6232,7 +6232,14 @@ def render_sidebar(
     view_mode = str(st.session_state.get("sidebar_view_mode", "Overview"))
 
     def _set_view_mode(mode: str) -> None:
-        if str(st.session_state.get("sidebar_view_mode", "")) != mode:
+        current_mode = str(st.session_state.get("sidebar_view_mode", ""))
+        if current_mode != mode:
+            st.session_state["view_mode_transition_from"] = current_mode
+            st.session_state["view_mode_transition_to"] = mode
+            st.session_state["view_mode_transition_nonce"] = int(
+                st.session_state.get("view_mode_transition_nonce", 0)
+            ) + 1
+            st.session_state["skip_cross_view_prewarm_once"] = True
             st.session_state["sidebar_view_mode"] = mode
             st.rerun()
 
@@ -7534,37 +7541,56 @@ def render_traffic(
                 colors=palette_browser,
             )
 
+    section_slots: dict[str, Any] = {}
+    section_order: list[str] = []
     rendered_any = False
     for section_key in selected_sections:
+        if section_key not in {
+            "kpis",
+            "channels",
+            "source_medium",
+            "top_pages",
+            "hourly_active_users",
+            "country_users",
+            "city_users",
+            "tech_breakdown",
+        }:
+            continue
         if rendered_any and section_key != "kpis":
             st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
-        if section_key == "kpis":
-            with _profile_span(profiler, "render_traffic:section:kpis"):
-                _render_kpis()
-        elif section_key == "channels":
-            with _profile_span(profiler, "render_traffic:section:channels"):
-                _render_channels()
-        elif section_key == "source_medium":
-            with _profile_span(profiler, "render_traffic:section:source_medium"):
-                _render_source_medium()
-        elif section_key == "top_pages":
-            with _profile_span(profiler, "render_traffic:section:top_pages"):
-                _render_top_pages()
-        elif section_key == "hourly_active_users":
-            with _profile_span(profiler, "render_traffic:section:hourly_active_users"):
-                _render_hourly_active_users()
-        elif section_key == "country_users":
-            with _profile_span(profiler, "render_traffic:section:country_users"):
-                _render_country_users()
-        elif section_key == "city_users":
-            with _profile_span(profiler, "render_traffic:section:city_users"):
-                _render_city_users()
-        elif section_key == "tech_breakdown":
-            with _profile_span(profiler, "render_traffic:section:tech_breakdown"):
-                _render_tech_breakdown()
-        else:
-            continue
+        section_slots[section_key] = st.empty()
+        section_order.append(section_key)
         rendered_any = True
+
+    for section_key in section_order:
+        slot = section_slots.get(section_key)
+        if slot is None:
+            continue
+        with slot.container():
+            if section_key == "kpis":
+                with _profile_span(profiler, "render_traffic:section:kpis"):
+                    _render_kpis()
+            elif section_key == "channels":
+                with _profile_span(profiler, "render_traffic:section:channels"):
+                    _render_channels()
+            elif section_key == "source_medium":
+                with _profile_span(profiler, "render_traffic:section:source_medium"):
+                    _render_source_medium()
+            elif section_key == "top_pages":
+                with _profile_span(profiler, "render_traffic:section:top_pages"):
+                    _render_top_pages()
+            elif section_key == "hourly_active_users":
+                with _profile_span(profiler, "render_traffic:section:hourly_active_users"):
+                    _render_hourly_active_users()
+            elif section_key == "country_users":
+                with _profile_span(profiler, "render_traffic:section:country_users"):
+                    _render_country_users()
+            elif section_key == "city_users":
+                with _profile_span(profiler, "render_traffic:section:city_users"):
+                    _render_city_users()
+            elif section_key == "tech_breakdown":
+                with _profile_span(profiler, "render_traffic:section:tech_breakdown"):
+                    _render_tech_breakdown()
 
 def _render_admin_user_create_panel(
     users: dict[str, dict[str, Any]],
@@ -10717,6 +10743,12 @@ def main() -> None:
         TRAFFIC_SECTION_OPTIONS,
         DEFAULT_TRAFFIC_SECTION_KEYS,
     )
+    transition_target = str(st.session_state.get("view_mode_transition_to", "")).strip()
+    transition_active = bool(transition_target) and transition_target == view_mode
+    transition_nonce = int(st.session_state.get("view_mode_transition_nonce", 0))
+    skip_cross_view_prewarm = bool(
+        st.session_state.get("skip_cross_view_prewarm_once", False)
+    ) and transition_active
     page_view_slot = st.empty()
     loading_view_label = "Tráfico y Adquisición" if view_mode == VIEW_MODE_OPTIONS[1] else "Overview"
     with page_view_slot.container():
@@ -10735,20 +10767,21 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    with _profile_span(profiler, "main:prewarm:cross_view"):
-        _prewarm_cross_view_caches(
-            report_cache_sig,
-            view_mode,
-            platform,
-            campaign_filters,
-            s,
-            e,
-            prev_s,
-            prev_e,
-            compare_label,
-            overview_sections,
-            traffic_sections,
-        )
+    if not skip_cross_view_prewarm:
+        with _profile_span(profiler, "main:prewarm:cross_view"):
+            _prewarm_cross_view_caches(
+                report_cache_sig,
+                view_mode,
+                platform,
+                campaign_filters,
+                s,
+                e,
+                prev_s,
+                prev_e,
+                compare_label,
+                overview_sections,
+                traffic_sections,
+            )
 
     if view_mode == VIEW_MODE_OPTIONS[1]:
         traffic_section_set = set(traffic_sections)
@@ -10810,104 +10843,110 @@ def main() -> None:
 
     page_view_slot.empty()
     with page_view_slot.container():
-        if view_mode == VIEW_MODE_OPTIONS[1]:
-            with _profile_span(profiler, "main:traffic:render_coco"):
-                render_coco_ia_widget(
-                    df_base=df,
-                    camp_df=camp_all,
-                    piece_df=piece,
-                    df_sel=df_sel,
-                    df_prev=df_prev,
-                    platform=platform,
-                    s=s,
-                    e=e,
-                    tenant_id=tenant_id,
-                    tenant_name=tenant_name,
-                    auth_user=auth_user,
-                    coco_cfg=coco_cfg,
-                )
-            with _profile_span(profiler, "main:traffic:render_page"):
-                render_traffic(
-                    df_sel,
-                    df_prev,
-                    ch,
-                    pg,
-                    ga4_event_daily,
-                    platform,
-                    s,
-                    e,
-                    prev_s,
-                    prev_e,
-                    compare_label,
-                    ga4_conversion_event_name,
-                    _normalize_kpi_keys(
-                        tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
-                        DEFAULT_TRAFFIC_KPI_KEYS,
-                    ),
-                    traffic_sections,
-                    report_cache_sig=report_cache_sig,
-                    profiler=profiler,
-                )
-        else:
-            with _profile_span(profiler, "main:overview:render_coco"):
-                render_coco_ia_widget(
-                    df_base=df,
-                    camp_df=camp_all,
-                    piece_df=piece,
-                    df_sel=df_sel,
-                    df_prev=df_prev,
-                    platform=platform,
-                    s=s,
-                    e=e,
-                    tenant_id=tenant_id,
-                    tenant_name=tenant_name,
-                    auth_user=auth_user,
-                    coco_cfg=coco_cfg,
-                )
-            with _profile_span(profiler, "main:overview:render_page"):
-                render_exec(
-                    df_sel,
-                    df_prev,
-                    platform,
-                    _normalize_kpi_keys(
-                        tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
-                        DEFAULT_OVERVIEW_KPI_KEYS,
-                    ),
-                    overview_sections,
-                    paid_dev,
-                    lead_demo,
-                    lead_geo,
-                    camp_all,
-                    piece,
-                    ga4_event_daily,
-                    ga4_conversion_event_name,
-                    tenant_meta_account_id,
-                    tenant_google_customer_id,
-                    campaign_filters,
-                    s,
-                    e,
-                    prev_s,
-                    prev_e,
-                    compare_label,
-                    f"overview_chart_metric_{tenant_id}",
-                    show_daily_fact,
-                    hourly_sel,
-                    hourly_prev_sel,
-                    report_cache_sig=report_cache_sig,
-                    profiler=profiler,
-                )
+        with st.container(key=f"main-view-{tenant_id}-{view_mode}-{transition_nonce}"):
+            if view_mode == VIEW_MODE_OPTIONS[1]:
+                with _profile_span(profiler, "main:traffic:render_coco"):
+                    render_coco_ia_widget(
+                        df_base=df,
+                        camp_df=camp_all,
+                        piece_df=piece,
+                        df_sel=df_sel,
+                        df_prev=df_prev,
+                        platform=platform,
+                        s=s,
+                        e=e,
+                        tenant_id=tenant_id,
+                        tenant_name=tenant_name,
+                        auth_user=auth_user,
+                        coco_cfg=coco_cfg,
+                    )
+                with _profile_span(profiler, "main:traffic:render_page"):
+                    render_traffic(
+                        df_sel,
+                        df_prev,
+                        ch,
+                        pg,
+                        ga4_event_daily,
+                        platform,
+                        s,
+                        e,
+                        prev_s,
+                        prev_e,
+                        compare_label,
+                        ga4_conversion_event_name,
+                        _normalize_kpi_keys(
+                            tenant_dash_cfg.get("traffic_kpis", DEFAULT_TRAFFIC_KPI_KEYS),
+                            DEFAULT_TRAFFIC_KPI_KEYS,
+                        ),
+                        traffic_sections,
+                        report_cache_sig=report_cache_sig,
+                        profiler=profiler,
+                    )
+            else:
+                with _profile_span(profiler, "main:overview:render_coco"):
+                    render_coco_ia_widget(
+                        df_base=df,
+                        camp_df=camp_all,
+                        piece_df=piece,
+                        df_sel=df_sel,
+                        df_prev=df_prev,
+                        platform=platform,
+                        s=s,
+                        e=e,
+                        tenant_id=tenant_id,
+                        tenant_name=tenant_name,
+                        auth_user=auth_user,
+                        coco_cfg=coco_cfg,
+                    )
+                with _profile_span(profiler, "main:overview:render_page"):
+                    render_exec(
+                        df_sel,
+                        df_prev,
+                        platform,
+                        _normalize_kpi_keys(
+                            tenant_dash_cfg.get("overview_kpis", DEFAULT_OVERVIEW_KPI_KEYS),
+                            DEFAULT_OVERVIEW_KPI_KEYS,
+                        ),
+                        overview_sections,
+                        paid_dev,
+                        lead_demo,
+                        lead_geo,
+                        camp_all,
+                        piece,
+                        ga4_event_daily,
+                        ga4_conversion_event_name,
+                        tenant_meta_account_id,
+                        tenant_google_customer_id,
+                        campaign_filters,
+                        s,
+                        e,
+                        prev_s,
+                        prev_e,
+                        compare_label,
+                        f"overview_chart_metric_{tenant_id}",
+                        show_daily_fact,
+                        hourly_sel,
+                        hourly_prev_sel,
+                        report_cache_sig=report_cache_sig,
+                        profiler=profiler,
+                    )
 
-        if profiler.enabled:
-            profile_rows = profiler.report(top_n=50)
-            st.session_state["dashboard_profile_last"] = profile_rows
-            st.session_state["dashboard_profile_top3"] = profile_rows[:3]
-            if profile_rows:
-                top3_text = " | ".join(
-                    f"{row.get('span')}: {float(row.get('ms', 0.0)):.1f} ms"
-                    for row in profile_rows[:3]
-                )
-                st.caption(f"[PROFILE] Top 3: {top3_text}")
-                print(f"[dashboard-profile] top3={top3_text}")
+            if profiler.enabled:
+                profile_rows = profiler.report(top_n=50)
+                st.session_state["dashboard_profile_last"] = profile_rows
+                st.session_state["dashboard_profile_top3"] = profile_rows[:3]
+                if profile_rows:
+                    top3_text = " | ".join(
+                        f"{row.get('span')}: {float(row.get('ms', 0.0)):.1f} ms"
+                        for row in profile_rows[:3]
+                    )
+                    st.caption(f"[PROFILE] Top 3: {top3_text}")
+                    print(f"[dashboard-profile] top3={top3_text}")
+
+    if transition_active:
+        st.session_state["view_mode_transition_to"] = ""
+        st.session_state["view_mode_transition_from"] = ""
+        st.session_state["skip_cross_view_prewarm_once"] = False
 
     render_sidebar_logout_button()
 

@@ -30,6 +30,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - Auth/session/admin/config management.
   - Cache wrappers for report/parquet loading and heavy rollups.
   - Uses a page-level replacement slot (`st.empty()`) and lightweight loading placeholder during main-view switches to reduce stale-content overlap.
+  - Tracks view-switch transitions in session state, skips cross-view prewarm once during the switch, and uses keyed body containers to reduce DOM reuse between `Overview` and `Tráfico y Adquisición`.
   - Prefers parquet-backed traffic acquisition datasets when available instead of forcing the full historical JSON path.
   - Delegates domain UI work to specialized modules:
     - `dashboard_filters`
@@ -72,6 +73,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - Country/city user rollups and tech breakdowns.
   - Supporting traffic section calculations and compare-series shaping for clickable KPI cards.
   - Renders `Source / Medium` as a formatted DataFrame instead of a styled pandas `Styler` object to avoid cold-switch latency spikes.
+  - `dashboard.py::render_traffic()` now pre-allocates section slots before filling them so stale lower-page `Overview` blocks disappear earlier during traffic-view rerenders.
 
 ### COCO IA package
 - `coco_agent/engine.py`

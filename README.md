@@ -26,6 +26,8 @@ Repositorio operativo para analitica de performance multi-tenant (YAP + Hyundai 
   - `dc6e953` (`feat: revamp traffic dashboard sections`)
   - `0b9ee15` (`feat: expand traffic acquisition insights`)
   - `fa76022` (`feat: allow manual KPI ordering in admin`)
+  - `39346c8` (`feat: connect RACSA GA4 property and traffic view`)
+  - `aea4849` (`perf: smooth traffic view transitions and document runtime`)
 
 ### Avance local COCO IA y arquitectura (2026-03-13)
 
@@ -214,6 +216,9 @@ python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_hi
 - Cuando existen bundles Parquet en `reports/<tenant>/dashboard/`, la vista prioriza esas tablas sobre el JSON historico para reducir latencia.
 - La tabla `Source / Medium` evita `pandas.Styler` en runtime para recortar el costo de primera carga/cambio de vista en tenants grandes como `yap`.
 - El body principal usa un placeholder temporal al cambiar entre `Overview` y `Trafico y Adquisicion` para disminuir la mezcla visual de bloques viejos mientras Streamlit completa el rerun.
+- El cambio de vista marca una transicion interna y omite una sola vez el `cross_view prewarm` para que el primer paint de la vista destino llegue antes.
+- El contenedor principal del body cambia de `key` por `view_mode`/transicion para reducir reciclaje visual de nodos entre `Overview` y `Trafico y Adquisicion`.
+- `render_traffic()` precrea `slots` vacios por seccion antes de pintar KPI, canales, `source_medium`, top pages y breakdowns; eso ayuda a que desaparezcan antes los bloques bajos de `Overview` mientras las secciones nuevas terminan de renderizar.
 - Secciones nuevas soportadas:
   - `Usuarios Activos por Hora`
   - `Usuarios por Pais` (top 5)
