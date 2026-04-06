@@ -21,6 +21,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pandas as pd
@@ -56,6 +57,8 @@ SIDEBAR_LOGO_RENDER_WIDTH_PX = 228
 META_ACCOUNT_ID = "1808641036591815"
 GOOGLE_CUSTOMER_ID = "6495122409"
 GA4_GTC_SOLICITAR_CODIGO_EVENT = "form_gtc_otp_solicitar_codigo"
+GA4_OAUTH_PATH = BASE_DIR / "ga4_user_oauth_analytics_ipalmera.json"
+GA4_DATA_API_VERSION = "v1beta"
 
 C_GOOGLE = "#7BCC35"
 C_META = "#FE492A"
@@ -2586,7 +2589,10 @@ def default_tenants_config() -> dict[str, dict[str, Any]]:
             "report_path": str(REPORT_PATH),
             "meta_account_id": META_ACCOUNT_ID,
             "google_customer_id": GOOGLE_CUSTOMER_ID,
+            "ga4_property_id": "",
+            "ga4_oauth_path": str(GA4_OAUTH_PATH),
             "ga4_conversion_event_name": GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            "ga4_overview_conversion_event_names": [],
             "organic_enabled": True,
             "logo": str(LOGO_PATH) if LOGO_PATH.exists() else LOGO_PLACEHOLDER,
         }
@@ -2630,16 +2636,228 @@ def load_tenants_config(path: Path) -> dict[str, dict[str, Any]]:
             "google_customer_id": str(
                 entry.get("google_customer_id", entry.get("google_ads_customer_id", GOOGLE_CUSTOMER_ID))
             ),
+            "ga4_property_id": str(entry.get("ga4_property_id", "")).strip(),
+            "ga4_oauth_path": str(entry.get("ga4_oauth_path", GA4_OAUTH_PATH)).strip() or str(GA4_OAUTH_PATH),
             "ga4_conversion_event_name": str(
                 entry.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)
             ).strip() or GA4_GTC_SOLICITAR_CODIGO_EVENT,
+            "ga4_overview_conversion_event_names": [],
             "organic_enabled": _coerce_bool(entry.get("organic_enabled"), True),
             "logo": _normalize_logo_source(
                 entry.get("logo", entry.get("logo_path", entry.get("logo_url", "")))
             ),
         }
+        overview_event_names = entry.get("ga4_overview_conversion_event_names", [])
+        if isinstance(overview_event_names, str):
+            overview_event_values = [overview_event_names]
+        elif isinstance(overview_event_names, (list, tuple, set)):
+            overview_event_values = list(overview_event_names)
+        else:
+            overview_event_values = []
+        normalized_overview_event_names: list[str] = []
+        seen_overview_event_names: set[str] = set()
+        for raw_event_name in overview_event_values:
+            event_name = str(raw_event_name or "").strip()
+            event_key = event_name.lower()
+            if not event_name or event_key in seen_overview_event_names:
+                continue
+            normalized_overview_event_names.append(event_name)
+            seen_overview_event_names.add(event_key)
+        loaded[tenant_id]["ga4_overview_conversion_event_names"] = normalized_overview_event_names
 
     return loaded if loaded else tenants
+
+
+def _load_ga4_oauth_credentials(path: Path) -> tuple[str, str, str, str | None]:
+    if not path.exists():
+        raise FileNotFoundError(f"GA4 oauth file not found: {path}")
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    client_id = str(obj.get("client_id", "")).strip()
+    client_secret = str(obj.get("client_secret", "")).strip()
+    refresh_token = str(obj.get("refresh_token", "")).strip()
+    quota_project_id = str(obj.get("quota_project_id", "")).strip()
+    if not client_id or not client_secret or not refresh_token:
+        raise RuntimeError(f"Invalid GA4 oauth file structure: {path}")
+    return client_id, client_secret, refresh_token, (quota_project_id or None)
+
+
+def _http_json_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json_body: Any | None = None,
+    form_body: dict[str, Any] | None = None,
+    timeout: int = 30,
+) -> Any:
+    req_headers = dict(headers or {})
+    body: bytes | None = None
+    if json_body is not None:
+        body = json.dumps(json_body).encode("utf-8")
+        req_headers.setdefault("Content-Type", "application/json; charset=utf-8")
+    elif form_body is not None:
+        encoded = urllib.parse.urlencode(
+            {str(k): "" if v is None else str(v) for k, v in form_body.items()}
+        )
+        body = encoded.encode("utf-8")
+        req_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+
+    request = urllib.request.Request(
+        url=url,
+        data=body,
+        headers=req_headers,
+        method=str(method or "GET").upper(),
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {body_text[:400]}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Request failed: {exc}") from exc
+
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid JSON response: {raw[:240]}") from exc
+
+
+def _google_access_token_from_refresh_token(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+) -> str:
+    token_resp = _http_json_request(
+        "POST",
+        "https://oauth2.googleapis.com/token",
+        form_body={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        },
+    )
+    access_token = str(token_resp.get("access_token", "")).strip()
+    if not access_token:
+        raise RuntimeError("Google OAuth token response missing access_token.")
+    return access_token
+
+
+def _build_ga4_event_name_filter(event_names: tuple[str, ...]) -> dict[str, Any] | None:
+    normalized = tuple(str(event_name or "").strip() for event_name in event_names if str(event_name or "").strip())
+    if not normalized:
+        return None
+    if len(normalized) == 1:
+        return {
+            "filter": {
+                "fieldName": "eventName",
+                "stringFilter": {
+                    "matchType": "EXACT",
+                    "value": normalized[0],
+                    "caseSensitive": False,
+                },
+            }
+        }
+    return {
+        "filter": {
+            "fieldName": "eventName",
+            "inListFilter": {
+                "values": list(normalized),
+                "caseSensitive": False,
+            },
+        }
+    }
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def _cached_ga4_event_user_totals_for_range(
+    ga4_property_id: str,
+    ga4_oauth_path_str: str,
+    ga4_oauth_modified_ns: int,
+    ga4_oauth_size_bytes: int,
+    start_iso: str,
+    end_iso: str,
+    event_names: tuple[str, ...],
+) -> dict[str, float]:
+    _ = ga4_oauth_modified_ns
+    _ = ga4_oauth_size_bytes
+    normalized_event_names = tuple(
+        str(event_name or "").strip() for event_name in event_names if str(event_name or "").strip()
+    )
+    if not str(ga4_property_id or "").strip() or not ga4_oauth_path_str or not normalized_event_names:
+        return {}
+
+    oauth_path = Path(ga4_oauth_path_str)
+    client_id, client_secret, refresh_token, quota_project_id = _load_ga4_oauth_credentials(oauth_path)
+    access_token = _google_access_token_from_refresh_token(client_id, client_secret, refresh_token)
+    endpoint = (
+        f"https://analyticsdata.googleapis.com/{GA4_DATA_API_VERSION}/properties/"
+        f"{str(ga4_property_id).strip()}:runReport"
+    )
+    headers = {"Authorization": f"Bearer {access_token}"}
+    if quota_project_id:
+        headers["x-goog-user-project"] = quota_project_id
+    response = _http_json_request(
+        "POST",
+        endpoint,
+        headers=headers,
+        json_body={
+            "dateRanges": [{"startDate": start_iso, "endDate": end_iso}],
+            "dimensions": [{"name": "eventName"}],
+            "metrics": [{"name": "totalUsers"}],
+            "dimensionFilter": _build_ga4_event_name_filter(normalized_event_names),
+            "limit": 250000,
+        },
+    )
+
+    event_name_lookup = {event_name.lower(): event_name for event_name in normalized_event_names}
+    totals = {event_name: 0.0 for event_name in normalized_event_names}
+    for row in response.get("rows", []):
+        dim_values = row.get("dimensionValues", [])
+        metric_values = row.get("metricValues", [])
+        raw_event_name = str(dim_values[0].get("value", "")).strip() if dim_values else ""
+        raw_total_users = metric_values[0].get("value", 0) if metric_values else 0
+        mapped_event_name = event_name_lookup.get(raw_event_name.lower())
+        if not mapped_event_name:
+            continue
+        try:
+            totals[mapped_event_name] = float(raw_total_users or 0)
+        except Exception:
+            totals[mapped_event_name] = 0.0
+    return totals
+
+
+def load_ga4_event_user_totals_for_range(
+    *,
+    ga4_property_id: str,
+    ga4_oauth_path: Path,
+    start_date: date,
+    end_date: date,
+    event_names: list[str],
+) -> dict[str, float]:
+    normalized_event_names = tuple(
+        event_name
+        for event_name in dict.fromkeys(str(raw or "").strip() for raw in event_names)
+        if event_name
+    )
+    if not str(ga4_property_id or "").strip() or not normalized_event_names:
+        return {}
+    oauth_path = ga4_oauth_path if ga4_oauth_path.is_absolute() else _resolve_repo_path(str(ga4_oauth_path))
+    if not oauth_path.exists():
+        return {}
+    stat = oauth_path.stat()
+    return _cached_ga4_event_user_totals_for_range(
+        str(ga4_property_id).strip(),
+        str(oauth_path),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+        start_date.isoformat(),
+        end_date.isoformat(),
+        normalized_event_names,
+    )
 
 
 def _normalize_allowed_tenants(raw_allowed: Any) -> list[str]:
@@ -6473,6 +6691,8 @@ def render_exec(
     platform: str,
     overview_kpi_keys: list[str],
     overview_section_keys: list[str],
+    ga4_overview_conversion_event_names: list[str],
+    ga4_direct_event_user_totals: dict[str, float] | None,
     paid_dev_df: pd.DataFrame,
     lead_demo_df: pd.DataFrame,
     lead_geo_df: pd.DataFrame,
@@ -6582,6 +6802,8 @@ def render_exec(
             platform=platform,
             ga4_event_df=ga4_event_df,
             ga4_conversion_event_name=ga4_conversion_event_name,
+            ga4_overview_conversion_event_names=ga4_overview_conversion_event_names,
+            ga4_direct_event_user_totals=ga4_direct_event_user_totals,
             default_ga4_event_name=GA4_GTC_SOLICITAR_CODIGO_EVENT,
             start_date=s,
             end_date=e,
@@ -10619,10 +10841,19 @@ def main() -> None:
     tenant_google_customer_id = str(
         tenant_cfg.get("google_customer_id", tenant_cfg.get("google_ads_customer_id", ""))
     ).strip()
+    ga4_property_id = str(tenant_cfg.get("ga4_property_id", "")).strip()
+    ga4_oauth_path = _resolve_repo_path(
+        str(tenant_cfg.get("ga4_oauth_path", GA4_OAUTH_PATH)).strip() or str(GA4_OAUTH_PATH)
+    )
     ga4_conversion_event_name = (
         str(tenant_cfg.get("ga4_conversion_event_name", GA4_GTC_SOLICITAR_CODIGO_EVENT)).strip()
         or GA4_GTC_SOLICITAR_CODIGO_EVENT
     )
+    ga4_overview_conversion_event_names = [
+        str(event_name or "").strip()
+        for event_name in tenant_cfg.get("ga4_overview_conversion_event_names", [])
+        if str(event_name or "").strip()
+    ]
     if view_mode == "Administración":
         if not _auth_user_is_admin(auth_user):
             st.error("Tu usuario no tiene permiso para Administración.")
@@ -10743,6 +10974,29 @@ def main() -> None:
         TRAFFIC_SECTION_OPTIONS,
         DEFAULT_TRAFFIC_SECTION_KEYS,
     )
+    overview_ga4_event_names = (
+        ga4_overview_conversion_event_names
+        if ga4_overview_conversion_event_names
+        else [ga4_conversion_event_name]
+    )
+    ga4_direct_event_user_totals: dict[str, float] | None = None
+    if (
+        view_mode != VIEW_MODE_OPTIONS[1]
+        and "ga4_conversion" in set(overview_sections)
+        and ga4_property_id
+        and overview_ga4_event_names
+    ):
+        with _profile_span(profiler, "main:overview:ga4_direct_users"):
+            try:
+                ga4_direct_event_user_totals = load_ga4_event_user_totals_for_range(
+                    ga4_property_id=ga4_property_id,
+                    ga4_oauth_path=ga4_oauth_path,
+                    start_date=s,
+                    end_date=e,
+                    event_names=overview_ga4_event_names,
+                )
+            except Exception:
+                ga4_direct_event_user_totals = None
     transition_target = str(st.session_state.get("view_mode_transition_to", "")).strip()
     transition_active = bool(transition_target) and transition_target == view_mode
     transition_nonce = int(st.session_state.get("view_mode_transition_nonce", 0))
@@ -10908,6 +11162,8 @@ def main() -> None:
                             DEFAULT_OVERVIEW_KPI_KEYS,
                         ),
                         overview_sections,
+                        ga4_overview_conversion_event_names,
+                        ga4_direct_event_user_totals,
                         paid_dev,
                         lead_demo,
                         lead_geo,

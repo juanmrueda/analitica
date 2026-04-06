@@ -13,7 +13,11 @@
       "google_customer_id": "6495122409",
       "historical_start_date": "2025-01-01",
       "ga4_property_id": "299663070",
-      "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo"
+      "ga4_conversion_event_name": "form_gtc_otp_solicitar_codigo",
+      "ga4_overview_conversion_event_names": [
+        "form_gtc_otp_verificar_codigo",
+        "form_crear_cuenta_gtc"
+      ]
     },
     {
       "id": "hyundai_hn",

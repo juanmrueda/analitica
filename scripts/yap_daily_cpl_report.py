@@ -182,6 +182,26 @@ def _coerce_bool(raw_value: Any, default: bool = False) -> bool:
     return default
 
 
+def _normalize_event_name_list(raw_value: Any) -> List[str]:
+    if isinstance(raw_value, str):
+        values = [raw_value]
+    elif isinstance(raw_value, (list, tuple, set)):
+        values = list(raw_value)
+    else:
+        values = []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw_item in values:
+        event_name = str(raw_item or "").strip()
+        event_key = event_name.lower()
+        if not event_name or event_key in seen:
+            continue
+        normalized.append(event_name)
+        seen.add(event_key)
+    return normalized
+
+
 def _default_tenants_config() -> Dict[str, Dict[str, Any]]:
     return {
         "yap": {
@@ -196,6 +216,7 @@ def _default_tenants_config() -> Dict[str, Dict[str, Any]]:
             "historical_start_date": DEFAULT_BOOTSTRAP_START,
             "ga4_property_id": GA4_PROPERTY_ID,
             "ga4_conversion_event_name": GA4_DEFAULT_CONVERSION_EVENT,
+            "ga4_overview_conversion_event_names": [],
         }
     }
 
@@ -264,6 +285,9 @@ def _load_tenants_config(path: Path) -> Dict[str, Dict[str, Any]]:
                 entry.get("ga4_conversion_event_name", GA4_DEFAULT_CONVERSION_EVENT)
             ).strip()
             or GA4_DEFAULT_CONVERSION_EVENT,
+            "ga4_overview_conversion_event_names": _normalize_event_name_list(
+                entry.get("ga4_overview_conversion_event_names", [])
+            ),
         }
     return loaded if loaded else default_cfg
 
@@ -2711,9 +2735,31 @@ def _fetch_ga4_event_range(
     end_day: date,
     quota_project: str | None,
     *,
-    event_name: str,
+    event_names: List[str],
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    normalized_event_names = _normalize_event_name_list(event_names)
+    if not normalized_event_names:
+        return out
+
+    if len(normalized_event_names) == 1:
+        dimension_filter = {
+            "filter": {
+                "fieldName": "eventName",
+                "stringFilter": {"matchType": "EXACT", "value": normalized_event_names[0]},
+            }
+        }
+    else:
+        dimension_filter = {
+            "filter": {
+                "fieldName": "eventName",
+                "inListFilter": {
+                    "values": normalized_event_names,
+                    "caseSensitive": False,
+                },
+            }
+        }
+
     for chunk_start, chunk_end in _date_chunks(start_day, end_day, 31):
         rows = _fetch_ga4_run_report(
             access_token=access_token,
@@ -2721,14 +2767,9 @@ def _fetch_ga4_event_range(
             start_day=chunk_start,
             end_day=chunk_end,
             dimensions=["date", "eventName", "sessionSourceMedium"],
-            metrics=["eventCount"],
+            metrics=["eventCount", "totalUsers"],
             quota_project=quota_project,
-            dimension_filter={
-                "filter": {
-                    "fieldName": "eventName",
-                    "stringFilter": {"matchType": "EXACT", "value": event_name},
-                }
-            },
+            dimension_filter=dimension_filter,
         )
         for row in rows:
             out.append(
@@ -2740,6 +2781,7 @@ def _fetch_ga4_event_range(
                         str(row.get("sessionSourceMedium", ""))
                     ),
                     "eventCount": _safe_float(row.get("eventCount")),
+                    "totalUsers": _safe_float(row.get("totalUsers")),
                     # Alias to keep dashboard/BI language consistent.
                     "conversions": _safe_float(row.get("eventCount")),
                 }
@@ -3698,6 +3740,12 @@ def main() -> int:
         str(tenant_cfg.get("ga4_conversion_event_name", GA4_DEFAULT_CONVERSION_EVENT)).strip()
         or GA4_DEFAULT_CONVERSION_EVENT
     )
+    tenant_ga4_overview_conversion_event_names = _normalize_event_name_list(
+        tenant_cfg.get("ga4_overview_conversion_event_names", [])
+    )
+    ga4_event_names_to_fetch = _normalize_event_name_list(
+        [tenant_ga4_conversion_event_name, *tenant_ga4_overview_conversion_event_names]
+    )
     ga4_oauth_path = _resolve_repo_path(tenant_cfg.get("ga4_oauth_path", GA4_OAUTH_PATH))
     history_floor = _history_floor_for_tenant(tenant_cfg)
     bootstrap_start = datetime.strptime(args.bootstrap_start, "%Y-%m-%d").date()
@@ -3879,7 +3927,7 @@ def main() -> int:
             start_day,
             end_day,
             ga4_quota_project,
-            event_name=tenant_ga4_conversion_event_name,
+            event_names=ga4_event_names_to_fetch,
         )
     else:
         print("GA4 skipped: tenant has no ga4_property_id configured.")
@@ -4030,6 +4078,7 @@ def main() -> int:
                 "ga4_property_id": tenant_ga4_property_id,
             },
             "ga4_conversion_event_name": tenant_ga4_conversion_event_name,
+            "ga4_overview_conversion_event_names": tenant_ga4_overview_conversion_event_names,
         },
         "daily": all_daily,
         "hourly": all_hourly,

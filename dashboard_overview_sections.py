@@ -46,6 +46,30 @@ def _filter_by_date_range(frame: pd.DataFrame, start_date: Any, end_date: Any) -
     return filtered
 
 
+def _normalize_event_names(raw_event_names: Any, fallback_event_name: str) -> list[str]:
+    if isinstance(raw_event_names, str):
+        event_values = [raw_event_names]
+    elif isinstance(raw_event_names, (list, tuple, set)):
+        event_values = list(raw_event_names)
+    else:
+        event_values = []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_event_name in event_values:
+        event_name = str(raw_event_name or "").strip()
+        event_key = event_name.lower()
+        if not event_name or event_key in seen:
+            continue
+        normalized.append(event_name)
+        seen.add(event_key)
+
+    fallback = str(fallback_event_name or "").strip()
+    if not normalized and fallback:
+        normalized.append(fallback)
+    return normalized
+
+
 def render_funnel_and_ga4(
     *,
     st_module: Any,
@@ -55,6 +79,8 @@ def render_funnel_and_ga4(
     platform: str,
     ga4_event_df: pd.DataFrame,
     ga4_conversion_event_name: str,
+    ga4_overview_conversion_event_names: list[str],
+    ga4_direct_event_user_totals: dict[str, float] | None,
     default_ga4_event_name: str,
     start_date: Any,
     end_date: Any,
@@ -124,68 +150,91 @@ def render_funnel_and_ga4(
         )
 
     if "ga4_conversion" in section_set:
-        ga4_event_name = (
-            str(ga4_conversion_event_name or default_ga4_event_name).strip() or default_ga4_event_name
+        event_names = _normalize_event_names(
+            ga4_overview_conversion_event_names,
+            str(ga4_conversion_event_name or default_ga4_event_name).strip() or default_ga4_event_name,
         )
-        ga4_filtered = ga4_event_df.copy() if not ga4_event_df.empty else pd.DataFrame()
-        ga4_conv_total = 0.0
-        if not ga4_filtered.empty:
+        direct_totals = ga4_direct_event_user_totals or {}
+        normalized_direct_totals = {
+            str(event_name).strip().lower(): float(event_total or 0.0)
+            for event_name, event_total in direct_totals.items()
+            if str(event_name).strip()
+        }
+        has_direct_totals = bool(event_names) and all(
+            event_name.lower() in normalized_direct_totals for event_name in event_names
+        )
+
+        ga4_event_cards: list[tuple[str, float]] = [(event_name, 0.0) for event_name in event_names]
+        ga4_subtitle = "Usuarios unicos del periodo en eventos configurados"
+        if has_direct_totals:
+            ga4_event_cards = [
+                (event_name, float(normalized_direct_totals.get(event_name.lower(), 0.0)))
+                for event_name in event_names
+            ]
+            ga4_subtitle = "Usuarios unicos del periodo (consulta directa GA4)"
+            if platform in ("Google", "Meta"):
+                ga4_subtitle += " · no segmentado por plataforma"
+        else:
+            ga4_filtered = ga4_event_df.copy() if not ga4_event_df.empty else pd.DataFrame()
             if "date" in ga4_filtered.columns:
                 ga4_filtered = _filter_by_date_range(ga4_filtered, start_date, end_date)
-            event_col = (
-                "eventName"
-                if "eventName" in ga4_filtered.columns
-                else ("event_name" if "event_name" in ga4_filtered.columns else None)
-            )
-            if event_col:
-                ga4_filtered = ga4_filtered[
-                    ga4_filtered[event_col].astype(str).str.strip().str.lower()
-                    == ga4_event_name.lower()
-                ]
             if platform in ("Google", "Meta") and "platform" in ga4_filtered.columns:
                 ga4_filtered = ga4_filtered[
                     ga4_filtered["platform"].astype(str).str.strip().str.lower()
                     == platform.lower()
                 ]
-            conv_col = (
-                "conversions"
-                if "conversions" in ga4_filtered.columns
+            event_col = (
+                "eventName"
+                if "eventName" in ga4_filtered.columns
+                else ("event_name" if "event_name" in ga4_filtered.columns else None)
+            )
+            users_col = (
+                "totalUsers"
+                if "totalUsers" in ga4_filtered.columns
                 else (
-                    "eventCount"
-                    if "eventCount" in ga4_filtered.columns
-                    else ("event_count" if "event_count" in ga4_filtered.columns else None)
+                    "total_users"
+                    if "total_users" in ga4_filtered.columns
+                    else (
+                        "users"
+                        if "users" in ga4_filtered.columns
+                        else None
+                    )
                 )
             )
-            if conv_col:
-                ga4_conv_total = float(
-                    pd.to_numeric(ga4_filtered[conv_col], errors="coerce").fillna(0.0).sum()
-                )
+            if event_col and users_col:
+                ga4_filtered = ga4_filtered.copy()
+                ga4_filtered["_event_name"] = ga4_filtered[event_col].astype(str).str.strip()
+                ga4_filtered["_users"] = pd.to_numeric(
+                    ga4_filtered[users_col], errors="coerce"
+                ).fillna(0.0)
+                ga4_event_cards = []
+                event_name_series = ga4_filtered["_event_name"].str.lower()
+                for event_name in event_names:
+                    event_user_total = float(
+                        ga4_filtered.loc[
+                            event_name_series == event_name.lower(),
+                            "_users",
+                        ].sum()
+                    )
+                    ga4_event_cards.append((event_name, event_user_total))
 
-        spend_total = float(df_sel[metric_cols["spend"]].sum()) if not df_sel.empty else 0.0
-        ga4_cpl = sdiv_fn(spend_total, ga4_conv_total)
+        event_cards_html = "".join(
+            (
+                "<div class='ga4-conv-item'>"
+                f"<span class='ga4-conv-label'>{html.escape(event_name)}</span>"
+                f"<span class='ga4-conv-value'>{fmt_compact_fn(event_total)}</span>"
+                "</div>"
+            )
+            for event_name, event_total in ga4_event_cards
+        )
         st_module.markdown(
             textwrap.dedent(
                 f"""
                 <div class='ga4-conv-card'>
-                  <div class='ga4-conv-title'>Conversiones GA4</div>
-                  <div class='ga4-conv-event'>Evento: {html.escape(ga4_event_name)}</div>
+                  <div class='ga4-conv-title'>Usuarios GA4 por evento</div>
+                  <div class='ga4-conv-event'>{html.escape(ga4_subtitle)}</div>
                   <div class='ga4-conv-grid'>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>Conversiones</span>
-                      <span class='ga4-conv-value'>{fmt_compact_fn(ga4_conv_total)}</span>
-                    </div>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>Inversi\u00f3n</span>
-                      <span class='ga4-conv-value'>{fmt_money_fn(spend_total)}</span>
-                    </div>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>Plataforma</span>
-                      <span class='ga4-conv-value'>{html.escape(platform)}</span>
-                    </div>
-                    <div class='ga4-conv-item'>
-                      <span class='ga4-conv-label'>CPL GA4</span>
-                      <span class='ga4-conv-value'>{fmt_money_fn(ga4_cpl)}</span>
-                    </div>
+                    {event_cards_html}
                   </div>
                 </div>
                 """
