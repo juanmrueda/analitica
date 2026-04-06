@@ -209,6 +209,13 @@ python scripts\perf_regression_gate.py --report-path tests\fixtures\benchmark_hi
 - Toggle de salud de token Meta en sidebar.
 - Auditoria de cambios y backups de configuracion.
 
+## Overview / GA4
+
+- La card `Usuarios GA4 por evento` en `Overview` puede configurarse por tenant con `ga4_overview_conversion_event_names` en `config/tenants.json`.
+- Para evitar sobreconteo al sumar `totalUsers` diario, esa card consulta GA4 directo por rango con `dimensions=eventName` y `metrics=totalUsers`.
+- Si la consulta directa falla, la card puede caer al dataset local `ga4_event_daily` como respaldo.
+- La card representa usuarios unicos del periodo en GA4. Cuando se usa consulta directa, no se segmenta por selector `Google/Meta`.
+
 ## Trafico y Adquisicion
 
 - Las cards superiores son interactivas: al hacer clic en una card cambia la tendencia inferior, igual que en `Overview`.
@@ -307,6 +314,7 @@ Nota deploy:
 - `config/users.json` y `config/dashboard_settings.json` no se versionan, por lo que `git pull` no los reemplaza.
 - Los bundles de `reports/<tenant>/` son estado runtime. Un `git pull` no backfillea datasets nuevos ni crea historicos faltantes por tenant.
 - Guardrail de historico: el pipeline protege contra bootstrap-start mayor al piso historico del tenant (por defecto `2025-01-01`) salvo que se use `--allow-historical-truncation`.
+- Si sincronizas JSONs de produccion a local o a DO, sincroniza tambien `reports/<tenant>/dashboard/*.parquet`; el dashboard prioriza parquet sobre JSON y un bundle stale puede recortar la fecha maxima visible en filtros.
 
 ### Infraestructura (Caddy) versionada
 
@@ -362,6 +370,7 @@ Notas:
 - Para `config/dashboard_settings.json`, logos o `config/users.json`, subir esos archivos por separado porque son runtime y no entran por `git pull`.
 - Si el tenant no existe todavia en `reports/` de DO, copiar primero el folder completo local del tenant (`reports/<tenant>/`) evita que el hourly intente bootstrap completo.
 - Si un rerun historico local falla por Meta/Google pero el JSON/parquet local ya quedo correcto, se puede sincronizar ese estado validado a DO y luego hacer solo un refresh corto.
+- Si despues de copiar `*_historical.json` el dashboard sigue mostrando una fecha vieja, revisar primero `reports/<tenant>/dashboard/daily.parquet` y el resto del bundle parquet antes de asumir un problema de filtros.
 
 Validar datos para rango de un dia (hora real + top piezas):
 

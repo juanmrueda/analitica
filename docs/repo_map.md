@@ -32,6 +32,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
   - Uses a page-level replacement slot (`st.empty()`) and lightweight loading placeholder during main-view switches to reduce stale-content overlap.
   - Tracks view-switch transitions in session state, skips cross-view prewarm once during the switch, and uses keyed body containers to reduce DOM reuse between `Overview` and `Tráfico y Adquisición`.
   - Prefers parquet-backed traffic acquisition datasets when available instead of forcing the full historical JSON path.
+  - Loads tenant-specific GA4 Overview event lists and fetches direct GA4 `totalUsers` by selected range for the Overview event card.
   - Delegates domain UI work to specialized modules:
     - `dashboard_filters`
     - `dashboard_data`
@@ -61,6 +62,7 @@ Data persistence is file-based (no relational DB/ORM): JSON, Parquet, and JSONL 
 ### Overview sections
 - `dashboard_overview_sections.py`
   - Funnel, GA4 conversion card, media mix.
+  - The GA4 Overview card supports multiple configured events and prefers direct GA4 range-unique users over summed daily parquet users.
   - Lead demographics, lead geo map, device breakdown.
   - Audit table and top pieces sections.
 
@@ -231,6 +233,7 @@ Business logic is concentrated in:
 ### Utilities and support scripts
 - `scripts/run_all_tenants.py`: multi-tenant orchestration.
 - `scripts/yap_daily_cpl_report.py`: ETL core.
+  - Also persists multi-event `ga4_event_daily` coverage so Overview has a local fallback if the direct GA4 query is unavailable.
 - `scripts/backfill_tenant_paid_monthly.py`: month-by-month onboarding backfill with paid-source validation.
 - `scripts/benchmark_dashboard_loaders.py`: loader benchmark.
 - `scripts/perf_regression_gate.py`: regression gate.
@@ -249,6 +252,7 @@ Business logic is concentrated in:
   2. back up `/opt/yap/app/reports/<tenant>` in DO
   3. sync only `reports/<tenant>/` (and runtime files like `config/dashboard_settings.json` or tenant logos if needed)
   4. run a short tenant-only refresh in DO
+- If a tenant looks capped on an old max date after syncing JSON, inspect `reports/<tenant>/dashboard/*.parquet` next; the app prefers parquet over JSON and stale bundles can hide newer JSON coverage.
 - For date/filter issues, inspect `dashboard_filters.py` + filter session-state wiring in `dashboard.py`.
 - For traffic-section issues, inspect `dashboard_traffic_sections.py` and then the `render_traffic()` wiring in `dashboard.py`.
 - For COCO answers, inspect `coco_agent/workflow.py` and then:
